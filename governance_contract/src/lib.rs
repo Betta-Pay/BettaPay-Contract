@@ -37,6 +37,7 @@ pub enum GovernanceError {
     InvalidFeeBps = 4,
     AnchorMissing = 5,
     Paused = 6,
+    InvalidAdmin = 7,
 }
 
 #[contract]
@@ -88,6 +89,11 @@ impl GovernanceContract {
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        
+        if admin == new_admin {
+            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+        }
+        
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish((symbol_short!("admin"),), new_admin);
     }
@@ -347,5 +353,20 @@ mod tests {
         assert!(!client.is_initialized());
         client.init(&admin);
         assert!(client.is_initialized());
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn rejects_same_admin_transfer() {
+        let (_env, client, admin) = setup();
+        client.transfer_admin(&admin);
+    }
+
+    #[test]
+    fn transfers_admin_successfully() {
+        let (env, client, _admin) = setup();
+        let new_admin = Address::generate(&env);
+        client.transfer_admin(&new_admin);
+        assert_eq!(client.get_admin(), new_admin);
     }
 }
