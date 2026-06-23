@@ -245,7 +245,7 @@ impl SettlementContract {
         if !is_merchant_registered_internal(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
-        if amount <= 0 {
+        if amount < MIN_PAYMENT_AMOUNT {
             panic_with_error!(&env, SettlementError::InvalidAmount);
         }
 
@@ -562,6 +562,26 @@ mod tests {
         client.register_merchant(&merchant);
         let reference = BytesN::from_array(&env, &[2; 32]);
         client.store_payment_reference(&merchant, &reference, &0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_below_minimum_amount() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let reference = BytesN::from_array(&env, &[99; 32]);
+        client.store_payment_reference(&merchant, &reference, &99);
+    }
+
+    #[test]
+    fn accepts_valid_minimum_amount() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let reference = BytesN::from_array(&env, &[100; 32]);
+        client.store_payment_reference(&merchant, &reference, &100);
+        
+        let stored = client.get_payment_reference(&reference).expect("expected payment record");
+        assert_eq!(stored.amount, 100);
     }
 
     #[test]
