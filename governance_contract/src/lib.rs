@@ -96,7 +96,7 @@ impl GovernanceContract {
         let admin = read_admin(&env);
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((symbol_short!("pause"),), true);
+        env.events().publish((symbol_short!("pause"),), (admin, true));
     }
 
     pub fn unpause(env: Env) {
@@ -347,5 +347,60 @@ mod tests {
         assert!(!client.is_initialized());
         client.init(&admin);
         assert!(client.is_initialized());
+    }
+
+    #[test]
+    fn pause_event_structure() {
+        let (env, client, admin) = setup();
+        let prev_count = env.events().all().len();
+        
+        client.pause();
+        
+        let events = env.events().all();
+        assert_eq!(events.len(), prev_count + 1);
+        let (_contract_id, topics, data) = events.get(prev_count).unwrap();
+        
+        assert_eq!(topics.len(), 1);
+        assert_eq!(
+            soroban_sdk::Symbol::from_val(&env, &topics.get(0).unwrap()),
+            soroban_sdk::symbol_short!("pause")
+        );
+        
+        let payload: (Address, bool) = soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(payload.0, admin);
+        assert_eq!(payload.1, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn unauthorized_cannot_pause() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        
+        let invoke = soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: soroban_sdk::vec![&env, admin.to_val()],
+            sub_invokes: &[],
+        };
+        let auth = soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &invoke,
+        };
+        env.set_auths(&[(&auth).into()]);
+        client.init(&admin);
+        
+        // Clear auths so calling pause without auth will panic
+        env.set_auths(&[]);
+        client.pause();
+    }
+
+    #[test]
+    fn existing_pause_behavior() {
+        let (env, client, admin) = setup();
+        client.pause();
+        assert!(client.is_paused());
     }
 }
