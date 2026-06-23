@@ -63,6 +63,7 @@ pub enum SettlementError {
     InvalidAmount = 7,
     DuplicatePaymentReference = 8,
     Paused = 9,
+    RuleNotSet = 10,
 }
 
 #[contract]
@@ -161,6 +162,33 @@ impl SettlementContract {
         env.events().publish(
             (Symbol::new(&env, "settlement_rule_updated"), merchant),
             (admin, prev, rule),
+        );
+    }
+
+    /// ## Emitted Event: `settlement_rule_cleared`
+    ///
+    /// **Topics**: `(Symbol("settlement_rule_cleared"), Address rule_id)`
+    /// - First topic: fixed event-name symbol for filtering by event type
+    /// - Second topic: the merchant address identifying which rule was cleared
+    ///
+    /// **Data**: `(Address caller, SettlementRule removed)`
+    /// - `caller`: the admin who authorized the removal
+    /// - `removed`: the rule values that were removed from storage
+    pub fn clear_settlement_rule(env: Env, merchant: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+
+        let key = DataKey::Rule(merchant.clone());
+        let removed = env.storage()
+            .persistent()
+            .get::<_, SettlementRule>(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::RuleNotSet));
+
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            (Symbol::new(&env, "settlement_rule_cleared"), merchant),
+            (admin, removed),
         );
     }
 
@@ -281,7 +309,7 @@ fn calculate_split(amount: i128, rule: &SettlementRule) -> FeeSplit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
     use soroban_sdk::FromVal;
 
     fn setup() -> (Env, SettlementContractClient<'static>, Address, Address) {
@@ -474,5 +502,112 @@ mod tests {
             auto_settle: false,
         };
         client.set_settlement_rule(&merchant, &bad_rule);
+    }
+
+    #[test]
+    fn admin_clears_custom_rule() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let rule = SettlementRule {
+            platform_fee_bps: 175,
+            network_fee_bps: 25,
+            settlement_delay_ledger: 42,
+            auto_settle: true,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+
+        let prev_count = env.events().all().len();
+        client.clear_settlement_rule(&merchant);
+
+        // Storage key is gone: getter returns None
+        assert!(client.get_settlement_rule(&merchant).is_none());
+
+        // Event check
+        let events = env.events().all();
+        assert_eq!(events.len(), prev_count + 1, "exactly one event emitted");
+
+        let (_contract_id, topics, _data) = events.get(prev_count).unwrap();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "settlement_rule_cleared")
+        );
+        assert_eq!(
+            Address::from_val(&env, &topics.get(1).unwrap()),
+            merchant
+        );
+    }
+
+    #[test]
+    fn clearing_rule_falls_back_to_defaults() {
+        let (_env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let rule = SettlementRule {
+            platform_fee_bps: 500,
+            network_fee_bps: 200,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+
+        // Clear the custom rule
+        client.clear_settlement_rule(&merchant);
+
+        // calculate_fee_split should now use default rates (100 bps platform, 0 bps network)
+        let split = client.calculate_fee_split(&merchant, &50_000);
+        assert_eq!(split.platform_fee_amount, 500); // 100 bps of 50_000
+        assert_eq!(split.network_fee_amount, 0);
+        assert_eq!(split.merchant_amount, 49_500);
+    }
+
+    #[test]
+    #[should_panic]
+    fn clear_settlement_rule_fails_for_non_admin() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let contract_id: Address = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+
+        // Authorize admin for init
+        let invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: soroban_sdk::vec![&env, admin.to_val()],
+            sub_invokes: &[],
+        };
+        let auth = MockAuth {
+            address: &admin,
+            invoke: &invoke,
+        };
+        env.set_auths(&[(&auth).into()]);
+        client.init(&admin);
+
+        // Authorize admin for register_merchant
+        let reg_invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "register_merchant",
+            args: soroban_sdk::vec![&env, merchant.to_val()],
+            sub_invokes: &[],
+        };
+        let reg_auth = MockAuth {
+            address: &admin,
+            invoke: &reg_invoke,
+        };
+        env.set_auths(&[(&reg_auth).into()]);
+        client.register_merchant(&merchant);
+
+        // Do NOT authorize admin for clear_settlement_rule — should panic
+        client.clear_settlement_rule(&merchant);
+    }
+
+    #[test]
+    #[should_panic]
+    fn clear_settlement_rule_fails_when_not_set() {
+        let (_env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        client.clear_settlement_rule(&merchant);
     }
 }
