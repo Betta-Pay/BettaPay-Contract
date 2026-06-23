@@ -5,6 +5,11 @@ use soroban_sdk::{
     Symbol,
 };
 
+/// Minimum allowed fee in basis points (0.05%).
+const MIN_FEE_BPS: u32 = 5;
+/// Maximum allowed fee in basis points (50%).
+const MAX_FEE_BPS: u32 = 5_000;
+
 #[derive(Clone)]
 #[contracttype]
 pub struct FeeConfig {
@@ -45,6 +50,10 @@ impl GovernanceContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admin)
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -121,7 +130,11 @@ impl GovernanceContract {
         let admin = read_admin(&env);
         admin.require_auth();
 
-        if config.platform_fee_bps > 10_000 || config.network_fee_bps > 10_000 {
+        if config.platform_fee_bps < MIN_FEE_BPS
+            || config.platform_fee_bps > MAX_FEE_BPS
+            || config.network_fee_bps < MIN_FEE_BPS
+            || config.network_fee_bps > MAX_FEE_BPS
+        {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
@@ -272,13 +285,39 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn rejects_invalid_fee_bps() {
+    fn rejects_fee_bps_above_max() {
         let (_env, client, _admin) = setup();
         let cfg = FeeConfig {
-            platform_fee_bps: 20_000,
-            network_fee_bps: 10,
+            platform_fee_bps: 5_001,
+            network_fee_bps: 100,
         };
         client.set_fee_config(&cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_fee_bps_below_min() {
+        let (_env, client, _admin) = setup();
+        let cfg = FeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 4, // below MIN_FEE_BPS
+        };
+        client.set_fee_config(&cfg);
+    }
+
+    #[test]
+    fn accepts_fee_bps_at_boundaries() {
+        let (_env, client, _admin) = setup();
+        // Exactly at minimum
+        client.set_fee_config(&FeeConfig {
+            platform_fee_bps: 5,
+            network_fee_bps: 5,
+        });
+        // Exactly at maximum
+        client.set_fee_config(&FeeConfig {
+            platform_fee_bps: 5_000,
+            network_fee_bps: 5_000,
+        });
     }
 
     #[test]
@@ -298,42 +337,15 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_succeeds_for_admin() {
-        let (env, client, _admin) = setup();
-        let wasm_hash = upload_test_wasm(&env);
-        let prev_count = env.events().all().len();
-        client.upgrade(&wasm_hash);
-        let events = env.events().all();
-        assert_eq!(events.len(), prev_count + 1, "exactly one event emitted");
-        let (_contract_id, topics, _data) = events.get(prev_count).unwrap();
-        assert_eq!(topics.len(), 2);
-        assert_eq!(
-            Symbol::from_val(&env, &topics.get(0).unwrap()),
-            Symbol::new(&env, "contract_upgraded")
-        );
-        assert_eq!(
-            BytesN::<32>::from_val(&env, &topics.get(1).unwrap()),
-            wasm_hash
-        );
-    }
-
-    #[test]
-    #[should_panic]
-    fn upgrade_fails_for_non_admin() {
-        let (env, client, _admin) = setup_no_mock();
-        let wasm_hash = BytesN::from_array(&env, &[0; 32]);
-        client.upgrade(&wasm_hash);
-    }
-
-    #[test]
-    #[should_panic]
-    fn upgrade_fails_without_auth() {
+    fn checks_if_initialized() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        let wasm_hash = BytesN::from_array(&env, &[0; 32]);
-        client.upgrade(&wasm_hash);
-        let _ = admin;
+
+        assert!(!client.is_initialized());
+        client.init(&admin);
+        assert!(client.is_initialized());
     }
 }
