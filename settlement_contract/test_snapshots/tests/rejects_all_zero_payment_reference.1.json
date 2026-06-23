@@ -69,61 +69,6 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "platform_fee_bps"
-                      },
-                      "val": {
-                        "u32": 100
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "settlement_delay_ledger"
-                      },
-                      "val": {
-                        "u32": 10
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "function_name": "set_settlement_rule",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "auto_settle"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "network_fee_bps"
-                      },
-                      "val": {
                         "u32": 50
                       }
                     },
@@ -132,7 +77,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 200
+                        "u32": 250
                       }
                     },
                     {
@@ -140,7 +85,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 20
+                        "u32": 0
                       }
                     }
                   ]
@@ -219,39 +164,6 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 1033654523790656264
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 4837995959683129791
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
                   }
                 },
                 "durability": "temporary",
@@ -383,7 +295,7 @@
                         "symbol": "auto_settle"
                       },
                       "val": {
-                        "bool": true
+                        "bool": false
                       }
                     },
                     {
@@ -399,7 +311,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 200
+                        "u32": 250
                       }
                     },
                     {
@@ -407,7 +319,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 20
+                        "u32": 0
                       }
                     }
                   ]
@@ -643,7 +555,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 50
                       }
                     },
                     {
@@ -651,7 +563,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 250
                       }
                     },
                     {
@@ -659,7 +571,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 10
+                        "u32": 0
                       }
                     }
                   ]
@@ -742,7 +654,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 50
                       }
                     },
                     {
@@ -750,7 +662,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 250
                       }
                     },
                     {
@@ -758,7 +670,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 10
+                        "u32": 0
                       }
                     }
                   ]
@@ -806,7 +718,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
               },
               {
-                "symbol": "set_settlement_rule"
+                "symbol": "store_payment_reference"
               }
             ],
             "data": {
@@ -815,139 +727,13 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "auto_settle"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "network_fee_bps"
-                      },
-                      "val": {
-                        "u32": 50
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "platform_fee_bps"
-                      },
-                      "val": {
-                        "u32": 200
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "settlement_delay_ledger"
-                      },
-                      "val": {
-                        "u32": 20
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "settlement_rule_updated"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                  "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "auto_settle"
-                      },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "network_fee_bps"
-                      },
-                      "val": {
-                        "u32": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "platform_fee_bps"
-                      },
-                      "val": {
-                        "u32": 100
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "settlement_delay_ledger"
-                      },
-                      "val": {
-                        "u32": 10
-                      }
-                    }
-                  ]
-                },
-                {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "auto_settle"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "network_fee_bps"
-                      },
-                      "val": {
-                        "u32": 50
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "platform_fee_bps"
-                      },
-                      "val": {
-                        "u32": 200
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "settlement_delay_ledger"
-                      },
-                      "val": {
-                        "u32": 20
-                      }
-                    }
-                  ]
+                  "i128": {
+                    "hi": 0,
+                    "lo": 10000
+                  }
                 }
               ]
             }
@@ -965,13 +751,122 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "set_settlement_rule"
+                "error": {
+                  "contract": 12
+                }
               }
             ],
-            "data": "void"
+            "data": {
+              "vec": [
+                {
+                  "string": "failing with contract error"
+                },
+                {
+                  "u32": 12
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 12
+                }
+              }
+            ],
+            "data": {
+              "string": "escalating error to panic"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 12
+                }
+              }
+            ],
+            "data": {
+              "string": "caught error from function"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 12
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "contract call failed"
+                },
+                {
+                  "symbol": "store_payment_reference"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                    },
+                    {
+                      "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                      "i128": {
+                        "hi": 0,
+                        "lo": 10000
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
           }
         }
       },
@@ -986,73 +881,16 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_call"
+                "symbol": "error"
               },
               {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
-              },
-              {
-                "symbol": "get_settlement_rule"
-              }
-            ],
-            "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "get_settlement_rule"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "auto_settle"
-                  },
-                  "val": {
-                    "bool": true
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "network_fee_bps"
-                  },
-                  "val": {
-                    "u32": 50
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "platform_fee_bps"
-                  },
-                  "val": {
-                    "u32": 200
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "settlement_delay_ledger"
-                  },
-                  "val": {
-                    "u32": 20
-                  }
+                "error": {
+                  "contract": 12
                 }
-              ]
+              }
+            ],
+            "data": {
+              "string": "escalating error to panic"
             }
           }
         }

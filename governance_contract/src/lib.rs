@@ -222,6 +222,7 @@ impl GovernanceContract {
 }
 
 fn read_admin(env: &Env) -> Address {
+    env.storage().instance().extend_ttl(50_000, 100_000);
     env.storage()
         .instance()
         .get(&DataKey::Admin)
@@ -376,7 +377,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn rejects_reinitialization() {
+    fn rejects_double_initialization() {
         let (env, client, admin) = setup();
         client.init(&admin);
         let _ = env;
@@ -411,6 +412,9 @@ mod tests {
         let key = Symbol::new(&env, "valid_key_32_chars_or_less");
         client.update_system_param(&key, &123);
         assert_eq!(client.get_system_param(&key), Some(123));
+    }
+
+    #[test]
     #[should_panic(expected = "Error(Contract, #7)")]
     fn rejects_same_admin_transfer() {
         let (_env, client, admin) = setup();

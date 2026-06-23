@@ -110,12 +110,12 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+                  "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 10000
+                    "lo": 15000
                   }
                 }
               ]
@@ -125,7 +125,34 @@
         }
       ]
     ],
-    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "function_name": "store_payment_reference",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 25000
+                  }
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     []
   ],
   "ledger": {
@@ -243,6 +270,39 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
             "key": {
               "ledger_key_nonce": {
+                "nonce": 2032731177588607455
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 2032731177588607455
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "ledger_key_nonce": {
                 "nonce": 4837995959683129791
               }
             },
@@ -325,7 +385,7 @@
                   "symbol": "Payment"
                 },
                 {
-                  "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+                  "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
                 }
               ]
             },
@@ -345,7 +405,7 @@
                       "symbol": "Payment"
                     },
                     {
-                      "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+                      "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
                     }
                   ]
                 },
@@ -359,7 +419,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 10000
+                          "lo": 15000
                         }
                       }
                     },
@@ -394,7 +454,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 9700
+                          "lo": 14550
                         }
                       }
                     },
@@ -405,7 +465,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 50
+                          "lo": 75
                         }
                       }
                     },
@@ -424,7 +484,145 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 250
+                          "lo": 375
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 250
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "settlement_delay_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Payment"
+                },
+                {
+                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Payment"
+                    },
+                    {
+                      "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 25000
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "auto_settle"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 24250
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 125
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 50
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 625
                         }
                       }
                     },
@@ -927,12 +1125,12 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+                  "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 10000
+                    "lo": 15000
                   }
                 }
               ]
@@ -958,7 +1156,7 @@
               }
             ],
             "data": {
-              "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+              "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
             }
           }
         }
@@ -985,25 +1183,25 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 10000
+                    "lo": 15000
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 250
+                    "lo": 375
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 50
+                    "lo": 75
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 9700
+                    "lo": 14550
                   }
                 }
               ]
@@ -1037,7 +1235,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 10000
+                      "lo": 15000
                     }
                   }
                 },
@@ -1048,7 +1246,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 9700
+                      "lo": 14550
                     }
                   }
                 },
@@ -1059,7 +1257,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 50
+                      "lo": 75
                     }
                   }
                 },
@@ -1070,7 +1268,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 250
+                      "lo": 375
                     }
                   }
                 }
@@ -1096,11 +1294,95 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
               },
               {
-                "symbol": "get_payment_reference"
+                "symbol": "store_payment_reference"
               }
             ],
             "data": {
-              "bytes": "0808080808080808080808080808080808080808080808080808080808080808"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 25000
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "payment"
+              },
+              {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              }
+            ],
+            "data": {
+              "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "split"
+              },
+              {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 25000
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 625
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 125
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 24250
+                  }
+                }
+              ]
             }
           }
         }
@@ -1119,44 +1401,20 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_payment_reference"
+                "symbol": "store_payment_reference"
               }
             ],
             "data": {
               "map": [
                 {
                   "key": {
-                    "symbol": "amount"
+                    "symbol": "gross_amount"
                   },
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 10000
+                      "lo": 25000
                     }
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "auto_settle"
-                  },
-                  "val": {
-                    "bool": false
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "ledger"
-                  },
-                  "val": {
-                    "u32": 0
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "merchant"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                   }
                 },
                 {
@@ -1166,7 +1424,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 9700
+                      "lo": 24250
                     }
                   }
                 },
@@ -1177,16 +1435,8 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 50
+                      "lo": 125
                     }
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "network_fee_bps"
-                  },
-                  "val": {
-                    "u32": 50
                   }
                 },
                 {
@@ -1196,25 +1446,258 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 250
+                      "lo": 625
                     }
                   }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
+              },
+              {
+                "symbol": "get_payments"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "bytes": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
                 },
                 {
-                  "key": {
-                    "symbol": "platform_fee_bps"
-                  },
-                  "val": {
-                    "u32": 250
-                  }
+                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "get_payments"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 15000
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "auto_settle"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 14550
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 75
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 50
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 375
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 250
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "settlement_delay_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    }
+                  ]
                 },
                 {
-                  "key": {
-                    "symbol": "settlement_delay_ledger"
-                  },
-                  "val": {
-                    "u32": 0
-                  }
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 25000
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "auto_settle"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "merchant_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 24250
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 125
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 50
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 625
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 250
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "settlement_delay_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    }
+                  ]
                 }
               ]
             }
