@@ -37,6 +37,7 @@ pub enum GovernanceError {
     InvalidFeeBps = 4,
     AnchorMissing = 5,
     Paused = 6,
+    InvalidSystemParamKey = 7,
     InvalidAdmin = 7,
 }
 
@@ -118,6 +119,9 @@ impl GovernanceContract {
 
     pub fn update_system_param(env: Env, key: Symbol, value: i128) {
         assert_not_paused(&env);
+        if key.to_string(&env).len() > 32 {
+            panic_with_error!(&env, GovernanceError::InvalidSystemParamKey);
+        }
         let admin = read_admin(&env);
         admin.require_auth();
         env.storage()
@@ -371,6 +375,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn rejects_oversized_symbol_key() {
+        let (env, client, _admin) = setup();
+        // A string longer than 32 characters
+        let oversized = "this_is_a_very_long_system_parameter_key";
+        let key = Symbol::new(&env, oversized);
+        client.update_system_param(&key, &123);
+    }
+
+    #[test]
+    fn accepts_valid_symbol_key() {
+        let (env, client, _admin) = setup();
+        let key = Symbol::new(&env, "valid_key_32_chars_or_less");
+        client.update_system_param(&key, &123);
+        assert_eq!(client.get_system_param(&key), Some(123));
     #[should_panic(expected = "Error(Contract, #7)")]
     fn rejects_same_admin_transfer() {
         let (_env, client, admin) = setup();
