@@ -51,6 +51,10 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admin)
+    }
+
     pub fn get_admin(env: Env) -> Address {
         read_admin(&env)
     }
@@ -274,5 +278,18 @@ mod tests {
         let (env, client, admin) = setup();
         client.init(&admin);
         let _ = env;
+    }
+
+    #[test]
+    fn checks_if_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        assert!(!client.is_initialized());
+        client.init(&admin);
+        assert!(client.is_initialized());
     }
 }
