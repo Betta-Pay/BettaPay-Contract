@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, Symbol,
+    BytesN, Env, String, Symbol,
 };
 
 /// Minimum allowed fee in basis points (0.05%).
@@ -94,6 +94,14 @@ impl GovernanceContract {
     pub fn transfer_admin(env: Env, _caller: Address, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+
+        let zero_address = String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        if new_admin.to_string() == zero_address {
+            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+        }
 
         if admin == new_admin {
             panic_with_error!(&env, GovernanceError::InvalidAdmin);
@@ -194,7 +202,7 @@ impl GovernanceContract {
             .persistent()
             .set(&DataKey::Anchor(asset.clone()), &anchor.clone());
         env.events()
-            .publish((symbol_short!("anchor_up"), asset), anchor);
+            .publish((Symbol::new(&env, "anchor_upserted"), asset), anchor);
     }
 
     pub fn remove_anchor(env: Env, caller: Address, asset: Address) {
