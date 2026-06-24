@@ -7,12 +7,13 @@ use soroban_sdk::{
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const MIN_PAYMENT_AMOUNT: i128 = 100;
+const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
 const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
 const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
 const RULE_TTL_THRESHOLD: u32 = 17280 * 14;
 const RULE_TTL_BUMP: u32 = 17280 * 30;
-const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
-const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
+const MERCHANT_TTL_THRESHOLD: u32 = 17280 * 14;
+const MERCHANT_TTL_BUMP: u32 = 17280 * 30;
 
 const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
     platform_fee_bps: 100,
@@ -81,6 +82,7 @@ pub enum SettlementError {
     RuleNotSet = 10,
     InvalidAddress = 11,
     InvalidPaymentReference = 12,
+    InvalidSettlementDelay = 13,
 }
 
 #[contract]
@@ -145,6 +147,9 @@ impl SettlementContract {
         }
 
         env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
         env.events()
             .publish((symbol_short!("merchant"), merchant), true);
     }
