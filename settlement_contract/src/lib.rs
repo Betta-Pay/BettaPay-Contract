@@ -126,6 +126,14 @@ impl SettlementContract {
         is_paused(&env)
     }
 
+    /// ## Emitted Event: `merchant_registered`
+    ///
+    /// **Topics**: `(Symbol("merchant_registered"), Address merchant)`
+    /// - First topic: fixed event-name symbol for filtering by event type
+    /// - Second topic: the merchant address that was registered
+    ///
+    /// **Data**: `Address caller`
+    /// - `caller`: the admin who authorized the registration
     pub fn register_merchant(env: Env, merchant: Address) {
         assert_not_paused(&env);
 
@@ -146,8 +154,10 @@ impl SettlementContract {
         }
 
         env.storage().persistent().set(&key, &true);
-        env.events()
-            .publish((symbol_short!("merchant"), merchant), true);
+        env.events().publish(
+            (Symbol::new(&env, "merchant_registered"), merchant),
+            admin,
+        );
     }
 
     pub fn unregister_merchant(env: Env, merchant: Address) {
