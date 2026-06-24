@@ -82,6 +82,7 @@ pub enum SettlementError {
     InvalidAddress = 11,
     InvalidPaymentReference = 12,
     InvalidSettlementDelay = 13,
+    InvalidAdmin = 14,
 }
 
 #[contract]
@@ -104,6 +105,9 @@ impl SettlementContract {
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        if new_admin == admin {
+            panic_with_error!(&env, SettlementError::InvalidAdmin);
+        }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish((symbol_short!("admin"),), new_admin);
     }
