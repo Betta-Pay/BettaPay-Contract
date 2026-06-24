@@ -7,12 +7,11 @@ use soroban_sdk::{
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const MIN_PAYMENT_AMOUNT: i128 = 100;
+const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
 const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
 const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
 const RULE_TTL_THRESHOLD: u32 = 17280 * 14;
 const RULE_TTL_BUMP: u32 = 17280 * 30;
-const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
-const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
 
 const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
     platform_fee_bps: 100,
@@ -81,6 +80,7 @@ pub enum SettlementError {
     RuleNotSet = 10,
     InvalidAddress = 11,
     InvalidPaymentReference = 12,
+    InvalidSettlementDelay = 13,
 }
 
 #[contract]
@@ -191,6 +191,9 @@ impl SettlementContract {
         if rule.platform_fee_bps > BPS_DENOMINATOR as u32
             || rule.network_fee_bps > BPS_DENOMINATOR as u32
         {
+            panic_with_error!(&env, SettlementError::InvalidFeeBps);
+        }
+        if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR as u32 {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
@@ -326,6 +329,9 @@ impl SettlementContract {
         };
 
         env.storage().persistent().set(&payment_key, &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&payment_key, PAYMENT_TTL_THRESHOLD, PAYMENT_TTL_BUMP);
 
         /// ## Emitted Event: `payment_stored`
         ///
@@ -819,6 +825,38 @@ mod tests {
             auto_settle: false,
         };
         client.set_settlement_rule(&merchant, &bad_rule);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_fee_sum_exceeding_10000_bps() {
+        let (_env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let bad_rule = SettlementRule {
+            platform_fee_bps: 6_000,
+            network_fee_bps: 5_000,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+        client.set_settlement_rule(&merchant, &bad_rule);
+    }
+
+    #[test]
+    fn accepts_fee_sum_at_exactly_10000_bps() {
+        let (_env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let rule = SettlementRule {
+            platform_fee_bps: 5_000,
+            network_fee_bps: 5_000,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+        let stored = client
+            .get_settlement_rule(&merchant)
+            .expect("expected settlement rule");
+        assert_eq!(stored.platform_fee_bps, 5_000);
+        assert_eq!(stored.network_fee_bps, 5_000);
     }
 
     #[test]
