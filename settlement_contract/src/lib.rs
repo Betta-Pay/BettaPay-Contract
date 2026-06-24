@@ -146,6 +146,27 @@ impl SettlementContract {
             .publish((symbol_short!("merchant"), merchant), true);
     }
 
+    pub fn unregister_merchant(env: Env, merchant: Address) {
+        assert_not_paused(&env);
+        let admin = read_admin(&env);
+        admin.require_auth();
+
+        let key = DataKey::Merchant(merchant.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, SettlementError::MerchantMissing);
+        }
+
+        env.storage().persistent().remove(&key);
+
+        let rule_key = DataKey::Rule(merchant.clone());
+        if env.storage().persistent().has(&rule_key) {
+            env.storage().persistent().remove(&rule_key);
+        }
+
+        env.events()
+            .publish((symbol_short!("merchant"), merchant), false);
+    }
+
     /// ## Emitted Event: `settlement_rule_updated`
     ///
     /// **Topics**: `(Symbol("settlement_rule_updated"), Address rule_id)`
@@ -411,8 +432,10 @@ fn assert_not_paused(env: &Env) {
 }
 
 fn calculate_split(amount: i128, rule: &SettlementRule) -> FeeSplit {
-    let platform_fee_amount = amount * (rule.platform_fee_bps as i128) / BPS_DENOMINATOR;
-    let network_fee_amount = amount * (rule.network_fee_bps as i128) / BPS_DENOMINATOR;
+    let platform_fee_amount =
+        (amount * (rule.platform_fee_bps as i128) + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+    let network_fee_amount =
+        (amount * (rule.network_fee_bps as i128) + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
     let merchant_amount = amount - platform_fee_amount - network_fee_amount;
     FeeSplit {
         gross_amount: amount,
@@ -597,6 +620,22 @@ mod tests {
     }
 
     #[test]
+    fn rounds_fee_split_up_for_small_amounts() {
+        let rule = SettlementRule {
+            platform_fee_bps: 1,
+            network_fee_bps: 1,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+
+        let split = calculate_split(100, &rule);
+
+        assert_eq!(split.platform_fee_amount, 1);
+        assert_eq!(split.network_fee_amount, 1);
+        assert_eq!(split.merchant_amount, 98);
+    }
+
+    #[test]
     fn reads_payment_reference_and_extends_ttl() {
         let (env, client, _admin, merchant) = setup();
         client.register_merchant(&merchant);
@@ -642,6 +681,37 @@ mod tests {
         let (_env, client, _admin, merchant) = setup();
         client.register_merchant(&merchant);
         client.register_merchant(&merchant);
+    }
+
+    #[test]
+    fn unregisters_merchant_and_cleans_up() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let rule = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: false,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+
+        assert!(client.is_merchant_registered(&merchant));
+        assert!(client.get_settlement_rule(&merchant).is_some());
+
+        let before = env.events().all().len();
+        client.unregister_merchant(&merchant);
+
+        assert!(!client.is_merchant_registered(&merchant));
+        assert!(client.get_settlement_rule(&merchant).is_none());
+        assert!(env.events().all().len() > before);
+    }
+
+    #[test]
+    #[should_panic]
+    fn unregister_rejects_missing_merchant() {
+        let (_env, client, _admin, merchant) = setup();
+        client.unregister_merchant(&merchant);
     }
 
     #[test]
