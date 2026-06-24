@@ -14,6 +14,7 @@ const RULE_TTL_BUMP: u32 = 17280 * 30;
 const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
 const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
 
+// Used until the admin sets a global default settlement rule.
 const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
     platform_fee_bps: 100,
     network_fee_bps: 0,
@@ -416,13 +417,14 @@ fn read_admin(env: &Env) -> Address {
 fn is_merchant_registered_internal(env: &Env, merchant: Address) -> bool {
     let key = DataKey::Merchant(merchant);
     if env.storage().persistent().has(&key) {
+        // Keep the merchant marker warm so active merchants do not expire early.
         env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
     }
     env.storage().persistent().get(&key).unwrap_or(false)
 }
 
 fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
-    // 1. Merchant-specific rule (highest priority)
+    // Merchant-specific rule wins over any shared configuration.
     if let Some(rule) = env
         .storage()
         .persistent()
@@ -430,7 +432,7 @@ fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     {
         return rule;
     }
-    // 2. Global default rule (configurable by admin)
+    // Fall back to the admin-controlled global default when present.
     if let Some(rule) = env
         .storage()
         .persistent()
@@ -438,7 +440,7 @@ fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     {
         return rule;
     }
-    // 3. Bootstrap fallback (hardcoded)
+    // Final fallback keeps the contract usable before any config is stored.
     BOOTSTRAP_DEFAULT_RULE
 }
 
@@ -456,6 +458,7 @@ fn assert_not_paused(env: &Env) {
 }
 
 fn calculate_split(amount: i128, rule: &SettlementRule) -> FeeSplit {
+    // Fees are rounded up so the platform and network never under-collect.
     let platform_fee_amount =
         (amount * (rule.platform_fee_bps as i128) + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
     let network_fee_amount =
