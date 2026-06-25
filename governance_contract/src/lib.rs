@@ -19,6 +19,16 @@ pub struct FeeConfig {
     pub network_fee_bps: u32,
 }
 
+/// Structured payload for the `admin_transferred` event, so off-chain
+/// consumers can read `old_admin`/`new_admin` by name instead of having to
+/// know the positional order of an anonymous tuple.
+#[derive(Clone)]
+#[contracttype]
+pub struct AdminTransferred {
+    pub old_admin: Address,
+    pub new_admin: Address,
+}
+
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
@@ -109,7 +119,13 @@ impl GovernanceContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.events().publish((symbol_short!("admin"),), new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_transferred"),),
+            AdminTransferred {
+                old_admin: admin,
+                new_admin,
+            },
+        );
     }
 
     pub fn pause(env: Env, caller: Address) {
@@ -515,5 +531,31 @@ mod tests {
             <(Address, Option<i128>, i128)>::from_val(&env, &data);
         assert_eq!(previous_value, Some(1440));
         assert_eq!(new_value, 2880);
+    }
+
+    #[test]
+    fn emits_structured_event_when_transferring_admin() {
+        let (env, client, admin) = setup();
+        let new_admin = Address::generate(&env);
+
+        let prev_count = env.events().all().len();
+        client.transfer_admin(&admin, &new_admin);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), prev_count + 1, "exactly one event emitted");
+
+        let (_contract_id, topics, data) = events.get(prev_count).unwrap();
+
+        assert_eq!(topics.len(), 1);
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "admin_transferred")
+        );
+
+        // Data is the named AdminTransferred struct, not an anonymous tuple -
+        // off-chain consumers read old_admin/new_admin by field name.
+        let payload = AdminTransferred::from_val(&env, &data);
+        assert_eq!(payload.old_admin, admin);
+        assert_eq!(payload.new_admin, new_admin);
     }
 }
