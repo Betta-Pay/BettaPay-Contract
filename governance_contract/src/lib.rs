@@ -227,7 +227,12 @@ impl GovernanceContract {
     }
 
     pub fn get_anchor(env: Env, asset: Address) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Anchor(asset))
+        let key = DataKey::Anchor(asset.clone());
+        let result = env.storage().persistent().get(&key);
+        if result.is_some() {
+            env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
+        }
+        result
     }
 }
 
@@ -340,6 +345,17 @@ mod tests {
         client.remove_anchor(&admin, &asset);
         assert_eq!(client.get_anchor(&asset), None);
         assert!(env.events().all().len() > before_remove);
+    }
+
+    #[test]
+    fn get_anchor_extends_anchor_ttl() {
+        let (env, client, admin) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+
+        client.upsert_anchor(&admin, &asset, &anchor);
+        assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
+        assert_eq!(client.get_anchor(&asset), Some(anchor));
     }
 
     #[test]
