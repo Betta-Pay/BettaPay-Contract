@@ -144,9 +144,11 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::Unauthorized);
         }
         caller.require_auth();
+        let storage_key = DataKey::SystemParam(key.clone());
+        env.storage().persistent().set(&storage_key, &value);
         env.storage()
             .persistent()
-            .set(&DataKey::SystemParam(key.clone()), &value);
+            .extend_ttl(&storage_key, 100_000, 200_000);
         env.events()
             .publish((symbol_short!("sys_param"), key), value);
     }
