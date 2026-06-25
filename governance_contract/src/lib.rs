@@ -446,4 +446,47 @@ mod tests {
         client.transfer_admin(&admin, &new_admin);
         assert_eq!(client.get_admin(), new_admin);
     }
+
+    #[test]
+    #[should_panic]
+    fn set_fee_config_blocked_when_paused() {
+        let (_env, client, admin) = setup();
+        client.pause(&admin);
+        let cfg = FeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        };
+        client.set_fee_config(&admin, &cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_fee_bps_exceeding_bps_denomination() {
+        let (_env, client, admin) = setup();
+        let cfg = FeeConfig {
+            platform_fee_bps: 10_001,
+            network_fee_bps: 100,
+        };
+        client.set_fee_config(&admin, &cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_fee_config_sum_above_10000_bps() {
+        let (_env, client, admin) = setup();
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_001,
+            network_fee_bps: 5_001,
+        };
+        client.set_fee_config(&admin, &cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_update_system_param_when_not_admin() {
+        let (env, client, _admin) = setup();
+        let non_admin = Address::generate(&env);
+        let key = Symbol::new(&env, "max_settle");
+        client.update_system_param(&non_admin, &key, &1440);
+    }
 }
