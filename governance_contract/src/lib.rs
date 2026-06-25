@@ -40,6 +40,7 @@ pub enum GovernanceError {
     AnchorMissing = 5,
     Paused = 6,
     InvalidAdmin = 7,
+    InvalidParamValue = 8,
 }
 
 #[contract]
@@ -144,6 +145,11 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::Unauthorized);
         }
         caller.require_auth();
+
+        if value < 0 {
+            panic_with_error!(&env, GovernanceError::InvalidParamValue);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::SystemParam(key.clone()), &value);
@@ -445,5 +451,21 @@ mod tests {
         let new_admin = Address::generate(&env);
         client.transfer_admin(&admin, &new_admin);
         assert_eq!(client.get_admin(), new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn rejects_negative_system_param_value() {
+        let (env, client, admin) = setup();
+        let key = Symbol::new(&env, "max_settle");
+        client.update_system_param(&admin, &key, &-1);
+    }
+
+    #[test]
+    fn accepts_zero_system_param_value() {
+        let (env, client, admin) = setup();
+        let key = Symbol::new(&env, "max_settle");
+        client.update_system_param(&admin, &key, &0);
+        assert_eq!(client.get_system_param(&key), Some(0));
     }
 }
