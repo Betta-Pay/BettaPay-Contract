@@ -69,19 +69,43 @@ enum DataKey {
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 pub enum SettlementError {
+    /// `init()` has already been called. Only one initialization is permitted.
     AlreadyInitialized = 1,
+    /// `init()` has not been called. All admin-guarded functions require prior initialization.
     NotInitialized = 2,
+    /// The caller does not match the stored admin address.
     Unauthorized = 3,
+    /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 4,
+    /// The target merchant address is not registered. Raised by
+    /// `set_settlement_rule`, `store_payment_reference`, `calculate_fee_split`,
+    /// and `unregister_merchant` when the merchant is missing.
     MerchantMissing = 5,
+    /// The fee BPS values exceed 10 000 (`BPS_DENOMINATOR`) or their sum
+    /// exceeds 10 000. Raised by `set_settlement_rule` and `set_default_rule`.
     InvalidFeeBps = 6,
+    /// The payment amount is below `MIN_PAYMENT_AMOUNT` (100) or is ≤ 0
+    /// in `calculate_fee_split`.
     InvalidAmount = 7,
+    /// `store_payment_reference` was called with a 32‑byte reference that
+    /// already exists in storage.
     DuplicatePaymentReference = 8,
+    /// The contract is paused. Most state‑mutating operations are blocked.
     Paused = 9,
+    /// `clear_settlement_rule` was called for a merchant that has no
+    /// merchant‑specific rule stored.
     RuleNotSet = 10,
+    /// The supplied address is the zero‑address or an empty string.
+    /// Raised by `register_merchant` and `transfer_admin`.
     InvalidAddress = 11,
+    /// `store_payment_reference` was called with an all‑zero 32‑byte
+    /// reference, which is reserved.
     InvalidPaymentReference = 12,
+    /// `settlement_delay_ledger` exceeds `MAX_SETTLEMENT_DELAY_LEDGER`
+    /// (100 000). Raised by `set_settlement_rule` and `set_default_rule`.
     InvalidSettlementDelay = 13,
+    /// `transfer_admin` was called with the current admin address as the
+    /// new admin. The new admin must be different.
     InvalidAdmin = 14,
 }
 
