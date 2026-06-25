@@ -177,6 +177,10 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
+        if config.platform_fee_bps + config.network_fee_bps > 10_000 {
+            panic_with_error!(&env, GovernanceError::InvalidFeeBps);
+        }
+
         let key = DataKey::FeeConfig;
         env.storage().persistent().set(&key, &config.clone());
         env.storage()
@@ -360,6 +364,18 @@ mod tests {
         let cfg = FeeConfig {
             platform_fee_bps: 100,
             network_fee_bps: 4, // below MIN_FEE_BPS
+        };
+        client.set_fee_config(&admin, &cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_fee_bps_sum_exceeds_max() {
+        let (_env, client, admin) = setup();
+        // platform 5_000 (max) + network 5_001 = 10_001 > 10_000
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_000,
+            network_fee_bps: 5_001,
         };
         client.set_fee_config(&admin, &cfg);
     }
