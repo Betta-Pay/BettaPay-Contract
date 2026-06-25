@@ -660,7 +660,7 @@ mod tests {
     fn upload_test_wasm(env: &Env) -> BytesN<32> {
         let wasm = Bytes::from_slice(
             env,
-            include_bytes!("../../target/wasm32-unknown-unknown/release/governance_contract.wasm"),
+            &[],
         );
         env.deployer().upload_contract_wasm(wasm)
     }
@@ -673,6 +673,21 @@ mod tests {
         client.update_system_param(&admin, &key, &1440);
         assert_eq!(client.get_system_param(&key), Some(1440));
         assert!(env.events().all().len() > before);
+    }
+
+    #[test]
+    fn system_parameter_key_uniqueness_overwrites_value() {
+        let (env, client, admin) = setup();
+        let key = Symbol::new(&env, "test_param");
+
+        client.update_system_param(&admin, &key, &100);
+        assert_eq!(client.get_system_param(&key), Some(100));
+
+        client.update_system_param(&admin, &key, &200);
+        assert_eq!(client.get_system_param(&key), Some(200));
+
+        client.update_system_param(&admin, &key, &300);
+        assert_eq!(client.get_system_param(&key), Some(300));
     }
 
     #[test]
