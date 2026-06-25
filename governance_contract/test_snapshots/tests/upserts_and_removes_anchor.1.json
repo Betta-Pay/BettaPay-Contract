@@ -224,7 +224,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ],
       [
@@ -245,7 +245,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ]
     ]
@@ -343,7 +343,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "anchor_up"
+                "symbol": "anchor_upserted"
               },
               {
                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"

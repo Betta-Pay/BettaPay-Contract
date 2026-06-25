@@ -394,6 +394,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn remove_anchor_fails_when_paused() {
+        let (env, client, admin) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+
+        client.upsert_anchor(&admin, &asset, &anchor);
+        client.pause(&admin);
+        client.remove_anchor(&admin, &asset);
+    }
+
+    #[test]
     #[should_panic]
     fn rejects_double_initialization() {
         let (env, client, admin) = setup();
