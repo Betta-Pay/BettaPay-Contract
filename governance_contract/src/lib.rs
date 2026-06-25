@@ -446,4 +446,12 @@ mod tests {
         client.transfer_admin(&admin, &new_admin);
         assert_eq!(client.get_admin(), new_admin);
     }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn pause_requires_admin_auth() {
+        let (env, client, _admin) = setup();
+        let non_admin = Address::generate(&env);
+        client.pause(&non_admin);
+    }
 }
