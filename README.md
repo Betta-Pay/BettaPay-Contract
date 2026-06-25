@@ -3,6 +3,7 @@
 Soroban smart contracts for the BettaPay payment infrastructure on Stellar.
 
 
+
 ## Structure
 
 ```
