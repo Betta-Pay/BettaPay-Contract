@@ -150,11 +150,20 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::InvalidParamValue);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::SystemParam(key.clone()), &value);
-        env.events()
-            .publish((symbol_short!("sys_param"), key), value);
+        let storage_key = DataKey::SystemParam(key.clone());
+        let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+
+        env.storage().persistent().set(&storage_key, &value);
+
+        // Structured for off-chain indexing: topics carry the event name and
+        // the specific parameter key (so indexers can filter per-parameter),
+        // and the data payload carries who made the change and the full
+        // before/after value, so the change is auditable without needing to
+        // separately diff storage reads.
+        env.events().publish(
+            (Symbol::new(&env, "sys_param_updated"), key),
+            (admin, previous_value, value),
+        );
     }
 
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
@@ -467,5 +476,44 @@ mod tests {
         let key = Symbol::new(&env, "max_settle");
         client.update_system_param(&admin, &key, &0);
         assert_eq!(client.get_system_param(&key), Some(0));
+    }
+
+    #[test]
+    fn emits_structured_event_when_updating_system_param() {
+        let (env, client, admin) = setup();
+        let key = Symbol::new(&env, "max_settle");
+
+        // First update: no previous value should exist yet.
+        let prev_count = env.events().all().len();
+        client.update_system_param(&admin, &key, &1440);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), prev_count + 1, "exactly one event emitted");
+
+        let (_contract_id, topics, data) = events.get(prev_count).unwrap();
+
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "sys_param_updated")
+        );
+        assert_eq!(Symbol::from_val(&env, &topics.get(1).unwrap()), key);
+
+        let (event_admin, previous_value, new_value) =
+            <(Address, Option<i128>, i128)>::from_val(&env, &data);
+        assert_eq!(event_admin, admin);
+        assert_eq!(previous_value, None);
+        assert_eq!(new_value, 1440);
+
+        // Second update: previous_value should now reflect the prior write.
+        let prev_count = env.events().all().len();
+        client.update_system_param(&admin, &key, &2880);
+
+        let events = env.events().all();
+        let (_contract_id, _topics, data) = events.get(prev_count).unwrap();
+        let (_event_admin, previous_value, new_value) =
+            <(Address, Option<i128>, i128)>::from_val(&env, &data);
+        assert_eq!(previous_value, Some(1440));
+        assert_eq!(new_value, 2880);
     }
 }
