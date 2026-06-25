@@ -47,6 +47,27 @@ pub struct GovernanceContract;
 
 #[contractimpl]
 impl GovernanceContract {
+    /// Initialises the governance contract and sets the initial administrator.
+    ///
+    /// Must be called exactly once after deployment. The caller is recorded as the
+    /// contract administrator. Subsequent calls are rejected.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `admin` - The address to designate as contract administrator.
+    ///
+    /// # Authorization
+    ///
+    /// Requires authorisation from `admin`.
+    ///
+    /// # Effects
+    ///
+    /// Writes `admin` to instance storage under `DataKey::Admin`.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, GovernanceError::AlreadyInitialized);
@@ -55,10 +76,32 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
+    /// Returns whether the contract has been initialised.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `init` has been called successfully; `false` otherwise.
     pub fn is_initialized(env: Env) -> bool {
         env.storage().instance().has(&DataKey::Admin)
     }
 
+    /// Returns the current contract administrator address.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    ///
+    /// # Returns
+    ///
+    /// The stored administrator `Address`.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::NotInitialized` if the contract has not been initialised.
     pub fn get_admin(env: Env) -> Address {
         read_admin(&env)
     }
@@ -91,6 +134,30 @@ impl GovernanceContract {
         );
     }
 
+    /// Transfers administrative control of the contract to a new address.
+    ///
+    /// The current administrator must authorise the call. The new admin may not be
+    /// the zero address or the same address as the current administrator.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `_caller` - Unused parameter; authorisation is enforced via the stored admin.
+    /// * `new_admin` - The address to become the new administrator.
+    ///
+    /// # Authorization
+    ///
+    /// Requires authorisation from the current stored administrator.
+    ///
+    /// # Effects
+    ///
+    /// Overwrites `DataKey::Admin` in instance storage and emits an `admin` event
+    /// carrying the new administrator address.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::InvalidAdmin` if `new_admin` is the zero address
+    /// or is identical to the current administrator.
     pub fn transfer_admin(env: Env, _caller: Address, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
@@ -111,6 +178,27 @@ impl GovernanceContract {
         env.events().publish((symbol_short!("admin"),), new_admin);
     }
 
+    /// Pauses the contract, blocking all state-mutating operations.
+    ///
+    /// While paused, any function guarded by `assert_not_paused` will reject
+    /// incoming transactions. Intended for emergency use by the administrator.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Sets `DataKey::Paused` to `true` in instance storage and emits a `pause` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
     pub fn pause(env: Env, caller: Address) {
         let admin = read_admin(&env);
         if caller != admin {
@@ -122,6 +210,26 @@ impl GovernanceContract {
             .publish((symbol_short!("pause"),), (admin, true));
     }
 
+    /// Resumes normal contract operation after a pause.
+    ///
+    /// Clears the paused state so that state-mutating operations can proceed again.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Sets `DataKey::Paused` to `false` in instance storage and emits an `unpause` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
     pub fn unpause(env: Env, caller: Address) {
         let admin = read_admin(&env);
         if caller != admin {
@@ -133,10 +241,45 @@ impl GovernanceContract {
             .publish((symbol_short!("unpause"),), (admin, false));
     }
 
+    /// Returns whether the contract is currently paused.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the contract is paused; `false` otherwise (including when the
+    /// paused flag has never been explicitly set).
     pub fn is_paused(env: Env) -> bool {
         is_paused(&env)
     }
 
+    /// Creates or updates a named system parameter in persistent storage.
+    ///
+    /// System parameters are arbitrary `i128` values keyed by a `Symbol` and are
+    /// intended for protocol-level configuration such as settlement delay bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    /// * `key` - The `Symbol` identifier for the parameter.
+    /// * `value` - The `i128` value to store.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Writes the key/value pair to persistent storage under `DataKey::SystemParam(key)`
+    /// and emits a `sys_param` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
+    /// Panics with `GovernanceError::Paused` if the contract is currently paused.
     pub fn update_system_param(env: Env, caller: Address, key: Symbol, value: i128) {
         assert_not_paused(&env);
         let admin = read_admin(&env);
@@ -151,6 +294,24 @@ impl GovernanceContract {
             .publish((symbol_short!("sys_param"), key), value);
     }
 
+    /// Retrieves a stored system parameter by key.
+    ///
+    /// If the entry exists its persistent storage TTL is refreshed before the
+    /// value is returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `key` - The `Symbol` identifier of the parameter to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// `Some(value)` if the parameter exists; `None` otherwise.
+    ///
+    /// # Effects
+    ///
+    /// Extends the persistent storage TTL for `DataKey::SystemParam(key)` when the
+    /// entry is present.
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
         let storage_key = DataKey::SystemParam(key);
         if env.storage().persistent().has(&storage_key) {
@@ -161,6 +322,33 @@ impl GovernanceContract {
         env.storage().persistent().get(&storage_key)
     }
 
+    /// Sets the platform and network fee configuration.
+    ///
+    /// Both fee values are in basis points and must be within the inclusive range
+    /// `[MIN_FEE_BPS, MAX_FEE_BPS]` (5–5 000 bps). Either the platform or network
+    /// fee falling outside this range causes the call to be rejected.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    /// * `config` - A [`FeeConfig`] containing `platform_fee_bps` and `network_fee_bps`.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Writes `config` to persistent storage under `DataKey::FeeConfig`, refreshes its
+    /// TTL, and emits a `fee_config_updated` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::InvalidFeeBps` if either fee value is outside the
+    /// allowed range.
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
+    /// Panics with `GovernanceError::Paused` if the contract is currently paused.
     pub fn set_fee_config(env: Env, caller: Address, config: FeeConfig) {
         assert_not_paused(&env);
         let admin = read_admin(&env);
@@ -188,10 +376,46 @@ impl GovernanceContract {
         );
     }
 
+    /// Returns the currently stored fee configuration, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    ///
+    /// # Returns
+    ///
+    /// `Some(FeeConfig)` if a fee configuration has been set via [`set_fee_config`];
+    /// `None` otherwise.
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         env.storage().persistent().get(&DataKey::FeeConfig)
     }
 
+    /// Creates or updates the anchor address associated with a supported asset.
+    ///
+    /// An anchor maps a token asset address to the trusted entity responsible for
+    /// managing that asset within the payment system. Calling this function for an
+    /// existing `asset` key overwrites the previously registered anchor address.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    /// * `asset` - The asset token address whose anchor is being registered or updated.
+    /// * `anchor` - The anchor address to associate with `asset`.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Writes the anchor address to persistent storage under `DataKey::Anchor(asset)`
+    /// and emits an `anchor_upserted` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
+    /// Panics with `GovernanceError::Paused` if the contract is currently paused.
     pub fn upsert_anchor(env: Env, caller: Address, asset: Address, anchor: Address) {
         assert_not_paused(&env);
         let admin = read_admin(&env);
@@ -206,6 +430,32 @@ impl GovernanceContract {
             .publish((Symbol::new(&env, "anchor_upserted"), asset), anchor);
     }
 
+    /// Removes the anchor configuration for the given asset.
+    ///
+    /// Deletes the `DataKey::Anchor(asset)` entry from persistent storage. The asset
+    /// must already have a registered anchor; attempting to remove an unknown asset
+    /// is rejected.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `caller` - Must be the stored administrator.
+    /// * `asset` - The asset token address whose anchor registration is to be removed.
+    ///
+    /// # Authorization
+    ///
+    /// Callable only by the configured contract administrator.
+    ///
+    /// # Effects
+    ///
+    /// Removes `DataKey::Anchor(asset)` from persistent storage and emits both an
+    /// `anchor_rm` and an `anchor_removed` event.
+    ///
+    /// # Errors
+    ///
+    /// Panics with `GovernanceError::AnchorMissing` if no anchor is registered for `asset`.
+    /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
+    /// Panics with `GovernanceError::Paused` if the contract is currently paused.
     pub fn remove_anchor(env: Env, caller: Address, asset: Address) {
         assert_not_paused(&env);
         let admin = read_admin(&env);
@@ -226,6 +476,16 @@ impl GovernanceContract {
             .publish((Symbol::new(&env, "anchor_removed"), asset), true);
     }
 
+    /// Returns the anchor address registered for the given asset, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `asset` - The asset token address to look up.
+    ///
+    /// # Returns
+    ///
+    /// `Some(anchor_address)` if an anchor is registered for `asset`; `None` otherwise.
     pub fn get_anchor(env: Env, asset: Address) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Anchor(asset))
     }
