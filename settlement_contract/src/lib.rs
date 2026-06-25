@@ -520,6 +520,14 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn rejects_double_initialization() {
+        let (env, client, admin) = setup();
+        client.init(&admin);
+        let _ = env;
+    }
+
+    #[test]
     fn registers_merchant_and_persists_flag() {
         let (env, client, _admin, merchant) = setup();
         let before = env.events().all().len();
