@@ -810,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #8)")]
     fn rejects_duplicate_payment_reference() {
         let (env, client, _admin, merchant) = setup();
         client.register_merchant(&merchant);
