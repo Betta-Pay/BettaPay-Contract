@@ -529,6 +529,27 @@ mod tests {
     }
 
     #[test]
+    fn emits_event_on_registration() {
+        let (env, client, admin, merchant) = setup();
+
+        client.register_merchant(&merchant);
+
+        let events = env.events().all();
+        let event = events.last().unwrap();
+        let (_contract_id, topics, data) = event;
+
+        // Topic 0: Event Name symbol
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "merchant_registered")
+        );
+        // Topic 1: Merchant Address
+        assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), merchant);
+        // Data: Admin Address (the caller)
+        assert_eq!(Address::from_val(&env, &data), admin);
+    }
+
+    #[test]
     #[should_panic]
     fn rejects_invalid_merchant_address() {
         let (env, client, _admin, _merchant) = setup();
