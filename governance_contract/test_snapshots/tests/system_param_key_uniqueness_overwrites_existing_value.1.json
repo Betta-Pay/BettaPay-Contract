@@ -403,17 +403,25 @@
           "v0": {
             "topics": [
               {
-                "symbol": "sys_param"
+                "symbol": "sys_param_updated"
               },
               {
                 "symbol": "test_param"
               }
             ],
             "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 100
-              }
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                "void",
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 100
+                  }
+                }
+              ]
             }
           }
         }
@@ -541,17 +549,30 @@
           "v0": {
             "topics": [
               {
-                "symbol": "sys_param"
+                "symbol": "sys_param_updated"
               },
               {
                 "symbol": "test_param"
               }
             ],
             "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 200
-              }
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 100
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 200
+                  }
+                }
+              ]
             }
           }
         }
