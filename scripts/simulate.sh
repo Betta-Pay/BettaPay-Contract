@@ -3,6 +3,65 @@
 # Run from inside BettaPay-Contract/
 set -euo pipefail
 
+# ---- Configurable defaults ------------------------------------------------
+: "${SOROBAN_RPC_URL:=https://soroban-testnet.stellar.org}"
+: "${SOROBAN_NETWORK_PASSPHRASE:=Test SDF Network ; September 2015}"
+: "${SOROBAN_SOURCE:=bettapay-sim}"
+: "${FRIENDBOT_URL:=https://friendbot.stellar.org}"
+
+# ---- Argument parsing -----------------------------------------------------
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Run a local simulation bootstrap for BettaPay contracts on Stellar.
+
+Options:
+  -r, --rpc-url URL           Soroban RPC endpoint (default: \$SOROBAN_RPC_URL)
+  -p, --network-passphrase    Network passphrase (default: \$SOROBAN_NETWORK_PASSPHRASE)
+  -s, --source IDENTITY       Source identity name (default: \$SOROBAN_SOURCE)
+  -f, --friendbot-url URL     Friendbot funding URL (default: \$FRIENDBOT_URL)
+  -c, --config FILE           Load configuration from a file
+  -h, --help                  Show this help message and exit
+
+Environment variables SOROBAN_RPC_URL, SOROBAN_NETWORK_PASSPHRASE,
+SOROBAN_SOURCE, and FRIENDBOT_URL can also be used to override defaults.
+EOF
+  exit 0
+}
+
+load_config() {
+  local config_file="$1"
+  if [ ! -f "$config_file" ]; then
+    log_error "Config file '$config_file' not found."
+    exit 1
+  fi
+  log_info "Loading configuration from '$config_file'"
+  # shellcheck source=/dev/null
+  source "$config_file"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--rpc-url)
+      SOROBAN_RPC_URL="$2"; shift 2 ;;
+    -p|--network-passphrase)
+      SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
+    -s|--source)
+      SOROBAN_SOURCE="$2"; shift 2 ;;
+    -f|--friendbot-url)
+      FRIENDBOT_URL="$2"; shift 2 ;;
+    -c|--config)
+      load_config "$2"; shift 2 ;;
+    -h|--help)
+      usage ;;
+    *)
+      log_error "Unknown option: $1"
+      usage
+      exit 1 ;;
+  esac
+done
+
 # ANSI color codes
 BOLD='\033[1m'
 BLUE='\033[34m'
@@ -80,10 +139,6 @@ assert_command soroban
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-: "${SOROBAN_RPC_URL:=https://soroban-testnet.stellar.org}"
-: "${SOROBAN_NETWORK_PASSPHRASE:=Test SDF Network ; September 2015}"
-: "${SOROBAN_SOURCE:=bettapay-sim}"
-
 log_info "Initializing simulation with RPC URL: $SOROBAN_RPC_URL"
 log_info "Source identity: $SOROBAN_SOURCE"
 
@@ -102,7 +157,7 @@ log_info "Source address: $SOROBAN_SOURCE_ADDRESS"
 
 # Fund account via Friendbot
 log_info "Checking friendbot funding status..."
-curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${SOROBAN_SOURCE_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
+curl --silent --fail --show-error "${FRIENDBOT_URL}?addr=${SOROBAN_SOURCE_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
 
 # Build contracts
 log_info "Building settlement and governance contracts..."
