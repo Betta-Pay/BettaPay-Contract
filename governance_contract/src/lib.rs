@@ -821,6 +821,20 @@ mod tests {
     }
 
     #[test]
+    fn anchor_upsert_overwrites_existing_anchor() {
+        let (env, client, admin) = setup();
+        let asset = Address::generate(&env);
+        let anchor_one = Address::generate(&env);
+        let anchor_two = Address::generate(&env);
+
+        client.upsert_anchor(&admin, &asset, &anchor_one);
+        assert_eq!(client.get_anchor(&asset), Some(anchor_one));
+
+        client.upsert_anchor(&admin, &asset, &anchor_two);
+        assert_eq!(client.get_anchor(&asset), Some(anchor_two));
+    }
+
+    #[test]
     #[should_panic]
     fn rejects_fee_bps_above_max() {
         let (_env, client, admin) = setup();
