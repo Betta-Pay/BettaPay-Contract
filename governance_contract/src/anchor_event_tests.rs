@@ -32,10 +32,7 @@ fn upsert_anchor_emits_anchor_upserted_event() {
         Symbol::from_val(&env, &topics.get(0).unwrap()),
         Symbol::new(&env, "anchor_upserted")
     );
-    assert_eq!(
-        Address::from_val(&env, &topics.get(1).unwrap()),
-        asset
-    );
+    assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), asset);
     assert_eq!(Address::from_val(&env, &data), anchor);
 }
 
@@ -70,10 +67,7 @@ fn remove_anchor_emits_anchor_rm_and_removed_events() {
         Symbol::from_val(&env, &topics.get(0).unwrap()),
         Symbol::new(&env, "anchor_removed")
     );
-    assert_eq!(
-        Address::from_val(&env, &topics.get(1).unwrap()),
-        asset
-    );
+    assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), asset);
 }
 
 #[test]

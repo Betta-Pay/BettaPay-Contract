@@ -553,12 +553,8 @@ impl GovernanceContract {
         }
         caller.require_auth();
         let key = DataKey::Anchor(asset.clone());
-        env.storage()
-            .persistent()
-            .set(&key, &anchor.clone());
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, 50_000, 100_000);
+        env.storage().persistent().set(&key, &anchor.clone());
+        env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
         env.events()
             .publish((Symbol::new(&env, "anchor_upserted"), asset), anchor);
     }
@@ -604,8 +600,10 @@ impl GovernanceContract {
         env.storage().persistent().remove(&key);
         // Ensure the instance cache is also cleared for this key
         // Emit events indicating removal
-        env.events().publish((symbol_short!("anchor_rm"),), (asset.clone(),));
-        env.events().publish((Symbol::new(&env, "anchor_removed"), asset), ());
+        env.events()
+            .publish((symbol_short!("anchor_rm"),), (asset.clone(),));
+        env.events()
+            .publish((Symbol::new(&env, "anchor_removed"), asset), ());
     }
 
     /// Returns the anchor address registered for the given asset, if any.
@@ -723,10 +721,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn upload_test_wasm(env: &Env) -> BytesN<32> {
-        let wasm = Bytes::from_slice(
-            env,
-            &[],
-        );
+        let wasm = Bytes::from_slice(env, &[]);
         env.deployer().upload_contract_wasm(wasm)
     }
 
@@ -1024,7 +1019,7 @@ mod tests {
         assert_eq!(payload.old_admin, admin);
         assert_eq!(payload.new_admin, new_admin);
     }
-    
+
     #[test]
     fn admin_functions_work_while_paused() {
         let (env, client, admin) = setup();
@@ -1055,8 +1050,6 @@ mod tests {
         // Still paused throughout - none of the above silently unpaused it.
         assert!(client.is_paused());
     }
-
-
 
     #[test]
     #[should_panic]
