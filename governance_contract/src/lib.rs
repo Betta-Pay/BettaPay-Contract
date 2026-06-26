@@ -1082,5 +1082,18 @@ mod tests {
         let key = Symbol::new(&env, "max_settle");
         client.update_system_param(&non_admin, &key, &1440);
     }
-}
 
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn unpause_requires_admin_auth() {
+        let (env, client, admin) = setup();
+        let non_admin = Address::generate(&env);
+
+        // Pause the contract as admin first
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        // Attempt to unpause as non-admin, which should panic
+        client.unpause(&non_admin);
+    }
+}
