@@ -119,10 +119,15 @@ pub struct AdminTransferred {
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
+    /// Storage key for the contract admin address in instance storage.
     Admin,
+    /// Storage key for a system parameter value indexed by a symbol in persistent storage.
     SystemParam(Symbol),
+    /// Storage key for the fee configuration data in persistent storage.
     FeeConfig,
+    /// Storage key for the anchor address associated with a specific asset in persistent storage.
     Anchor(Address),
+    /// Storage key for the pause state flag in instance storage.
     Paused,
 }
 
