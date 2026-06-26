@@ -483,10 +483,22 @@ impl SettlementContract {
     }
 
     /// Returns the merchant-specific settlement rule, if one has been set.
+    /// Automatically extends the persistent storage TTL to prevent archival.
     pub fn get_settlement_rule(env: Env, merchant: Address) -> Option<SettlementRule> {
-        env.storage().persistent().get(&DataKey::Rule(merchant))
+        let key = DataKey::Rule(merchant);
+        
+        if let Some(rule) = env.storage().persistent().get(&key) {
+            // Extend the TTL. 
+            // 100_000 ledgers is the threshold (extend if remaining TTL is below this).
+            // 518_400 ledgers is the target (extend to roughly 30 days).
+            env.storage().persistent().extend_ttl(&key, 100_000, 518_400);
+            
+            Some(rule)
+        } else {
+            None
+        }
     }
-
+    
     /// Calculate the fee split for a given merchant and amount without storing a payment reference.
     ///
     /// # Panics
