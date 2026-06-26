@@ -1802,9 +1802,102 @@ mod tests {
         let (_env, client, _admin, merchant) = setup();
         client.register_merchant(&merchant);
         let split = client.calculate_fee_split(&merchant, &10_000);
-        assert_eq!(split.platform_fee_amount, 100); // 100 bps of 10_000
+        assert_eq!(split.platform_fee_amount, 100);
         assert_eq!(split.network_fee_amount, 0);
         assert_eq!(split.merchant_amount, 9_900);
+    }
+
+    // Issue #72: verify non-admin transfer_admin calls are rejected
+    #[test]
+    #[should_panic]
+    fn transfer_admin_rejected_for_non_admin() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+        env.mock_all_auths();
+        client.init(&admin);
+        env.mock_auths(&[MockAuth {
+            address: &non_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "transfer_admin",
+                args: soroban_sdk::vec![&env, new_admin.clone().into_val(&env)],
+                sub_invokes: &[],
+            },
+        }]);
+        client.transfer_admin(&new_admin);
+    }
+
+    // Issue #88: verify set_settlement_rule publishes event with caller and rule data
+    #[test]
+    fn set_settlement_rule_publishes_event_with_rule_data() {
+        let (env, client, admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let rule = SettlementRule {
+            platform_fee_bps: 300,
+            network_fee_bps: 75,
+            settlement_delay_ledger: 5,
+            auto_settle: true,
+        };
+        let before = env.events().all().len();
+        client.set_settlement_rule(&merchant, &rule);
+        let events = env.events().all();
+        assert_eq!(events.len(), before + 1, "exactly one event emitted");
+        let (_contract_id, topics, data) = events.get(before).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "settlement_rule_updated")
+        );
+        assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), merchant);
+        let (caller, _prev, current): (Address, SettlementRule, SettlementRule) =
+            FromVal::from_val(&env, &data);
+        assert_eq!(caller, admin);
+        assert_eq!(current.platform_fee_bps, 300);
+        assert_eq!(current.network_fee_bps, 75);
+        assert_eq!(current.settlement_delay_ledger, 5);
+        assert!(current.auto_settle);
+    }
+
+    // Issue #84: store_payment_reference rejects zero amount with InvalidAmount (#7)
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn store_payment_reference_rejects_zero_amount_with_invalid_amount_error() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let reference = BytesN::from_array(&env, &[55; 32]);
+        client.store_payment_reference(&merchant, &reference, &0);
+    }
+
+    // Issue #84: store_payment_reference rejects negative amounts with InvalidAmount (#7)
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn store_payment_reference_rejects_negative_amount() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let reference = BytesN::from_array(&env, &[56; 32]);
+        client.store_payment_reference(&merchant, &reference, &-1);
+    }
+
+    // Issue #86: calculate_fee_split output matches custom rule parameters
+    #[test]
+    fn calculate_fee_split_uses_custom_rule_parameters() {
+        let (_env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let rule = SettlementRule {
+            platform_fee_bps: 500,
+            network_fee_bps: 250,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+        let split = client.calculate_fee_split(&merchant, &100_000);
+        assert_eq!(split.gross_amount, 100_000);
+        assert_eq!(split.platform_fee_amount, 5_000);
+        assert_eq!(split.network_fee_amount, 2_500);
+        assert_eq!(split.merchant_amount, 92_500);
 
         #[test]
         #[should_panic]
