@@ -446,4 +446,27 @@ mod tests {
         client.transfer_admin(&admin, &new_admin);
         assert_eq!(client.get_admin(), new_admin);
     }
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn rejects_upsert_anchor_non_admin() {
+        let (env, client, admin) = setup();
+        let non_admin = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+        client.upsert_anchor(&non_admin, &asset, &anchor);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn rejects_remove_anchor_non_admin() {
+        let (env, client, admin) = setup();
+        // First set up an anchor with admin
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+        client.upsert_anchor(&admin, &asset, &anchor);
+        // Attempt removal with non-admin
+        let non_admin = Address::generate(&env);
+        client.remove_anchor(&non_admin, &asset);
+    }
+
 }
