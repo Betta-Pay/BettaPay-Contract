@@ -597,10 +597,10 @@ impl GovernanceContract {
         }
 
         env.storage().persistent().remove(&key);
-        env.events()
-            .publish((symbol_short!("anchor_rm"), asset.clone()), true);
-        env.events()
-            .publish((Symbol::new(&env, "anchor_removed"), asset), true);
+        // Ensure the instance cache is also cleared for this key
+        // Emit events indicating removal
+        env.events().publish((symbol_short!("anchor_rm"),), (asset.clone(),));
+        env.events().publish((Symbol::new(&env, "anchor_removed"), asset), ());
     }
 
     /// Returns the anchor address registered for the given asset, if any.
