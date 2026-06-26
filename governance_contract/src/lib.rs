@@ -628,6 +628,19 @@ impl GovernanceContract {
     }
 }
 
+/// Returns the administrator address stored in contract storage.
+///
+/// This helper is used internally by authorization checks throughout the
+/// governance contract and refreshes the instance TTL while reading the
+/// current admin value.
+///
+/// # Returns
+///
+/// The current administrator `Address` stored in persistent instance storage.
+///
+/// # Panics
+///
+/// Panics if the contract has not been initialized yet.
 fn read_admin(env: &Env) -> Address {
     env.storage().instance().extend_ttl(50_000, 100_000);
     env.storage()
@@ -636,6 +649,14 @@ fn read_admin(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::NotInitialized))
 }
 
+/// Returns whether governance operations are currently paused.
+///
+/// This helper reads the pause flag from instance storage so other internal
+/// checks can decide whether mutating operations should be allowed.
+///
+/// # Returns
+///
+/// `true` if the contract is paused; otherwise `false`.
 fn is_paused(env: &Env) -> bool {
     env.storage()
         .instance()
@@ -643,6 +664,15 @@ fn is_paused(env: &Env) -> bool {
         .unwrap_or(false)
 }
 
+/// Ensures the governance contract is not currently paused.
+///
+/// This helper is called before mutating operations that should be disabled
+/// while the contract is paused. It enforces the pause state centrally so
+/// callers do not need to duplicate the check themselves.
+///
+/// # Panics
+///
+/// Panics with `GovernanceError::Paused` if the contract is currently paused.
 fn assert_not_paused(env: &Env) {
     if is_paused(env) {
         panic_with_error!(env, GovernanceError::Paused);
