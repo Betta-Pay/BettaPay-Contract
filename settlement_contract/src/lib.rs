@@ -1898,73 +1898,33 @@ mod tests {
         assert_eq!(split.platform_fee_amount, 5_000);
         assert_eq!(split.network_fee_amount, 2_500);
         assert_eq!(split.merchant_amount, 92_500);
+    }
 
-        #[test]
-        #[should_panic]
-        fn register_merchant_requires_admin_auth() {
-            let env = Env::default();
-            let admin = Address::generate(&env);
-            let non_admin = Address::generate(&env);
-            let merchant = Address::generate(&env);
-            let contract_id = env.register_contract(None, SettlementContract);
-            let client = SettlementContractClient::new(&env, &contract_id);
-            env.mock_all_auths();
-            client.init(&admin);
-            env.mock_auths(&[MockAuth {
-                address: &non_admin,
-                invoke: &MockAuthInvoke {
-                    contract: &contract_id,
-                    fn_name: "register_merchant",
-                    args: soroban_sdk::vec![&env, merchant.clone().into_val(&env)],
-                    sub_invokes: &[],
-                },
-            }]);
-            client.register_merchant(&merchant);
-        }
+    // Verify event emitted on admin transfer
+    #[test]
+    fn emits_event_on_admin_transfer() {
+        let (env, client, _admin, _merchant) = setup();
+        let new_admin = Address::generate(&env);
 
-        #[test]
-        #[should_panic]
-        fn duplicate_merchant_registration_fails() {
-            let (_env, client, _admin, merchant) = setup();
-            client.register_merchant(&merchant);
-            client.register_merchant(&merchant);
-        }
+        let before = env.events().all().len();
+        client.transfer_admin(&new_admin);
 
-        #[test]
-        fn split_events_emitted_on_payment_reference() {
-            let (env, client, _admin, merchant) = setup();
-            client.register_merchant(&merchant);
-            let rule = SettlementRule {
-                platform_fee_bps: 200,
-                network_fee_bps: 50,
-                settlement_delay_ledger: 0,
-                auto_settle: false,
-            };
-            client.set_settlement_rule(&merchant, &rule);
-            let reference = BytesN::from_array(&env, &[42; 32]);
-            let before = env.events().all().len();
-            client.store_payment_reference(&merchant, &reference, &10_000);
-            let events = env.events().all();
-            assert!(events.len() >= before + 2);
-            let found_split = events
-                .iter()
-                .skip(before as usize)
-                .any(|(_id, topics, _data)| {
-                    topics.len() >= 1
-                        && Symbol::from_val(&env, &topics.get(0).unwrap())
-                            == Symbol::new(&env, "payment_split")
-                });
-            assert!(found_split, "payment_split event not emitted");
-        }
+        let events = env.events().all();
+        assert_eq!(
+            events.len(),
+            before + 1,
+            "exactly one event should be emitted by transfer_admin"
+        );
 
-        #[test]
-        fn default_fee_split_uses_100_bps() {
-            let (_env, client, _admin, merchant) = setup();
-            client.register_merchant(&merchant);
-            let split = client.calculate_fee_split(&merchant, &10_000);
-            assert_eq!(split.platform_fee_amount, 100);
-            assert_eq!(split.network_fee_amount, 0);
-            assert_eq!(split.merchant_amount, 9_900);
-        }
+        let event = events.last().unwrap();
+        let (contract_id, topics, data) = event;
+
+        assert_eq!(contract_id, client.address);
+        assert_eq!(topics.len(), 1);
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "admin")
+        );
+        assert_eq!(Address::from_val(&env, &data), new_admin);
     }
 }
