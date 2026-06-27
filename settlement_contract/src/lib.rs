@@ -89,24 +89,52 @@ pub struct SettlementRule {
 #[derive(Clone)]
 #[contracttype]
 pub struct FeeSplit {
+    /// The total gross amount of the payment before any fees are deducted.
+    /// This is an absolute amount provided as input when storing a payment.
     pub gross_amount: i128,
+    /// Portion of the settlement fee allocated to the platform.
+    /// This amount is calculated by applying the platform fee basis points to the gross amount.
     pub platform_fee_amount: i128,
+    /// Portion of the settlement fee allocated to the network.
+    /// This amount is calculated by applying the network fee basis points to the gross amount.
     pub network_fee_amount: i128,
+    /// Net amount allocated to the merchant.
+    /// This derived output is calculated as the gross amount minus the rounded platform and network fee amounts.
     pub merchant_amount: i128,
 }
 
 #[derive(Clone)]
 #[contracttype]
 pub struct PaymentRecord {
+    /// The address of the merchant receiving the payment.
+    /// Set when the payment reference is stored, used to determine who is authorized to settle.
     pub merchant: Address,
+    /// The total gross amount of the payment processed.
+    /// Set upon payment creation and used to derive the fee split.
     pub amount: i128,
+    /// The exact amount deducted for the platform fee.
+    /// Calculated and stored at payment creation to lock in the fee value.
     pub platform_fee_amount: i128,
+    /// The exact amount deducted for the network fee.
+    /// Calculated and stored at payment creation to lock in the fee value.
     pub network_fee_amount: i128,
+    /// The net payout amount owed to the merchant.
+    /// Calculated at payment creation to ensure deterministic settlement value.
     pub merchant_amount: i128,
+    /// The platform fee rate (in basis points) applied to this payment.
+    /// Snapshot taken from the active settlement rule during creation.
     pub platform_fee_bps: u32,
+    /// The network fee rate (in basis points) applied to this payment.
+    /// Snapshot taken from the active settlement rule during creation.
     pub network_fee_bps: u32,
+    /// Ledger sequence timestamp when the payment was recorded.
+    /// Used alongside settlement_delay_ledger to verify if the payment is ripe for settlement.
     pub ledger: u32,
+    /// The delay period (in ledgers) before settlement can occur.
+    /// Sourced from the active settlement rule and used to prevent premature settlement.
     pub settlement_delay_ledger: u32,
+    /// Indicates if the payment should participate in automated settlement batches.
+    /// Set from the active rule and used by external auto-settlement processes.
     pub auto_settle: bool,
 }
 
