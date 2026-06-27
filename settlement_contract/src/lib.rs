@@ -89,9 +89,17 @@ pub struct SettlementRule {
 #[derive(Clone)]
 #[contracttype]
 pub struct FeeSplit {
+    /// The total gross amount of the payment before any fees are deducted.
+    /// This is an absolute amount provided as input when storing a payment.
     pub gross_amount: i128,
+    /// Portion of the settlement fee allocated to the platform.
+    /// This amount is calculated by applying the platform fee basis points to the gross amount.
     pub platform_fee_amount: i128,
+    /// Portion of the settlement fee allocated to the network.
+    /// This amount is calculated by applying the network fee basis points to the gross amount.
     pub network_fee_amount: i128,
+    /// Net amount allocated to the merchant.
+    /// This derived output is calculated as the gross amount minus the rounded platform and network fee amounts.
     pub merchant_amount: i128,
 }
 
