@@ -111,8 +111,8 @@ cargo build --target wasm32-unknown-unknown --release \
   -p governance_contract
 log_success "Build completed successfully."
 
-SETTLEMENT_WASM="$ROOT_DIR/target/wasm32-unknown-unknown/release/settlement_contract.wasm"
-GOVERNANCE_WASM="$ROOT_DIR/target/wasm32-unknown-unknown/release/governance_contract.wasm"
+SETTLEMENT_WASM="${ROOT_DIR}/target/optimized/settlement_contract_opt.wasm"
+GOVERNANCE_WASM="${ROOT_DIR}/target/optimized/governance_contract_opt.wasm"
 
 assert_file_exists "$SETTLEMENT_WASM"
 assert_file_exists "$GOVERNANCE_WASM"
