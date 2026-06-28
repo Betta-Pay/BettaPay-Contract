@@ -301,8 +301,6 @@ impl SettlementContract {
     /// **Data**: `Address caller`
     /// - `caller`: the admin who authorized the registration
     pub fn register_merchant(env: Env, merchant: Address) {
-        assert_not_paused(&env);
-
         let zero_address_str = soroban_sdk::String::from_str(
             &env,
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
@@ -328,7 +326,6 @@ impl SettlementContract {
     ///
     /// # Panics
     ///
-    /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
     /// * [`NotInitialized`](SettlementError::NotInitialized) — if the contract has not been initialized yet.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if the caller is not the admin.
     /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not registered.
@@ -369,7 +366,6 @@ impl SettlementContract {
     /// - `previous`: the rule values before the update (or system defaults on first set)
     /// - `current`: the new rule values after the update
     pub fn set_settlement_rule(env: Env, merchant: Address, rule: SettlementRule) {
-        assert_not_paused(&env);
         let admin = read_admin(&env);
         admin.require_auth();
 
@@ -1926,6 +1922,30 @@ mod tests {
         assert_eq!(split.platform_fee_amount, 5_000);
         assert_eq!(split.network_fee_amount, 2_500);
         assert_eq!(split.merchant_amount, 92_500);
+    }
+
+    #[test]
+    fn merchant_registration_and_rule_updates_succeed_when_paused() {
+        let (_env, client, _admin, merchant) = setup();
+        client.pause();
+        assert!(client.is_paused());
+
+        client.register_merchant(&merchant);
+        assert!(client.is_merchant_registered(&merchant));
+
+        let rule = SettlementRule {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 7,
+            auto_settle: true,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+
+        let stored = client.get_settlement_rule(&merchant).expect("expected merchant rule");
+        assert_eq!(stored.platform_fee_bps, 250);
+        assert_eq!(stored.network_fee_bps, 50);
+        assert_eq!(stored.settlement_delay_ledger, 7);
+        assert!(stored.auto_settle);
     }
 
     // Issue #75: verify pause flag changes state in settlement contract
