@@ -309,7 +309,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ],
       [
@@ -330,7 +330,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ]
     ]
@@ -442,16 +442,33 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fee_cfg"
+                "symbol": "fee_config_updated"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "u32": 5
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "u32": 5
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -540,16 +557,33 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fee_cfg"
+                "symbol": "fee_config_updated"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "u32": 5000
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "u32": 5000
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5000
+                      }
+                    }
+                  ]
                 }
               ]
             }

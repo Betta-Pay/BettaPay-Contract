@@ -219,7 +219,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ],
       [
@@ -240,7 +240,7 @@
             },
             "ext": "v0"
           },
-          4095
+          100000
         ]
       ]
     ]
@@ -341,17 +341,25 @@
           "v0": {
             "topics": [
               {
-                "symbol": "sys_param"
+                "symbol": "sys_param_updated"
               },
               {
                 "symbol": "valid_key_32_chars_or_less"
               }
             ],
             "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 123
-              }
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                "void",
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 123
+                  }
+                }
+              ]
             }
           }
         }
