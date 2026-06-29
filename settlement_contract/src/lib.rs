@@ -165,10 +165,10 @@ pub enum SettlementError {
     /// `set_settlement_rule`, `store_payment_reference`, `calculate_fee_split`,
     /// and `unregister_merchant` when the merchant is missing.
     MerchantMissing = 5,
-    /// The fee BPS values exceed 10 000 (`BPS_DENOMINATOR`) or their sum
-    /// exceeds 10 000. Raised by `set_settlement_rule` and `set_default_rule`.
+    /// The fee BPS values exceed 10 000 (`BPS_DENOMINATOR`) or their sum
+    /// exceeds 10 000. Raised by `set_settlement_rule` and `set_default_rule`.
     InvalidFeeBps = 6,
-    /// The payment amount is below `MIN_PAYMENT_AMOUNT` (100) or is ≤ 0
+    /// The payment amount is below `MIN_PAYMENT_AMOUNT` (100) or is ≤ 0
     /// in `calculate_fee_split`.
     InvalidAmount = 7,
     /// `store_payment_reference` was called with a 32‑byte reference that
@@ -186,7 +186,7 @@ pub enum SettlementError {
     /// reference, which is reserved.
     InvalidPaymentReference = 12,
     /// `settlement_delay_ledger` exceeds `MAX_SETTLEMENT_DELAY_LEDGER`
-    /// (100 000). Raised by `set_settlement_rule` and `set_default_rule`.
+    /// (100 000). Raised by `set_settlement_rule` and `set_default_rule`.
     InvalidSettlementDelay = 13,
     /// `transfer_admin` was called with the current admin address as the
     /// new admin. The new admin must be different.
@@ -249,6 +249,19 @@ impl SettlementContract {
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish((symbol_short!("admin"),), new_admin);
+    }
+
+    /// Upgrades the underlying Wasm bytecode implementation of the contract under strict admin authority.
+    ///
+    /// # Panics
+    ///
+    /// * [`NotInitialized`](SettlementError::NotInitialized) — if the contract has not been initialized yet.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if the caller is not the registered admin.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     /// Pause the contract, preventing certain operations.
@@ -729,6 +742,15 @@ mod tests {
         let client = SettlementContractClient::new(&env, &contract_id);
         client.init(&admin);
         (env, client, admin, merchant)
+    }
+
+    #[test]
+    fn executes_contract_wasm_upgrade_successfully() {
+        let (env, client, _admin, _) = setup();
+        let new_wasm_hash = BytesN::from_array(&env, &[9; 32]);
+        
+        // Verifies the structural update pass completes without panicking
+        client.upgrade(&new_wasm_hash);
     }
 
     #[test]
