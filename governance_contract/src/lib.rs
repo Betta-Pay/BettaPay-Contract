@@ -547,6 +547,7 @@ impl GovernanceContract {
     /// Panics with `GovernanceError::Unauthorized` if `caller` is not the administrator.
     /// Panics with `GovernanceError::Paused` if the contract is currently paused.
     pub fn upsert_anchor(env: Env, caller: Address, asset: Address, anchor: Address) {
+        assert_not_paused(&env);
         let admin = read_admin(&env);
         if caller != admin {
             panic_with_error!(&env, GovernanceError::Unauthorized);
@@ -896,6 +897,7 @@ mod tests {
         let missing_asset = Address::generate(&env);
         client.remove_anchor(&admin, &missing_asset);
     }
+    #[test]
     fn checks_if_initialized() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1037,6 +1039,13 @@ mod tests {
     #[test]
     fn admin_functions_work_while_paused() {
         let (env, client, admin) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+
+        // Set up anchor before pause
+        client.upsert_anchor(&admin, &asset, &anchor);
+        assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
+
         client.pause(&admin);
         assert!(client.is_paused());
 
@@ -1053,11 +1062,7 @@ mod tests {
         client.set_fee_config(&admin, &cfg);
         assert_eq!(client.get_fee_config().unwrap().platform_fee_bps, 120);
 
-        let asset = Address::generate(&env);
-        let anchor = Address::generate(&env);
-        client.upsert_anchor(&admin, &asset, &anchor);
-        assert_eq!(client.get_anchor(&asset), Some(anchor));
-
+        // remove_anchor still works while paused
         client.remove_anchor(&admin, &asset);
         assert_eq!(client.get_anchor(&asset), None);
 
@@ -1134,5 +1139,28 @@ mod tests {
 
         // Attempt to unpause as non-admin, which should panic
         client.unpause(&non_admin);
+    }
+
+    #[test]
+    fn upsert_anchor_fails_when_paused() {
+        let (env, client, admin) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+
+        // Pause the contract
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        // Attempt to upsert the anchor while paused
+        let res = client.try_upsert_anchor(&admin, &asset, &anchor);
+
+        // Verify that the call fails with GovernanceError::Paused (error code 6)
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        let expected_err = soroban_sdk::Error::from_contract_error(6);
+        assert_eq!(err, Ok(expected_err));
+
+        // Verify that no anchor was created/updated in persistent storage after the failed call
+        assert_eq!(client.get_anchor(&asset), None);
     }
 }

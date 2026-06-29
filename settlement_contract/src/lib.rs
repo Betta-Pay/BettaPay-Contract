@@ -240,7 +240,7 @@ impl SettlementContract {
             &env,
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         );
-        if new_admin.to_string().len() == 0 || new_admin.to_string() == zero_address_str {
+        if new_admin.to_string().is_empty() || new_admin.to_string() == zero_address_str {
             panic_with_error!(&env, SettlementError::InvalidAddress);
         }
 
@@ -307,7 +307,7 @@ impl SettlementContract {
             &env,
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         );
-        if merchant.to_string().len() == 0 || merchant.to_string() == zero_address_str {
+        if merchant.to_string().is_empty() || merchant.to_string() == zero_address_str {
             panic_with_error!(&env, SettlementError::InvalidAddress);
         }
 
@@ -1817,7 +1817,7 @@ mod tests {
             .iter()
             .skip(before as usize)
             .any(|(_id, topics, _data)| {
-                topics.len() >= 1
+                !topics.is_empty()
                     && Symbol::from_val(&env, &topics.get(0).unwrap())
                         == Symbol::new(&env, "payment_split")
             });
