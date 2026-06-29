@@ -333,10 +333,14 @@ impl SettlementContract {
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if the caller is not the admin.
     /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not registered.
     ///
-    /// ## Emitted Event: `merchant`
+    /// ## Emitted Event: `merchant_unregistered`
     ///
-    /// **Topics**: `(Symbol("merchant"), Address merchant)`
-    /// **Data**: `bool false`
+    /// **Topics**: `(Symbol("merchant_unregistered"), Address merchant)`
+    /// - First topic: fixed event-name symbol for filtering by event type
+    /// - Second topic: the merchant address that was unregistered
+    ///
+    /// **Data**: `Address caller`
+    /// - `caller`: the admin who authorized the unregistration
     pub fn unregister_merchant(env: Env, merchant: Address) {
         assert_not_paused(&env);
         let admin = read_admin(&env);
@@ -354,8 +358,10 @@ impl SettlementContract {
             env.storage().persistent().remove(&rule_key);
         }
 
-        env.events()
-            .publish((symbol_short!("merchant"), merchant), false);
+        env.events().publish(
+            (Symbol::new(&env, "merchant_unregistered"), merchant),
+            admin,
+        );
     }
 
     /// ## Emitted Event: `settlement_rule_updated`
@@ -1039,6 +1045,26 @@ mod tests {
         assert!(!client.is_merchant_registered(&merchant));
         assert!(client.get_settlement_rule(&merchant).is_none());
         assert!(env.events().all().len() > before);
+    }
+
+    #[test]
+    fn emits_structured_event_when_unregistering_merchant() {
+        let (env, client, admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        client.unregister_merchant(&merchant);
+
+        let events = env.events().all();
+        let event = events.last().unwrap();
+        let (_contract_id, topics, data) = event;
+
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "merchant_unregistered")
+        );
+        assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), merchant);
+        assert_eq!(Address::from_val(&env, &data), admin);
     }
 
     #[test]
