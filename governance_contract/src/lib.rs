@@ -682,6 +682,9 @@ fn assert_not_paused(env: &Env) {
 mod anchor_event_tests;
 
 #[cfg(test)]
+mod anchor_removal_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
