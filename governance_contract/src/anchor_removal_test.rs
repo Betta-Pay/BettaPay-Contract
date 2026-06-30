@@ -26,4 +26,12 @@ mod tests {
         client.remove_anchor(&admin, &asset);
         assert_eq!(client.get_anchor(&asset), None);
     }
+
+    #[test]
+    #[should_panic]
+    fn rejects_removing_unregistered_anchor() {
+        let (env, client, admin) = setup();
+        let missing_asset = Address::generate(&env);
+        client.remove_anchor(&admin, &missing_asset);
+    }
 }
