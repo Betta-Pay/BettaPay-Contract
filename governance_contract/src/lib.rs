@@ -517,7 +517,17 @@ impl GovernanceContract {
     /// `Some(FeeConfig)` if a fee configuration has been set via [`set_fee_config`];
     /// `None` otherwise.
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
-        env.storage().persistent().get(&DataKey::FeeConfig)
+        let key = DataKey::FeeConfig;
+        match env.storage().persistent().get(&key) {
+            Some(config) => {
+                // Extend persistent storage TTL using the same thresholds as set_fee_config
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, FEE_TTL_THRESHOLD, FEE_TTL_BUMP);
+                Some(config)
+            }
+            None => None,
+        }
     }
 
     /// Creates or updates the anchor address associated with a supported asset.
