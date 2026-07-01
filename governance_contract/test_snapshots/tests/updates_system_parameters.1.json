@@ -341,17 +341,25 @@
           "v0": {
             "topics": [
               {
-                "symbol": "sys_param"
+                "symbol": "sys_param_updated"
               },
               {
                 "symbol": "max_settle"
               }
             ],
             "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 1440
-              }
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                "void",
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1440
+                  }
+                }
+              ]
             }
           }
         }
