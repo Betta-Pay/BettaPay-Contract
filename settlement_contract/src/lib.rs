@@ -481,6 +481,9 @@ impl SettlementContract {
         env.storage()
             .persistent()
             .set(&DataKey::DefaultRule, &new_rule);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::DefaultRule, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
 
         env.events().publish(
             (Symbol::new(&env, "default_rule_updated"),),
