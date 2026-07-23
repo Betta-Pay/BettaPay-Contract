@@ -2080,4 +2080,20 @@ mod tests {
         );
         assert_eq!(Address::from_val(&env, &data), new_admin);
     }
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn clear_settlement_rule_fails_when_paused() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+        let rule = SettlementRule {
+        platform_fee_bps: 175,
+        network_fee_bps: 25,
+        settlement_delay_ledger: 42,
+        auto_settle: true,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+        client.pause();
+        assert!(client.is_paused());
+        client.clear_settlement_rule(&merchant);
+    }
 }
