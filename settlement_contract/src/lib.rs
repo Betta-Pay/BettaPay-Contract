@@ -1390,6 +1390,50 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_fallback_emits_event_and_matches_bootstrap_rule() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let before = env.events().all().len();
+        let split = client.calculate_fee_split(&merchant, &50_000);
+
+        // Verify the returned rule matches BOOTSTRAP_DEFAULT_RULE
+        assert_eq!(split.platform_fee_amount, 500);
+        assert_eq!(split.network_fee_amount, 0);
+        assert_eq!(split.merchant_amount, 49_500);
+
+        // Verify bootstrap_fallback event was emitted
+        let events = env.events().all();
+        assert!(
+            events.len() > before,
+            "at least one event expected from bootstrap fallback"
+        );
+
+        let fallback_events: Vec<_> = events
+            .iter()
+            .skip(before as usize)
+            .filter(|(_id, topics, _data)| {
+                !topics.is_empty()
+                    && Symbol::from_val(&env, &topics.get(0).unwrap())
+                        == Symbol::new(&env, "bootstrap_fallback")
+            })
+            .collect();
+
+        assert!(
+            !fallback_events.is_empty(),
+            "expected bootstrap_fallback event to be emitted"
+        );
+
+        let (_id, topics, data) = fallback_events[0];
+        assert_eq!(topics.len(), 1);
+        let emitted: SettlementRule = FromVal::from_val(&env, &data);
+        assert_eq!(emitted.platform_fee_bps, 100);
+        assert_eq!(emitted.network_fee_bps, 0);
+        assert_eq!(emitted.settlement_delay_ledger, 0);
+        assert!(!emitted.auto_settle);
+    }
+
+    #[test]
     fn global_default_used_when_no_explicit_merchant_rule() {
         let (_env, client, _admin, merchant) = setup();
         client.register_merchant(&merchant);
