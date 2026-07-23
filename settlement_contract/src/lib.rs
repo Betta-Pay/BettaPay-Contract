@@ -481,6 +481,9 @@ impl SettlementContract {
         env.storage()
             .persistent()
             .set(&DataKey::DefaultRule, &new_rule);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::DefaultRule, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
 
         env.events().publish(
             (Symbol::new(&env, "default_rule_updated"),),
@@ -668,22 +671,34 @@ fn is_merchant_registered_internal(env: &Env, merchant: Address) -> bool {
 /// then falling back to the global default, and finally using the bootstrap fallback.
 fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
+    let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
         .storage()
         .persistent()
-        .get::<_, SettlementRule>(&DataKey::Rule(merchant))
+        .get::<_, SettlementRule>(&merchant_key)
     {
+        env.storage()
+            .persistent()
+            .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Fall back to the admin-controlled global default when present.
+    let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
         .persistent()
-        .get::<_, SettlementRule>(&DataKey::DefaultRule)
+        .get::<_, SettlementRule>(&default_key)
     {
+        env.storage()
+            .persistent()
+            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
+    env.events().publish(
+        (Symbol::new(env, "bootstrap_fallback"),),
+        BOOTSTRAP_DEFAULT_RULE,
+    );
     BOOTSTRAP_DEFAULT_RULE
 }
 
@@ -832,6 +847,86 @@ mod tests {
         env.as_contract(&client.address, || {
             let key = DataKey::Rule(merchant.clone());
             assert!(env.storage().persistent().has(&key));
+        });
+    }
+
+    #[test]
+    fn set_default_rule_extends_ttl() {
+        let (env, client, _admin, _merchant) = setup();
+
+        let rule = SettlementRule {
+            platform_fee_bps: 300,
+            network_fee_bps: 100,
+            settlement_delay_ledger: 5,
+            auto_settle: true,
+        };
+        client.set_default_rule(&rule);
+
+        env.as_contract(&client.address, || {
+            let key = DataKey::DefaultRule;
+            assert!(env.storage().persistent().has(&key));
+            let ttl = env.storage().persistent().get_ttl(&key);
+            assert!(
+                ttl >= env.ledger().sequence() + RULE_TTL_BUMP,
+                "TTL must be extended to at least ledger + RULE_TTL_BUMP"
+            );
+        });
+    }
+
+    #[test]
+    fn store_payment_reference_extends_rule_ttl_on_read() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let rule = SettlementRule {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+        client.set_settlement_rule(&merchant, &rule);
+
+        env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+
+        let reference = BytesN::from_array(&env, &[42; 32]);
+        client.store_payment_reference(&merchant, &reference, &10_000);
+
+        env.as_contract(&client.address, || {
+            let key = DataKey::Rule(merchant.clone());
+            assert!(env.storage().persistent().has(&key));
+            let ttl = env.storage().persistent().get_ttl(&key);
+            assert!(
+                ttl >= env.ledger().sequence() + RULE_TTL_BUMP,
+                "Merchant Rule TTL must be extended on read"
+            );
+        });
+    }
+
+    #[test]
+    fn calculate_fee_split_extends_default_rule_ttl_on_read() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let global_rule = SettlementRule {
+            platform_fee_bps: 200,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        client.set_default_rule(&global_rule);
+
+        env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+
+        client.calculate_fee_split(&merchant, &50_000);
+
+        env.as_contract(&client.address, || {
+            let key = DataKey::DefaultRule;
+            assert!(env.storage().persistent().has(&key));
+            let ttl = env.storage().persistent().get_ttl(&key);
+            assert!(
+                ttl >= env.ledger().sequence() + RULE_TTL_BUMP,
+                "DefaultRule TTL must be extended on read"
+            );
         });
     }
 
@@ -1292,6 +1387,50 @@ mod tests {
         assert_eq!(split.platform_fee_amount, 500);
         assert_eq!(split.network_fee_amount, 0);
         assert_eq!(split.merchant_amount, 49_500);
+    }
+
+    #[test]
+    fn bootstrap_fallback_emits_event_and_matches_bootstrap_rule() {
+        let (env, client, _admin, merchant) = setup();
+        client.register_merchant(&merchant);
+
+        let before = env.events().all().len();
+        let split = client.calculate_fee_split(&merchant, &50_000);
+
+        // Verify the returned rule matches BOOTSTRAP_DEFAULT_RULE
+        assert_eq!(split.platform_fee_amount, 500);
+        assert_eq!(split.network_fee_amount, 0);
+        assert_eq!(split.merchant_amount, 49_500);
+
+        // Verify bootstrap_fallback event was emitted
+        let events = env.events().all();
+        assert!(
+            events.len() > before,
+            "at least one event expected from bootstrap fallback"
+        );
+
+        let fallback_events: Vec<_> = events
+            .iter()
+            .skip(before as usize)
+            .filter(|(_id, topics, _data)| {
+                !topics.is_empty()
+                    && Symbol::from_val(&env, &topics.get(0).unwrap())
+                        == Symbol::new(&env, "bootstrap_fallback")
+            })
+            .collect();
+
+        assert!(
+            !fallback_events.is_empty(),
+            "expected bootstrap_fallback event to be emitted"
+        );
+
+        let (_id, topics, data) = fallback_events[0];
+        assert_eq!(topics.len(), 1);
+        let emitted: SettlementRule = FromVal::from_val(&env, &data);
+        assert_eq!(emitted.platform_fee_bps, 100);
+        assert_eq!(emitted.network_fee_bps, 0);
+        assert_eq!(emitted.settlement_delay_ledger, 0);
+        assert!(!emitted.auto_settle);
     }
 
     #[test]
