@@ -671,19 +671,27 @@ fn is_merchant_registered_internal(env: &Env, merchant: Address) -> bool {
 /// then falling back to the global default, and finally using the bootstrap fallback.
 fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
+    let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
         .storage()
         .persistent()
-        .get::<_, SettlementRule>(&DataKey::Rule(merchant))
+        .get::<_, SettlementRule>(&merchant_key)
     {
+        env.storage()
+            .persistent()
+            .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Fall back to the admin-controlled global default when present.
+    let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
         .persistent()
-        .get::<_, SettlementRule>(&DataKey::DefaultRule)
+        .get::<_, SettlementRule>(&default_key)
     {
+        env.storage()
+            .persistent()
+            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
