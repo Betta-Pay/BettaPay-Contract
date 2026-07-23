@@ -684,6 +684,10 @@ fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
+    env.events().publish(
+        (Symbol::new(env, "bootstrap_fallback"),),
+        BOOTSTRAP_DEFAULT_RULE,
+    );
     BOOTSTRAP_DEFAULT_RULE
 }
 
