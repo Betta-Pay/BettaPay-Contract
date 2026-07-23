@@ -23,7 +23,25 @@
         }
       ]
     ],
-    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "function_name": "register_merchant",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
@@ -48,7 +66,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 50
                       }
                     },
                     {
@@ -56,7 +74,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 300
+                        "u32": 200
                       }
                     },
                     {
@@ -64,7 +82,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 5
+                        "u32": 10
                       }
                     }
                   ]
@@ -80,7 +98,7 @@
   ],
   "ledger": {
     "protocol_version": 21,
-    "sequence_number": 0,
+    "sequence_number": 1000,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -110,6 +128,39 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 801925984706572462
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 1033654523790656264
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 1033654523790656264
                   }
                 },
                 "durability": "temporary",
@@ -198,7 +249,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 50
                       }
                     },
                     {
@@ -206,7 +257,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 300
+                        "u32": 200
                       }
                     },
                     {
@@ -214,7 +265,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 5
+                        "u32": 10
                       }
                     }
                   ]
@@ -224,6 +275,51 @@
             "ext": "v0"
           },
           518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Merchant"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Merchant"
+                    },
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "bool": true
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          101000
         ]
       ],
       [
@@ -357,10 +453,35 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
               },
               {
-                "symbol": "get_default_rule"
+                "symbol": "register_merchant"
               }
             ],
-            "data": "void"
+            "data": {
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "merchant_registered"
+              },
+              {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              }
+            ],
+            "data": {
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+            }
           }
         }
       },
@@ -378,7 +499,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_default_rule"
+                "symbol": "register_merchant"
               }
             ],
             "data": "void"
@@ -420,7 +541,7 @@
                     "symbol": "network_fee_bps"
                   },
                   "val": {
-                    "u32": 100
+                    "u32": 50
                   }
                 },
                 {
@@ -428,7 +549,7 @@
                     "symbol": "platform_fee_bps"
                   },
                   "val": {
-                    "u32": 300
+                    "u32": 200
                   }
                 },
                 {
@@ -436,7 +557,7 @@
                     "symbol": "settlement_delay_ledger"
                   },
                   "val": {
-                    "u32": 5
+                    "u32": 10
                   }
                 }
               ]
@@ -514,7 +635,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 50
                       }
                     },
                     {
@@ -522,7 +643,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 300
+                        "u32": 200
                       }
                     },
                     {
@@ -530,7 +651,7 @@
                         "symbol": "settlement_delay_ledger"
                       },
                       "val": {
-                        "u32": 5
+                        "u32": 10
                       }
                     }
                   ]
@@ -578,10 +699,22 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
               },
               {
-                "symbol": "get_default_rule"
+                "symbol": "calculate_fee_split"
               }
             ],
-            "data": "void"
+            "data": {
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 50000
+                  }
+                }
+              ]
+            }
           }
         }
       },
@@ -599,41 +732,53 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_default_rule"
+                "symbol": "calculate_fee_split"
               }
             ],
             "data": {
               "map": [
                 {
                   "key": {
-                    "symbol": "auto_settle"
+                    "symbol": "gross_amount"
                   },
                   "val": {
-                    "bool": true
+                    "i128": {
+                      "hi": 0,
+                      "lo": 50000
+                    }
                   }
                 },
                 {
                   "key": {
-                    "symbol": "network_fee_bps"
+                    "symbol": "merchant_amount"
                   },
                   "val": {
-                    "u32": 100
+                    "i128": {
+                      "hi": 0,
+                      "lo": 48750
+                    }
                   }
                 },
                 {
                   "key": {
-                    "symbol": "platform_fee_bps"
+                    "symbol": "network_fee_amount"
                   },
                   "val": {
-                    "u32": 300
+                    "i128": {
+                      "hi": 0,
+                      "lo": 250
+                    }
                   }
                 },
                 {
                   "key": {
-                    "symbol": "settlement_delay_ledger"
+                    "symbol": "platform_fee_amount"
                   },
                   "val": {
-                    "u32": 5
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
+                    }
                   }
                 }
               ]

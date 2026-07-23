@@ -261,6 +261,11 @@ impl SettlementContract {
         let admin = read_admin(&env);
         admin.require_auth();
 
+        env.events().publish(
+            (Symbol::new(&env, "contract_upgraded"), new_wasm_hash.clone()),
+            admin,
+        );
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
@@ -744,7 +749,8 @@ fn calculate_split(amount: i128, rule: &SettlementRule) -> FeeSplit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
+    use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke, Ledger};
+    use soroban_sdk::testutils::storage::Persistent;
     use soroban_sdk::{FromVal, IntoVal};
 
     fn setup() -> (Env, SettlementContractClient<'static>, Address, Address) {
@@ -761,11 +767,29 @@ mod tests {
 
     #[test]
     fn executes_contract_wasm_upgrade_successfully() {
-        let (env, client, _admin, _) = setup();
-        let new_wasm_hash = BytesN::from_array(&env, &[9; 32]);
+        let (env, client, admin, _) = setup();
+        let wasm = soroban_sdk::Bytes::from_slice(&env, &[]);
+        let new_wasm_hash = env.deployer().upload_contract_wasm(wasm);
         
+        let before = env.events().all().len();
         // Verifies the structural update pass completes without panicking
         client.upgrade(&new_wasm_hash);
+        
+        let events = env.events().all();
+        assert!(events.len() > before);
+        
+        let event = events.last().unwrap();
+        let (_contract_id, topics, data) = event;
+        
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, "contract_upgraded")
+        );
+        assert_eq!(
+            BytesN::<32>::from_val(&env, &topics.get(1).unwrap()),
+            new_wasm_hash
+        );
+        assert_eq!(Address::from_val(&env, &data), admin);
     }
 
     #[test]
@@ -1409,22 +1433,17 @@ mod tests {
             "at least one event expected from bootstrap fallback"
         );
 
-        let fallback_events: Vec<_> = events
+        let fallback_event = events
             .iter()
             .skip(before as usize)
-            .filter(|(_id, topics, _data)| {
+            .find(|(_id, topics, _data)| {
                 !topics.is_empty()
                     && Symbol::from_val(&env, &topics.get(0).unwrap())
                         == Symbol::new(&env, "bootstrap_fallback")
             })
-            .collect();
+            .expect("expected bootstrap_fallback event to be emitted");
 
-        assert!(
-            !fallback_events.is_empty(),
-            "expected bootstrap_fallback event to be emitted"
-        );
-
-        let (_id, topics, data) = fallback_events[0];
+        let (_id, topics, data) = fallback_event;
         assert_eq!(topics.len(), 1);
         let emitted: SettlementRule = FromVal::from_val(&env, &data);
         assert_eq!(emitted.platform_fee_bps, 100);
