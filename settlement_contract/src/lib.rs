@@ -492,8 +492,18 @@ impl SettlementContract {
     }
 
     /// Returns the global default settlement rule, if one has been set.
+    /// Automatically extends the persistent storage TTL to prevent archival.
     pub fn get_default_rule(env: Env) -> Option<SettlementRule> {
-        env.storage().persistent().get(&DataKey::DefaultRule)
+        let key = DataKey::DefaultRule;
+        match env.storage().persistent().get::<_, SettlementRule>(&key) {
+            Some(rule) => {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+                Some(rule)
+            }
+            None => None,
+        }
     }
 
     /// Store a payment reference for a merchant and calculate the fee split.
