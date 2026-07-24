@@ -497,8 +497,18 @@ impl SettlementContract {
     }
 
     /// Returns the global default settlement rule, if one has been set.
+    /// Automatically extends the persistent storage TTL to prevent archival.
     pub fn get_default_rule(env: Env) -> Option<SettlementRule> {
-        env.storage().persistent().get(&DataKey::DefaultRule)
+        let key = DataKey::DefaultRule;
+        match env.storage().persistent().get::<_, SettlementRule>(&key) {
+            Some(rule) => {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+                Some(rule)
+            }
+            None => None,
+        }
     }
 
     /// Store a payment reference for a merchant and calculate the fee split.
@@ -950,6 +960,35 @@ mod tests {
             assert!(
                 ttl >= env.ledger().sequence() + RULE_TTL_BUMP,
                 "DefaultRule TTL must be extended on read"
+            );
+        });
+    }
+
+    #[test]
+    fn get_default_rule_extends_ttl_on_read() {
+        let (env, client, _admin, _merchant) = setup();
+
+        let global_rule = SettlementRule {
+            platform_fee_bps: 200,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        client.set_default_rule(&global_rule);
+
+        env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+
+        let retrieved = client.get_default_rule();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().platform_fee_bps, 200);
+
+        env.as_contract(&client.address, || {
+            let key = DataKey::DefaultRule;
+            assert!(env.storage().persistent().has(&key));
+            let ttl = env.storage().persistent().get_ttl(&key);
+            assert!(
+                ttl >= env.ledger().sequence() + RULE_TTL_BUMP,
+                "DefaultRule TTL must be extended on public read via get_default_rule"
             );
         });
     }
