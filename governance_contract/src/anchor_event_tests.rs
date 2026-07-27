@@ -7,9 +7,10 @@ fn setup() -> (Env, GovernanceContractClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
-    client.init(&admin);
+    client.init(&admin, &recovery_address);
     (env, client, admin)
 }
 
