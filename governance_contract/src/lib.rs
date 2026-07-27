@@ -416,7 +416,6 @@ impl GovernanceContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin_transferred"),),
             AdminTransferred {
@@ -542,10 +541,6 @@ impl GovernanceContract {
     /// Panics with `GovernanceError::InvalidParamValue` if `key` exceeds 32 bytes.
     /// Panics with `GovernanceError::InvalidParamValue` if `value` is negative.
     pub fn update_system_param(env: Env, caller: Address, key: Symbol, value: i128) {
-        if key.to_string().len() > 32 {
-            panic_with_error!(&env, GovernanceError::InvalidParamValue);
-        }
-
         let admin = read_admin(&env);
         if caller != admin {
             panic_with_error!(&env, GovernanceError::Unauthorized);
@@ -591,10 +586,6 @@ impl GovernanceContract {
     /// Extends the persistent storage TTL for `DataKey::SystemParam(key)` when the
     /// entry is present.
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
-        if key.to_string().len() > 32 {
-            panic_with_error!(&env, GovernanceError::InvalidParamValue);
-        }
-
         let storage_key = DataKey::SystemParam(key);
         if env.storage().persistent().has(&storage_key) {
             env.storage().persistent().extend_ttl(
@@ -723,6 +714,7 @@ impl GovernanceContract {
         }
         caller.require_auth();
         let key = DataKey::Anchor(asset.clone());
+        let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
         env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
         env.events()
@@ -786,12 +778,9 @@ impl GovernanceContract {
         let key = DataKey::Anchor(asset.clone());
         let result = env.storage().persistent().get(&key);
         if result.is_some() {
-            let ttl = env.storage().persistent().get_ttl(&key);
-            if ttl < ANCHOR_TTL_THRESHOLD {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
-            }
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         }
         result
     }
@@ -876,6 +865,7 @@ mod anchor_removal_test;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::storage::{Instance, Persistent};
     use soroban_sdk::testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke};
     use soroban_sdk::{vec, Bytes, FromVal};
 
@@ -938,16 +928,19 @@ mod tests {
         let (env, client, _admin) = setup();
         let other_admin = Address::generate(&env);
 
-        client.init(&other_admin);
+        let recovery_address = Address::generate(&env);
+        client.init(&other_admin, &recovery_address);
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #7)")]
     fn governance_rejects_zero_address_admin_transfer() {
         let (env, client, admin) = setup();
-        let zero_address = Address::from_str(
-            &env,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        let zero_address = Address::from_string(
+            &String::from_str(
+                &env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ),
         );
 
         client.transfer_admin(&admin, &zero_address);
@@ -1226,7 +1219,8 @@ mod tests {
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
 
-        client.init(&admin);
+        let recovery_address = Address::generate(&env);
+        client.init(&admin, &recovery_address);
 
         let events = env.events().all();
         assert_eq!(events.len(), 1, "exactly one event emitted on init");
@@ -1335,7 +1329,8 @@ mod tests {
 
     #[test]
     fn proposes_and_accepts_admin_successfully_in_governance() {
-        let (env, client, admin) = setup();
+        let (env, _client, admin) = setup();
+        let recovery_address = Address::generate(&env);
         let new_admin = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);

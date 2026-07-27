@@ -5,10 +5,10 @@
 # function parameters, complex types) are unavoidable.
 
 # Allow functions with many arguments (common in Soroban contract interfaces)
-too-many-arguments = "allow"
+too-many-arguments-threshold = 100
 
 # Allow complex type definitions (e.g. nested maps in contract storage)
-type-complexity = "allow"
+type-complexity-threshold = 1000
 
 # Allow moderate cognitive complexity in contract logic
-cognitive-complexity = "allow"
+cognitive-complexity-threshold = 100
