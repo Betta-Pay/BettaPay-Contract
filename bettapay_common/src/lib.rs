@@ -12,8 +12,9 @@
 //! - [`storage`] — common storage helpers (`read_admin`, `is_paused`,
 //!   `is_zero_address`) and the [`CommonDataKey`] enum that owns the keys
 //!   shared by every contract's instance storage.
-//! - [`events`] — shared event shapes (such as [`events::AdminTransferred`] and
-//!   [`events::PendingRecovery`]) and the canonical event-name strings.
+//! - [`events`] — shared event shapes (such as [`events::AdminTransferred`],
+//!   [`events::AnchorUpserted`], and [`events::PendingRecovery`]) and the
+//!   canonical event-name strings.
 //! - [`error_codes`] — the canonical numeric error-code registry. Every
 //!   contract's `#[contracterror]` enum must use these constants as
 //!   discriminants for shared error concepts, and stay within its reserved

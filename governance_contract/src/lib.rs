@@ -150,8 +150,8 @@
 //! | `recovery_initiated` / `recovery_cancelled` / `recovery_executed` | Admin-recovery lifecycle |
 //! | `sys_param_updated` | System parameter updated |
 //! | `fee_config_updated` | Fee configuration changed |
-//! | `anchor_upserted` | Anchor created or replaced for an asset | Data: `(Option<Address> previous, Address current)` |
-//! | `anchor_removed` | Anchor removed for an asset |
+//! | `anchor_upserted` | Anchor created or replaced for an asset | Data: `AnchorUpserted { previous, current, version }` |
+//! | `anchor_removed` | Anchor removed for an asset | Data: `version` (last per-asset counter) |
 
 // TODO: Refactor flat file structure into modular hierarchy (Issue #84)
 // Intended module structure:
@@ -170,7 +170,7 @@ use bettapay_common::{
         TTL_THRESHOLD_LEDGERS,
     },
     error_codes,
-    events::{self, AdminTransferred, PendingRecovery},
+    events::{self, AdminTransferred, AnchorUpserted, PendingRecovery},
     storage::{self, CommonDataKey},
 };
 use soroban_sdk::{
@@ -229,6 +229,11 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
+
+    /// Storage key for the per-asset anchor version counter (issue #584).
+    /// Persists a `u64` that increments on every upsert for the given asset,
+    /// giving indexers an unambiguous ordering even for rapid upserts.
+    AnchorVersion(Address),
 
     /// Storage key for the pause state flag.
     Paused,
@@ -631,11 +636,27 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = persistent_get_safe(&env, &key);
+
+        // Per-asset monotonic version counter (issue #584).
+        let version_key = DataKey::AnchorVersion(asset.clone());
+        let prev_version: u64 = persistent_get_safe(&env, &version_key).unwrap_or(0);
+        let version = prev_version + 1;
+
         env.storage().persistent().set(&key, &anchor.clone());
         env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
-        env.events().publish(
-            (Symbol::new(&env, "anchor_upserted"), asset),
-            (old_anchor, anchor),
+        env.storage().persistent().set(&version_key, &version);
+        env.storage()
+            .persistent()
+            .extend_ttl(&version_key, 50_000, 100_000);
+
+        events::emit_anchor_upserted(
+            &env,
+            &asset,
+            &AnchorUpserted {
+                previous: old_anchor,
+                current: anchor,
+                version,
+            },
         );
     }
 
@@ -649,8 +670,14 @@ impl GovernanceContract {
         }
 
         env.storage().persistent().remove(&key);
-        env.events()
-            .publish((Symbol::new(&env, "anchor_removed"), asset), ());
+
+        // Read the current version (not removed, so a future re-upsert
+        // continues the monotonic chain) and publish it with the removal
+        // event so indexers can correlate the removal with the prior
+        // upsert chain (issue #584).
+        let version_key = DataKey::AnchorVersion(asset.clone());
+        let version: u64 = persistent_get_safe(&env, &version_key).unwrap_or(0);
+        events::emit_anchor_removed(&env, &asset, version);
     }
 
     pub fn get_anchor(env: Env, asset: Address) -> Option<Address> {

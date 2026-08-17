@@ -16,6 +16,26 @@ pub struct AdminTransferred {
     pub new_admin: Address,
 }
 
+/// Structured payload emitted with the `anchor_upserted` event so that
+/// off-chain indexers can reconstruct an unambiguous per-asset history even
+/// when rapid upserts land in the same ledger (issue #584).
+///
+/// `version` is a per-asset monotonically increasing counter starting at 1
+/// for the first upsert. It is persisted alongside the anchor entry and
+/// survives across successive upserts and removals of the same asset.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AnchorUpserted {
+    /// Previous anchor address for this asset, or `None` if this is the
+    /// first upsert (or the prior entry was removed / expired).
+    pub previous: Option<Address>,
+    /// The newly stored anchor address.
+    pub current: Address,
+    /// Per-asset monotonic version counter (starts at 1, increments on
+    /// every upsert). Allows indexers to order events unambiguously.
+    pub version: u64,
+}
+
 /// In-flight recovery operation. Lives between `initiate_recovery` and a
 /// successful `execute_recovery` (or a `cancel_recovery`).
 ///
@@ -53,6 +73,12 @@ pub const RECOVERY_CANCELLED_EVENT: &str = "recovery_cancelled";
 
 /// Topic emitted when a recovery operation has been executed.
 pub const RECOVERY_EXECUTED_EVENT: &str = "recovery_executed";
+
+/// Topic emitted when an anchor is created or replaced for an asset.
+pub const ANCHOR_UPSERTED_EVENT: &str = "anchor_upserted";
+
+/// Topic emitted when an anchor is removed for an asset.
+pub const ANCHOR_REMOVED_EVENT: &str = "anchor_removed";
 
 /// Emits the `admin_transferred` event with the structured
 /// [`AdminTransferred`] payload.
@@ -120,6 +146,30 @@ pub fn emit_recovery_executed(env: &Env, payload: &AdminTransferred) {
     );
 }
 
+/// Emits the `anchor_upserted` event with the structured
+/// [`AnchorUpserted`] payload (issue #584).
+///
+/// Topics: `(Symbol("anchor_upserted"), asset)`
+/// Data:    `AnchorUpserted { previous, current, version }`
+pub fn emit_anchor_upserted(env: &Env, asset: &Address, payload: &AnchorUpserted) {
+    env.events().publish(
+        (Symbol::new(env, ANCHOR_UPSERTED_EVENT), asset.clone()),
+        payload.clone(),
+    );
+}
+
+/// Emits the `anchor_removed` event.
+///
+/// Topics: `(Symbol("anchor_removed"), asset)`
+/// Data:    `version` — the last version counter for this asset, so
+///          indexers can correlate the removal with the prior upsert chain.
+pub fn emit_anchor_removed(env: &Env, asset: &Address, version: u64) {
+    env.events().publish(
+        (Symbol::new(env, ANCHOR_REMOVED_EVENT), asset.clone()),
+        version,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +212,27 @@ mod tests {
         assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
         assert!(fields.contains_key(Symbol::new(&env, "execute_after")));
         assert_eq!(fields.len(), 2);
+    }
+
+    /// Issue #584: `AnchorUpserted` must keep its field names stable so
+    /// indexers can decode by name. The `version` field is the ordering
+    /// metadata that makes rapid upserts unambiguous.
+    #[test]
+    fn anchor_upserted_payload_shape_is_canonical() {
+        let env = Env::default();
+        let current = Address::generate(&env);
+        let payload = AnchorUpserted {
+            previous: None,
+            current,
+            version: 1,
+        };
+
+        let val: Val = payload.try_into_val(&env).unwrap();
+        let fields: Map<Symbol, Val> = Map::try_from_val(&env, &val).unwrap();
+
+        assert!(fields.contains_key(Symbol::new(&env, "previous")));
+        assert!(fields.contains_key(Symbol::new(&env, "current")));
+        assert!(fields.contains_key(Symbol::new(&env, "version")));
+        assert_eq!(fields.len(), 3);
     }
 }
