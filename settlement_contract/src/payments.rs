@@ -3,7 +3,10 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Symbol, 
 use bettapay_common::constants::BPS_DENOMINATOR;
 
 use crate::errors::SettlementError;
-use crate::storage::{assert_not_paused, is_merchant_registered_internal, read_rule_or_default};
+use crate::storage::{
+    assert_not_paused, is_merchant_registered_internal, persistent_get_safe, persistent_has_safe,
+    read_rule_or_default,
+};
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, MIN_PAYMENT_AMOUNT, PAYMENT_TTL_BUMP,
@@ -96,7 +99,7 @@ impl SettlementContract {
             }
 
             let payment_key = DataKey::Payment(reference.clone());
-            if env.storage().persistent().has(&payment_key) {
+            if persistent_has_safe(&env, &payment_key) {
                 panic_with_error!(&env, SettlementError::DuplicatePaymentReference);
             }
 
@@ -158,7 +161,7 @@ impl SettlementContract {
         /// Retrieve a payment record by its reference, extending the storage TTL if found.
         pub fn get_payment_reference(env: Env, reference: BytesN<32>) -> Option<PaymentRecord> {
             let key = DataKey::Payment(reference);
-            let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
+            let record: Option<PaymentRecord> = persistent_get_safe(&env, &key);
             if record.is_some() {
                 // `extend_ttl` only writes when the current TTL is below
                 // `threshold`, so this has the same externally observable

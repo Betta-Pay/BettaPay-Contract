@@ -9,10 +9,10 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_admin, read_admins,
-    read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
-    read_threshold, validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth,
+    assert_not_paused, is_merchant_registered_internal, persistent_get_safe, persistent_has_safe,
+    read_admin, read_admins, read_governance, read_pending_recovery, read_recovery_address,
+    read_rule_or_default, read_threshold, validate_admins_and_threshold, validate_governance,
+    validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, Operation, SettlementRule};
 use crate::{
@@ -245,7 +245,7 @@ impl SettlementContract {
             let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
             let key = DataKey::ScheduledOperation(op_hash.clone());
 
-            if env.storage().persistent().has(&key) {
+            if persistent_has_safe(&env, &key) {
                 panic_with_error!(&env, SettlementError::OperationAlreadyScheduled);
             }
 
@@ -266,10 +266,7 @@ impl SettlementContract {
             let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
             let key = DataKey::ScheduledOperation(op_hash.clone());
 
-            let execute_at: u64 = env
-                .storage()
-                .persistent()
-                .get(&key)
+            let execute_at: u64 = persistent_get_safe(&env, &key)
                 .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
 
             if env.ledger().timestamp() < execute_at {
@@ -313,7 +310,7 @@ impl SettlementContract {
             let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
             let key = DataKey::ScheduledOperation(op_hash.clone());
 
-            if !env.storage().persistent().has(&key) {
+            if !persistent_has_safe(&env, &key) {
                 panic_with_error!(&env, SettlementError::OperationNotScheduled);
             }
 
@@ -395,7 +392,7 @@ impl SettlementContract {
             let admin = read_admin(env);
 
             let key = DataKey::Merchant(merchant.clone());
-            if env.storage().persistent().has(&key) {
+            if persistent_has_safe(env, &key) {
                 panic_with_error!(env, SettlementError::MerchantExists);
             }
 
@@ -412,14 +409,14 @@ impl SettlementContract {
             let admin = read_admin(env);
 
             let key = DataKey::Merchant(merchant.clone());
-            if !env.storage().persistent().has(&key) {
+            if !persistent_has_safe(env, &key) {
                 panic_with_error!(env, SettlementError::MerchantMissing);
             }
 
             env.storage().persistent().remove(&key);
 
             let rule_key = DataKey::Rule(merchant.clone());
-            let old_rule: Option<SettlementRule> = env.storage().persistent().get(&rule_key);
+            let old_rule: Option<SettlementRule> = persistent_get_safe(env, &rule_key);
             if let Some(old_rule) = old_rule {
                 env.storage().persistent().remove(&rule_key);
                 env.events().publish(
@@ -455,11 +452,11 @@ impl SettlementContract {
                 panic_with_error!(env, SettlementError::InvalidSettlementDelay);
             }
 
-            let prev = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::Rule(merchant.clone()))
-                .unwrap_or_else(|| read_rule_or_default(env, merchant.clone()));
+            let prev = persistent_get_safe::<_, SettlementRule>(
+                env,
+                &DataKey::Rule(merchant.clone()),
+            )
+            .unwrap_or_else(|| read_rule_or_default(env, merchant.clone()));
 
             let key = DataKey::Rule(merchant.clone());
             env.storage().persistent().set(&key, &rule);
@@ -478,10 +475,7 @@ impl SettlementContract {
             let admin = read_admin(env);
 
             let key = DataKey::Rule(merchant.clone());
-            let removed = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&key)
+            let removed = persistent_get_safe::<_, SettlementRule>(env, &key)
                 .unwrap_or_else(|| panic_with_error!(env, SettlementError::MerchantRuleNotSet));
 
             env.storage().persistent().remove(&key);
@@ -509,10 +503,7 @@ impl SettlementContract {
                 panic_with_error!(env, SettlementError::InvalidSettlementDelay);
             }
 
-            let prev = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::DefaultRule)
+            let prev = persistent_get_safe::<_, SettlementRule>(env, &DataKey::DefaultRule)
                 .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
 
             env.storage()

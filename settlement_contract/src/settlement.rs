@@ -4,8 +4,8 @@ use bettapay_common::constants::{BPS_DENOMINATOR, MIN_FEE_BPS};
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_rule_or_default, read_threshold,
-    validate_fee_against_governance, verify_admin_auth,
+    assert_not_paused, is_merchant_registered_internal, persistent_get_safe, read_rule_or_default,
+    read_threshold, validate_fee_against_governance, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
@@ -43,11 +43,11 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
             }
 
-            let prev = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::Rule(merchant.clone()))
-                .unwrap_or_else(|| read_rule_or_default(&env, merchant.clone()));
+            let prev = persistent_get_safe::<_, SettlementRule>(
+                &env,
+                &DataKey::Rule(merchant.clone()),
+            )
+            .unwrap_or_else(|| read_rule_or_default(&env, merchant.clone()));
 
             let key = DataKey::Rule(merchant.clone());
             env.storage().persistent().set(&key, &rule);
@@ -68,10 +68,7 @@ impl SettlementContract {
             let admin = signers.get(0).unwrap();
 
             let key = DataKey::Rule(merchant.clone());
-            let removed = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&key)
+            let removed = persistent_get_safe::<_, SettlementRule>(&env, &key)
                 .unwrap_or_else(|| panic_with_error!(&env, SettlementError::MerchantRuleNotSet));
 
             env.storage().persistent().remove(&key);
@@ -102,10 +99,7 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
             }
 
-            let prev = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::DefaultRule)
+            let prev = persistent_get_safe::<_, SettlementRule>(&env, &DataKey::DefaultRule)
                 .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
 
             env.storage()
@@ -128,7 +122,7 @@ impl SettlementContract {
         /// during public read queries (clausal to TTL eviction).
         pub fn get_default_rule(env: Env) -> Option<SettlementRule> {
             let key = DataKey::DefaultRule;
-            match env.storage().persistent().get::<_, SettlementRule>(&key) {
+            match persistent_get_safe::<_, SettlementRule>(&env, &key) {
                 Some(rule) => {
                     env.storage()
                         .persistent()
@@ -144,7 +138,7 @@ impl SettlementContract {
         pub fn get_settlement_rule(env: Env, merchant: Address) -> Option<SettlementRule> {
             let key = DataKey::Rule(merchant);
 
-            if let Some(rule) = env.storage().persistent().get(&key) {
+            if let Some(rule) = persistent_get_safe::<_, SettlementRule>(&env, &key) {
                 // Extend the TTL using the same named constants as set_settlement_rule
                 // so the read and write paths never drift apart if the policy changes.
                 env.storage()

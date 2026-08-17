@@ -135,10 +135,45 @@ pub(crate) fn validate_nonzero_address(
     }
 }
 
+/// Reads a value from persistent storage, returning `None` for both missing
+/// and archived/expired entries.
+///
+/// `env.storage().persistent().get()` panics with a raw host error when the
+/// key refers to an archived entry (TTL expired). Callers want a typed
+/// "not found" result instead, so this helper wraps the SDK's non-panicking
+/// `try_get` and maps the archived-entry error to `None`.
+pub(crate) fn persistent_get_safe<K, V>(env: &Env, key: &K) -> Option<V>
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+    V: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    match env.storage().persistent().try_get::<K, V>(key) {
+        Ok(v) => v,
+        Err(_) => None,
+    }
+}
+
+/// Checks whether a key exists in persistent storage, returning `false` for
+/// both missing and archived/expired entries.
+///
+/// `env.storage().persistent().has()` panics with a raw host error when the
+/// key refers to an archived entry (TTL expired). Operations like
+/// `unregister_merchant` want to treat "archived" the same way as "never existed"
+/// and surface a typed error instead.
+pub(crate) fn persistent_has_safe<K>(env: &Env, key: &K) -> bool
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+{
+    match env.storage().persistent().try_has::<K>(key) {
+        Ok(v) => v,
+        Err(_) => false,
+    }
+}
+
 /// Returns whether a merchant has been registered and keeps the marker entry warm in storage.
 pub(crate) fn is_merchant_registered_internal(env: &Env, merchant: Address) -> bool {
     let key = DataKey::Merchant(merchant);
-    let exists = env.storage().persistent().has(&key);
+    let exists = persistent_has_safe(env, &key);
     if exists {
         // Keep the merchant marker warm so active merchants do not expire early.
         env.storage()
@@ -153,11 +188,7 @@ pub(crate) fn is_merchant_registered_internal(env: &Env, merchant: Address) -> b
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
-    if let Some(rule) = env
-        .storage()
-        .persistent()
-        .get::<_, SettlementRule>(&merchant_key)
-    {
+    if let Some(rule) = persistent_get_safe::<_, SettlementRule>(env, &merchant_key) {
         env.storage()
             .persistent()
             .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
@@ -165,11 +196,7 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
     }
     // Fall back to the admin-controlled global default when present.
     let default_key = DataKey::DefaultRule;
-    if let Some(rule) = env
-        .storage()
-        .persistent()
-        .get::<_, SettlementRule>(&default_key)
-    {
+    if let Some(rule) = persistent_get_safe::<_, SettlementRule>(env, &default_key) {
         env.storage()
             .persistent()
             .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);

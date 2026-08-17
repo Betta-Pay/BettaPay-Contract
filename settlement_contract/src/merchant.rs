@@ -2,8 +2,8 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, Env, Symbol, Vec};
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_threshold, validate_nonzero_address,
-    verify_admin_auth,
+    assert_not_paused, is_merchant_registered_internal, persistent_get_safe, persistent_has_safe,
+    read_threshold, validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
@@ -26,7 +26,7 @@ impl SettlementContract {
             let admin = signers.get(0).unwrap();
 
             let key = DataKey::Merchant(merchant.clone());
-            if env.storage().persistent().has(&key) {
+            if persistent_has_safe(&env, &key) {
                 panic_with_error!(&env, SettlementError::MerchantExists);
             }
 
@@ -44,14 +44,14 @@ impl SettlementContract {
             let admin = signers.get(0).unwrap();
 
             let key = DataKey::Merchant(merchant.clone());
-            if !env.storage().persistent().has(&key) {
+            if !persistent_has_safe(&env, &key) {
                 panic_with_error!(&env, SettlementError::MerchantMissing);
             }
 
             env.storage().persistent().remove(&key);
 
             let rule_key = DataKey::Rule(merchant.clone());
-            let old_rule: Option<SettlementRule> = env.storage().persistent().get(&rule_key);
+            let old_rule: Option<SettlementRule> = persistent_get_safe(&env, &rule_key);
             if let Some(old_rule) = old_rule {
                 env.storage().persistent().remove(&rule_key);
                 env.events().publish(

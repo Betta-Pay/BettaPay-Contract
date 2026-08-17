@@ -556,7 +556,7 @@ impl GovernanceContract {
 
         let admin = signers.get(0).unwrap();
         let storage_key = DataKey::SystemParam(key.clone());
-        let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+        let previous_value: Option<i128> = persistent_get_safe(&env, &storage_key);
 
         env.storage().persistent().set(&storage_key, &value);
         env.storage().persistent().extend_ttl(
@@ -577,14 +577,14 @@ impl GovernanceContract {
         }
 
         let storage_key = DataKey::SystemParam(key);
-        if env.storage().persistent().has(&storage_key) {
+        if persistent_has_safe(&env, &storage_key) {
             env.storage().persistent().extend_ttl(
                 &storage_key,
                 SYSTEM_PARAM_TTL_THRESHOLD,
                 SYSTEM_PARAM_TTL_BUMP,
             );
         }
-        env.storage().persistent().get(&storage_key)
+        persistent_get_safe(&env, &storage_key)
     }
 
     pub fn set_fee_config(env: Env, signers: Vec<Address>, config: FeeConfig) {
@@ -615,7 +615,7 @@ impl GovernanceContract {
 
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         let key = DataKey::FeeConfig;
-        match env.storage().persistent().get(&key) {
+        match persistent_get_safe(&env, &key) {
             Some(config) => {
                 env.storage()
                     .persistent()
@@ -630,7 +630,7 @@ impl GovernanceContract {
         assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let key = DataKey::Anchor(asset.clone());
-        let old_anchor: Option<Address> = env.storage().persistent().get(&key);
+        let old_anchor: Option<Address> = persistent_get_safe(&env, &key);
         env.storage().persistent().set(&key, &anchor.clone());
         env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
         env.events().publish(
@@ -644,7 +644,7 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let key = DataKey::Anchor(asset.clone());
 
-        if !env.storage().persistent().has(&key) {
+        if !persistent_has_safe(&env, &key) {
             panic_with_error!(&env, GovernanceError::AnchorMissing);
         }
 
@@ -655,7 +655,7 @@ impl GovernanceContract {
 
     pub fn get_anchor(env: Env, asset: Address) -> Option<Address> {
         let key = DataKey::Anchor(asset.clone());
-        let result = env.storage().persistent().get(&key);
+        let result = persistent_get_safe(&env, &key);
         if result.is_some() {
             // `extend_ttl` only writes when the current TTL is below
             // `threshold`, so this has the same externally observable
@@ -777,6 +777,42 @@ fn symbol_len(env: &Env, key: &Symbol) -> usize {
     SymbolStr::try_from_val(env, &key.to_symbol_val())
         .map(|s| s.len())
         .unwrap_or(0)
+}
+
+/// Reads a value from persistent storage, returning `None` for both missing
+/// and archived/expired entries.
+///
+/// `env.storage().persistent().get()` panics with a raw host error when the
+/// key refers to an archived entry (TTL expired). Callers want a typed
+/// `AnchorMissing` / "not found" result instead, so this helper wraps the
+/// SDK's non-panicking `try_get` and maps the archived-entry error to
+/// `None`.
+fn persistent_get_safe<K, V>(env: &Env, key: &K) -> Option<V>
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+    V: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    match env.storage().persistent().try_get::<K, V>(key) {
+        Ok(v) => v,
+        Err(_) => None,
+    }
+}
+
+/// Checks whether a key exists in persistent storage, returning `false` for
+/// both missing and archived/expired entries.
+///
+/// `env.storage().persistent().has()` panics with a raw host error when the
+/// key refers to an archived entry (TTL expired). Operations like
+/// `remove_anchor` want to treat "archived" the same way as "never existed"
+/// and surface a typed `AnchorMissing` instead.
+fn persistent_has_safe<K>(env: &Env, key: &K) -> bool
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+{
+    match env.storage().persistent().try_has::<K>(key) {
+        Ok(v) => v,
+        Err(_) => false,
+    }
 }
 
 /// Shared test setup used across the main test module and the anchor_*
