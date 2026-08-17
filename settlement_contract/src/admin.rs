@@ -231,12 +231,9 @@ impl SettlementContract {
         }
 
         /// Schedules an administrative operation to be executed after a timelock.
-        pub fn schedule(env: Env, caller: Address, operation: Operation, execute_in: u64) {
-            let admin = read_admin(&env);
-            if caller != admin {
-                panic_with_error!(&env, SettlementError::Unauthorized);
-            }
-            caller.require_auth();
+        pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
+            let caller = signers.get(0).unwrap();
 
             if execute_in < DEFAULT_TIMELOCK_DELAY_SECONDS {
                 panic_with_error!(&env, SettlementError::ExecutionNotReady);
@@ -280,12 +277,10 @@ impl SettlementContract {
 
             match operation {
                 Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, new_gov),
-                Operation::CancelRecovery => {
-                    let admin = read_admin(&env);
-                    admin.require_auth();
-                    Self::_cancel_recovery(&env)
+                Operation::CancelRecovery => Self::_cancel_recovery(&env),
+                Operation::TransferAdmin(new_admins, new_threshold) => {
+                    Self::_transfer_admin(&env, new_admins, new_threshold)
                 }
-                Operation::TransferAdmin(new_admin) => Self::_transfer_admin(&env, new_admin),
                 Operation::Upgrade(wasm_hash) => Self::_upgrade(&env, wasm_hash),
                 Operation::RegisterMerchant(merchant) => Self::_register_merchant(&env, merchant),
                 Operation::UnregisterMerchant(merchant) => Self::_unregister_merchant(&env, merchant),
@@ -303,12 +298,9 @@ impl SettlementContract {
         }
 
         /// Cancels a scheduled administrative operation.
-        pub fn cancel(env: Env, caller: Address, operation: Operation) {
-            let admin = read_admin(&env);
-            if caller != admin {
-                panic_with_error!(&env, SettlementError::Unauthorized);
-            }
-            caller.require_auth();
+        pub fn cancel(env: Env, signers: Vec<Address>, operation: Operation) {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
+            let caller = signers.get(0).unwrap();
 
             let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
             let key = DataKey::ScheduledOperation(op_hash.clone());
@@ -354,23 +346,22 @@ impl SettlementContract {
             events::emit_recovery_cancelled(env, &admin);
         }
 
-        fn _transfer_admin(env: &Env, new_admin: Address) {
-            let admin = read_admin(env);
-            validate_nonzero_address(
-                env,
-                &new_admin,
-                SettlementError::EmptyAddress,
-                SettlementError::ZeroAddress,
-            );
-            if new_admin == admin {
+        fn _transfer_admin(env: &Env, new_admins: Vec<Address>, new_threshold: u32) {
+            let old_admin = read_admin(env);
+            validate_admins_and_threshold(env, &new_admins, new_threshold);
+            let primary_new_admin = new_admins.get(0).unwrap();
+            if primary_new_admin == old_admin && new_threshold == read_threshold(env) {
                 panic_with_error!(env, SettlementError::InvalidAdmin);
             }
-            env.storage().instance().set(&DataKey::Admin, &new_admin);
+            env.storage().instance().set(&DataKey::Admin, &new_admins);
+            env.storage()
+                .instance()
+                .set(&DataKey::Threshold, &new_threshold);
             events::emit_admin_transferred(
                 env,
                 &AdminTransferred {
-                    old_admin: admin,
-                    new_admin,
+                    old_admin,
+                    new_admin: primary_new_admin,
                 },
             );
         }
@@ -399,7 +390,7 @@ impl SettlementContract {
                 panic_with_error!(env, SettlementError::MerchantExists);
             }
 
-            env.storage().persistent().set(&key, &true);
+            env.storage().persistent().set(&key, &());
             env.storage()
                 .persistent()
                 .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);

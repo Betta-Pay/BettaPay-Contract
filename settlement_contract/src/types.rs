@@ -155,7 +155,7 @@ pub struct FeeConfig {
 pub enum Operation {
     UpdateGovernance(Address),
     CancelRecovery,
-    TransferAdmin(Address),
+    TransferAdmin(Vec<Address>, u32),
     Upgrade(BytesN<32>),
     RegisterMerchant(Address),
     UnregisterMerchant(Address),
