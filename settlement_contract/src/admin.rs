@@ -86,9 +86,9 @@ impl SettlementContract {
         }
 
         pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
-            verify_admin_auth(&env, &signers, read_threshold(&env));
             assert_not_paused(&env);
             validate_governance(&env, &new_governance);
+            verify_admin_auth(&env, &signers, read_threshold(&env));
             let admin = signers.get(0).unwrap();
             env.storage()
                 .instance()

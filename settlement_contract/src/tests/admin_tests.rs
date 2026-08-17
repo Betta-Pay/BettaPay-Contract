@@ -330,6 +330,191 @@ fn update_governance_stores_validated_address() {
     assert_eq!(client.get_governance(), new_governance);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #580: Pause-check ordering matrix for update_governance
+//
+// Standardized order MUST be: assert_not_paused → validate_governance → verify_admin_auth
+// When paused, error is ALWAYS Paused(#5) regardless of auth or validation state.
+// ---------------------------------------------------------------------------
+
+fn zero_address(env: &Env) -> Address {
+    Address::from_string(&soroban_sdk::String::from_str(
+        env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ))
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_paused_admin_valid_governance_returns_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&_env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.update_governance(&admins, &new_governance);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_paused_admin_invalid_governance_returns_paused_not_invalid() {
+    let (env, client, admins, _merchant) = setup();
+    let invalid_gov = zero_address(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.update_governance(&admins, &invalid_gov);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_paused_non_admin_valid_governance_returns_paused_not_unauthorized() {
+    let (env, client, admins, _merchant) = setup();
+    let non_admin = Address::generate(&env);
+    let new_governance = register_governance(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.update_governance(
+        &soroban_sdk::vec![&env, non_admin],
+        &new_governance,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn update_governance_unpaused_non_admin_valid_governance_returns_unauthorized() {
+    let (env, client, _admins, _merchant) = setup();
+    let non_admin = Address::generate(&env);
+    let new_governance = register_governance(&env);
+
+    assert!(!client.is_paused());
+
+    client.update_governance(
+        &soroban_sdk::vec![&env, non_admin],
+        &new_governance,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn update_governance_unpaused_admin_invalid_governance_returns_invalid_governance() {
+    let (env, client, admins, _merchant) = setup();
+    let invalid_gov = zero_address(&env);
+
+    assert!(!client.is_paused());
+
+    client.update_governance(&admins, &invalid_gov);
+}
+
+#[test]
+fn update_governance_unpaused_admin_valid_governance_succeeds() {
+    let (_env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&_env);
+    let old_governance = client.get_governance();
+
+    assert!(!client.is_paused());
+    assert_ne!(old_governance, new_governance);
+
+    client.update_governance(&admins, &new_governance);
+
+    assert_eq!(client.get_governance(), new_governance);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #580: Scheduled execution pause matrix for UpdateGovernance
+//
+// Scheduled ops go through execute() → _update_governance().
+// Pause state at EXECUTE time determines outcome; pause check always
+// comes first inside _update_governance.
+// ---------------------------------------------------------------------------
+
+use crate::DEFAULT_TIMELOCK_DELAY_SECONDS;
+use crate::Operation;
+use soroban_sdk::testutils::Ledger as _;
+
+fn schedule_and_advance(env: &Env, client: &SettlementContractClient<'_>, admin: &Address, op: &Operation) {
+    client.schedule(admin, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS + 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn scheduled_update_governance_pause_after_schedule_blocks_on_execute() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let new_governance = register_governance(&env);
+    let op = Operation::UpdateGovernance(new_governance);
+
+    schedule_and_advance(&env, &client, &admin, &op);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.execute(&op);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn scheduled_update_governance_pause_before_schedule_blocks_on_execute() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let new_governance = register_governance(&env);
+    let op = Operation::UpdateGovernance(new_governance);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    schedule_and_advance(&env, &client, &admin, &op);
+
+    client.execute(&op);
+}
+
+#[test]
+fn scheduled_update_governance_unpaused_at_execute_succeeds() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let new_governance = register_governance(&env);
+    let op = Operation::UpdateGovernance(new_governance.clone());
+    let old_governance = client.get_governance();
+
+    assert_ne!(old_governance, new_governance);
+
+    schedule_and_advance(&env, &client, &admin, &op);
+
+    client.pause(&admins);
+    client.unpause(&admins);
+    assert!(!client.is_paused());
+
+    client.execute(&op);
+
+    assert_eq!(client.get_governance(), new_governance);
+}
+
+#[test]
+fn direct_and_scheduled_update_governance_produce_same_governance_state() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let direct_gov = register_governance(&env);
+    let scheduled_gov = register_governance(&env);
+
+    client.update_governance(&admins, &direct_gov);
+    assert_eq!(client.get_governance(), direct_gov);
+
+    let reset_gov = register_governance(&env);
+    client.update_governance(&admins, &reset_gov);
+
+    let op = Operation::UpdateGovernance(scheduled_gov.clone());
+    schedule_and_advance(&env, &client, &admin, &op);
+    client.execute(&op);
+
+    assert_eq!(client.get_governance(), scheduled_gov);
+}
+
 #[test]
 fn bps_newtype_conversions_and_arithmetic_helpers_work() {
     let bps = Bps::new(250);
