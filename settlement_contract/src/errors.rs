@@ -73,6 +73,9 @@ pub enum SettlementError {
     AmountTooSmall = 313,
     AmountZero = 314,
     AmountNegative = 315,
+    /// The rounded platform and network fees exceed the gross payment amount.
+    /// Raised by `calculate_split` before a `FeeSplit` or `PaymentRecord` is produced.
+    SplitExceedsAmount = 316,
 }
 
 const _: () = {
@@ -121,4 +124,5 @@ const _: () = {
     assert!(SettlementError::AmountTooSmall as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountZero as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountNegative as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::SplitExceedsAmount as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

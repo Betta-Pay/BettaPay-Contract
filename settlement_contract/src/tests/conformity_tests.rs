@@ -60,7 +60,7 @@ fn governance_codes() -> [(&'static str, u32); 19] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 24] {
+fn settlement_codes() -> [(&'static str, u32); 30] {
     [
         (
             "AlreadyInitialized",
@@ -122,6 +122,21 @@ fn settlement_codes() -> [(&'static str, u32); 24] {
         ),
         ("InvalidGovernance", SettlementError::InvalidGovernance as u32),
         ("AmountOverflow", SettlementError::AmountOverflow as u32),
+        (
+            "GovernanceCallFailed",
+            SettlementError::GovernanceCallFailed as u32,
+        ),
+        (
+            "FeeExceedsGovernanceConfig",
+            SettlementError::FeeExceedsGovernanceConfig as u32,
+        ),
+        ("AmountTooSmall", SettlementError::AmountTooSmall as u32),
+        ("AmountZero", SettlementError::AmountZero as u32),
+        ("AmountNegative", SettlementError::AmountNegative as u32),
+        (
+            "SplitExceedsAmount",
+            SettlementError::SplitExceedsAmount as u32,
+        ),
     ]
 }
 
