@@ -505,6 +505,9 @@ impl SettlementContract {
             if new_rule.platform_fee_bps < MIN_FEE_BPS || new_rule.network_fee_bps < MIN_FEE_BPS {
                 panic_with_error!(env, SettlementError::InvalidFeeBps);
             }
+            if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
+                panic_with_error!(env, SettlementError::InvalidFeeBps);
+            }
             if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
                 panic_with_error!(env, SettlementError::InvalidSettlementDelay);
             }

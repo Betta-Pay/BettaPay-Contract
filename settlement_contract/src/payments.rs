@@ -11,15 +11,6 @@ use crate::{
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
-///
-/// # Known edge case: negative merchant amount
-///
-/// Ceiling rounding of both fees independently can make
-/// `platform_fee_amount + network_fee_amount > amount` for small gross amounts
-/// (e.g. `amount = 1`, `platform_fee_bps = 5000`, `network_fee_bps = 5000`),
-/// which yields a **negative** `merchant_amount`. This is intentional with the
-/// current rounding policy (fees are never under-collected); callers must treat
-/// a negative merchant payout as a known, documented outcome rather than a bug.
 fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     let denom = BPS_DENOMINATOR as i128;
     let platform_bps = rule.platform_bps();
@@ -42,11 +33,16 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     let platform_fee_amount = platform_bps.calculate_fee_ceil(amount);
     let network_fee_amount = network_bps.calculate_fee_ceil(amount);
 
-    // The merchant amount is calculated as the subtraction remainder of the gross amount minus all rounded-up fees.
-    // This ensures the sum of the split amounts (platform fee + network fee + merchant share) always equals the gross amount.
-    // Consequence: The merchant absorbs all rounding dust. For very small gross amounts with high/extreme fee percentages,
-    // the sum of rounded-up fees can exceed the gross amount, resulting in a negative merchant payout.
-    let merchant_amount = amount - platform_fee_amount - network_fee_amount;
+    let total_fee_amount = platform_fee_amount
+        .checked_add(network_fee_amount)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
+    if total_fee_amount > amount {
+        panic_with_error!(env, SettlementError::SplitExceedsAmount);
+    }
+
+    let merchant_amount = amount
+        .checked_sub(total_fee_amount)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
     FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
