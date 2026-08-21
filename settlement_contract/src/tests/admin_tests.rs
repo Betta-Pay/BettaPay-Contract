@@ -419,3 +419,133 @@ fn bps_newtype_conversions_and_arithmetic_helpers_work() {
     assert_eq!(to_u32, 100);
 }
 
+// ---------------------------------------------------------------------------
+// get_effective_rule (Issue #579)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_effective_rule_uses_bootstrap_default_when_no_rules_set() {
+    let (_env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let rule = client.get_effective_rule(&merchant);
+    assert_eq!(rule.platform_fee_bps, BOOTSTRAP_DEFAULT_RULE.platform_fee_bps);
+    assert_eq!(rule.network_fee_bps, BOOTSTRAP_DEFAULT_RULE.network_fee_bps);
+    assert_eq!(rule.settlement_delay_ledger, BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger);
+    assert_eq!(rule.auto_settle, BOOTSTRAP_DEFAULT_RULE.auto_settle);
+}
+
+#[test]
+fn get_effective_rule_uses_global_default_when_set() {
+    let (_env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let global_default = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 100,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &global_default);
+
+    let rule = client.get_effective_rule(&merchant);
+    assert_eq!(rule.platform_fee_bps, 200);
+    assert_eq!(rule.network_fee_bps, 50);
+    assert_eq!(rule.settlement_delay_ledger, 100);
+    assert_eq!(rule.auto_settle, true);
+}
+
+#[test]
+fn get_effective_rule_merchant_rule_overrides_global_default() {
+    let (_env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let global_default = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 100,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &global_default);
+
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 300,
+        network_fee_bps: 100,
+        settlement_delay_ledger: 500,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+
+    let rule = client.get_effective_rule(&merchant);
+    assert_eq!(rule.platform_fee_bps, 300);
+    assert_eq!(rule.network_fee_bps, 100);
+    assert_eq!(rule.settlement_delay_ledger, 500);
+    assert_eq!(rule.auto_settle, false);
+}
+
+#[test]
+fn get_effective_rule_cleared_merchant_rule_falls_back_to_global_default() {
+    let (_env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let global_default = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 75,
+        settlement_delay_ledger: 200,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &global_default);
+
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 300,
+        network_fee_bps: 100,
+        settlement_delay_ledger: 500,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+    assert_eq!(client.get_effective_rule(&merchant).platform_fee_bps, 300);
+
+    client.clear_settlement_rule(&admins, &merchant);
+
+    let rule = client.get_effective_rule(&merchant);
+    assert_eq!(rule.platform_fee_bps, 150);
+    assert_eq!(rule.network_fee_bps, 75);
+    assert_eq!(rule.settlement_delay_ledger, 200);
+    assert_eq!(rule.auto_settle, true);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #301)")]
+fn get_effective_rule_rejects_unregistered_merchant() {
+    let (_env, client, _admins, merchant) = setup();
+
+    client.get_effective_rule(&merchant);
+}
+
+#[test]
+fn get_effective_rule_agrees_with_calculate_fee_split_bps() {
+    let (_env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 80,
+        settlement_delay_ledger: 42,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+
+    let effective = client.get_effective_rule(&merchant);
+    let split = client.calculate_fee_split(&merchant, &1_000_000);
+
+    assert_eq!(effective.platform_fee_bps, 250);
+    assert_eq!(effective.network_fee_bps, 80);
+    assert_eq!(split.platform_fee_amount, 2_500);
+    assert_eq!(split.network_fee_amount, 800);
+}
+

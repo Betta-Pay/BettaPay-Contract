@@ -163,4 +163,22 @@ impl SettlementContract {
             }
         }
 
+        /// Returns the effective settlement rule that will be applied to the merchant,
+        /// resolving the full fallback chain: merchant override → global default →
+        /// governance fee config → bootstrap default.
+        ///
+        /// This is the settlement contract analog to governance's `get_fee_config`,
+        /// but resolved per-merchant with the same precedence used by
+        /// `store_payment_reference` and `calculate_fee_split`.
+        ///
+        /// # Panics
+        ///
+        /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not registered.
+        pub fn get_effective_rule(env: Env, merchant: Address) -> SettlementRule {
+            if !is_merchant_registered_internal(&env, merchant.clone()) {
+                panic_with_error!(&env, SettlementError::MerchantMissing);
+            }
+            read_rule_or_default(&env, merchant)
+        }
+
 }
