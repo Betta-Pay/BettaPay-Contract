@@ -494,3 +494,18 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
 }
+
+/// A Wasm hash that was never uploaded (`upload_contract_wasm` was never
+/// called for it) cannot be probed: protocol 21 exposes no wasm-presence
+/// check to contract code, so the probe deployment traps with a host-level
+/// `Storage`/`MissingValue` error ("Wasm does not exist") rather than the
+/// typed `InvalidWasmInterface`. Documented here so the boundary of the
+/// typed-error guarantee is explicit — see
+/// `bettapay_common::upgrade::probe_supports_interface`.
+#[test]
+#[should_panic(expected = "Error(Storage, MissingValue)")]
+fn upgrade_rejects_never_uploaded_wasm_hash() {
+    let (env, client, admins, _) = setup();
+    let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
+    client.upgrade(&admins, &garbage);
+}
