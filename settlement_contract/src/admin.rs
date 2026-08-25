@@ -206,6 +206,10 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::InvalidWasmInterface);
         }
 
+        // Emit `contract_upgraded` before swapping the executable so every
+        // BettaPay upgrade path (direct, timelocked, and governance)
+        // publishes it at the same point: after auth and interface
+        // validation, immediately before the code swap (issue #473).
         let event_wasm_hash = new_wasm_hash.clone();
         env.events().publish(
             (
@@ -386,6 +390,8 @@ impl SettlementContract {
             panic_with_error!(env, SettlementError::InvalidWasmInterface);
         }
 
+        // Same canonical ordering as the direct path: `contract_upgraded` is
+        // emitted before the executable is swapped (issue #473).
         let admin = read_admin(env);
         env.events().publish(
             (

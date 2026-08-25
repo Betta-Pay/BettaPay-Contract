@@ -402,7 +402,11 @@ impl GovernanceContract {
     /// ### Events
     /// - Emits `contract_upgraded` with topic
     ///   `(Symbol("contract_upgraded"), caller)` and data
-    ///   `(new_wasm_hash)`.
+    ///   `(new_wasm_hash)`. The event is published at the same logical point
+    ///   as the settlement upgrade paths — after auth and interface
+    ///   validation, immediately before the executable is swapped — so the
+    ///   ordering is consistent regardless of which contract or path
+    ///   performs the upgrade (issue #473).
     ///
     /// ### Panics
     /// - Panics with [`Unauthorized`](GovernanceError::Unauthorized) if the caller is not the current admin.
@@ -417,9 +421,12 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
         }
 
+        // Emit `contract_upgraded` before swapping the executable so every
+        // BettaPay upgrade path publishes it at the same point: after auth
+        // and interface validation, immediately before the code swap (issue
+        // #473).
         let event_wasm_hash = new_wasm_hash.clone();
         let caller = signers.get(0).unwrap();
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
         env.events().publish(
             (
                 Symbol::new(&env, events::CONTRACT_UPGRADED_EVENT),
@@ -427,6 +434,7 @@ impl GovernanceContract {
             ),
             caller,
         );
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     pub fn initiate_recovery(env: Env, new_admin: Address) {
@@ -1327,5 +1335,26 @@ mod tests {
         let (env, client, admins, _recovery) = setup();
         let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
         client.upgrade(&admins, &garbage);
+    }
+
+    /// Issue #473: `contract_upgraded` is published at the canonical point —
+    /// after auth and interface validation, immediately before the code
+    /// swap. A rejected upgrade must therefore emit no event at all,
+    /// pinning the event's position relative to the validation step.
+    #[test]
+    fn upgrade_emits_no_event_on_failed_upgrade() {
+        let (env, client, admins, _recovery) = setup();
+        let bad_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+
+        let before = env.events().all().len();
+        let result = client.try_upgrade(&admins, &bad_hash);
+        assert!(result.is_err(), "non-conforming wasm must be rejected");
+        assert_eq!(
+            env.events().all().len(),
+            before,
+            "no contract_upgraded event on failed upgrade"
+        );
     }
 }

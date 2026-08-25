@@ -1,7 +1,7 @@
 //! Regression coverage for the settlement administrative timelock.
 
 use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
-use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::Address;
 
 use super::setup;
@@ -157,6 +157,33 @@ fn timelocked_upgrade_rejects_never_uploaded_wasm() {
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.execute(&operation);
+}
+
+/// Issue #473: the scheduled path must publish `contract_upgraded` at the
+/// same logical point as the direct path — after the interface check,
+/// immediately before the code swap. A rejected scheduled upgrade therefore
+/// emits no events at all (neither `contract_upgraded` nor the wrapping
+/// `op_executed`), pinning the event's position relative to validation.
+#[test]
+fn rejected_timelocked_upgrade_emits_no_events() {
+    let (env, client, admins, _) = setup();
+    let admin = admins.get(0).unwrap();
+    let bad_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+    let operation = Operation::Upgrade(bad_hash);
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let before = env.events().all().len();
+    assert!(client.try_execute(&operation).is_err());
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no contract_upgraded or op_executed event on failed upgrade"
+    );
 }
 
 // ---------------------------------------------------------------------------
