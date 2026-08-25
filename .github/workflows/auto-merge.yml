@@ -43,17 +43,11 @@ jobs:
       - name: Run cargo-audit
         run: cargo audit
 
-      - name: Format Check
-        run: cargo fmt --all -- --check
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli --version 21.5.0
 
-      - name: Lint with Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Run Contract Tests
-        run: cargo test --all
-
-      - name: Compile WASM Release Binaries
-        run: cargo build --target wasm32-unknown-unknown --release
+      - name: Run Contributor Gates
+        run: make all
 
   auto-merge:
     name: Auto-Merge

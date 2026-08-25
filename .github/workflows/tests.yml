@@ -1,0 +1,51 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [ "1.85.0" ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy, rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: make fmt
+
+      - name: Check compilation
+        run: make check
+
+      - name: Run Clippy
+        run: make clippy
+
+      - name: Run unit and integration tests
+        run: make test
+        env:
+          RUST_BACKTRACE: short
+
+      - name: Run script smoke tests
+        run: make test_scripts
+      - name: Make All
+        run: make all

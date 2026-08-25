@@ -1,5 +1,5 @@
 [workspace]
-members = ["settlement_contract", "governance_contract"]
+members = ["settlement_contract", "governance_contract", "bettapay_common"]
 resolver = "2"
 
 [workspace.package]
@@ -9,6 +9,7 @@ publish = false
 
 [workspace.dependencies]
 soroban-sdk = "21.7.7"
+bettapay_common = { path = "bettapay_common" }
 
 [profile.release]
 opt-level = "z"

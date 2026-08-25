@@ -69,7 +69,7 @@ cargo test -p settlement_contract
 cargo test -p governance_contract
 
 # Run a specific test by name
-cargo test registers_merchant_and_persists_flag -p settlement_contract
+cargo test merchant_lifecycle_uses_canonical_topics -p settlement_contract
 ```
 
 ### Deploy to Testnet
@@ -82,19 +82,19 @@ bash scripts/deploy_testnet.sh
 # 1. Generate and fund a key
 soroban keys generate bettapay-admin --fund
 
-# 2. Build WASM
-cargo build --target wasm32-unknown-unknown --release
+# 2. Build and optimize WASM
+make optimize
 
 # 3. Deploy settlement contract
 SETTLEMENT_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/settlement_contract.wasm \
+  --wasm target/optimized/settlement_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
 
 # 4. Deploy governance contract
 GOVERNANCE_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/governance_contract.wasm \
+  --wasm target/optimized/governance_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
@@ -109,7 +109,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 
 soroban contract invoke \
   --id "$GOVERNANCE_ID" \
@@ -117,7 +117,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --recovery-address "$RECOVERY_ADDRESS"
 ```
 
 ### Invoke Settlement Contract
@@ -440,7 +440,7 @@ pub struct PaymentRecord {
 | `register_merchant`| `merchant: Address` | `()` | Stored Admin | `Paused`, `InvalidAddress`, `MerchantExists` | Registers a new merchant. The merchant must not already exist and cannot be the zero address. |
 | `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry and deletes their specific rule. |
 | `set_settlement_rule`| `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin | `Paused`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
-| `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to the default rules. |
+| `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
 | `set_default_rule` | `new_rule: SettlementRule` | `()` | Stored Admin | `InvalidFeeBps`, `InvalidSettlementDelay` | Configures the global fallback rule applied when no merchant-specific rule exists. |
 | `get_default_rule` | None | `Option<SettlementRule>` | None | None | Fetches the global default settlement rule configuration, if any. |
 | `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant` | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `InvalidAmount`, `DuplicatePaymentReference` | Records a payment hash on-chain and returns the fee split. `amount` must be $\ge 100$. |
@@ -535,5 +535,3 @@ This diagram highlights the main interaction pattern: the backend and operators 
 ## Dependencies
 
 No cross-contract calls. Both contracts are independently deployable and stateless across each other. The backend services call them via Stellar RPC.
-
-i would like to work on this issue

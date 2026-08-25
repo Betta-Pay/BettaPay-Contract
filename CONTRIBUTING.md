@@ -37,15 +37,15 @@ Rustup reads `rust-toolchain.toml` on first `cargo` invocation and installs the 
 
 ## Workspace Configuration
 
-This repository is a **Cargo workspace** containing two independently deployable Soroban contracts. Understanding the config files helps when adding dependencies, running targeted builds, or debugging CI failures.
+This repository is a **Cargo workspace** containing two independently deployable Soroban contracts and a shared library crate. Understanding the config files helps when adding dependencies, running targeted builds, or debugging CI failures.
 
 ### Root `Cargo.toml`
 
-The workspace root ties both contracts together:
+The workspace root ties the contracts and shared crate together:
 
 ```toml
 [workspace]
-members = ["settlement_contract", "governance_contract"]
+members = ["settlement_contract", "governance_contract", "bettapay_common"]
 resolver = "2"
 
 [workspace.package]
@@ -55,16 +55,17 @@ publish = false
 
 [workspace.dependencies]
 soroban-sdk = "21.7.7"
+bettapay_common = { path = "bettapay_common" }
 ```
 
 | Section | Purpose |
 |---------|---------|
-| `members` | Lists each contract crate in the workspace |
+| `members` | Lists each crate in the workspace |
 | `resolver = "2"` | Uses Cargo's dependency resolver v2 (required for edition 2021) |
 | `[workspace.package]` | Shared metadata inherited by member crates |
 | `[workspace.dependencies]` | Single source of truth for shared dependency versions |
 
-Both contracts reference the SDK with `soroban-sdk = { workspace = true }`, so version bumps happen in one place.
+Both contracts reference the SDK with `soroban-sdk = { workspace = true }`, and the shared `bettapay_common` crate with `bettapay_common = { workspace = true }`, so version bumps happen in one place.
 
 ### `rust-toolchain.toml`
 
@@ -112,6 +113,9 @@ BettaPay-Contract/
 │   ├── Cargo.toml
 │   ├── src/lib.rs
 │   └── test_snapshots/
+├── bettapay_common/             # Shared types, events, storage helpers, error codes
+│   ├── Cargo.toml
+│   └── src/lib.rs
 └── scripts/
     ├── deploy_testnet.sh       # Build + deploy both contracts to testnet
     └── simulate.sh             # Local deploy + init for simulation
@@ -132,7 +136,7 @@ cargo build
 cargo build --target wasm32-unknown-unknown --release
 
 # Run the full test suite
-cargo test --all
+cargo test --workspace
 ```
 
 If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` handles the rest.
@@ -160,7 +164,7 @@ Contract logic is tested with Soroban's in-memory `Env` in each crate's `#[cfg(t
 
 ```bash
 cargo build --target wasm32-unknown-unknown --release
-cargo test --all
+cargo test --workspace
 ```
 
 ### Run tests for a single contract
@@ -173,7 +177,7 @@ cargo test -p governance_contract
 ### Run a specific test by name
 
 ```bash
-cargo test -p settlement_contract registers_merchant_and_persists_flag
+cargo test -p settlement_contract merchant_lifecycle_uses_canonical_topics
 ```
 
 ### Test snapshots
@@ -182,29 +186,29 @@ Some tests write JSON snapshots under `test_snapshots/tests/`. If you intentiona
 
 ### CI parity
 
-GitHub Actions (`.github/workflows/auto-merge.yml`) runs these checks on every pull request:
+GitHub Actions (`.github/workflows/auto-merge.yml`) runs the contributor gate on every pull request:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all
-cargo build --target wasm32-unknown-unknown --release
+make all
 ```
 
-Run the same commands locally to avoid CI failures.
+This deterministically runs formatting, workspace compilation, Clippy with all
+targets and features, workspace tests, script smoke tests, WASM optimization,
+and the deployed-artifact size check. Run the same command locally to avoid CI
+failures.
 
 ## Building WASM Binaries
 
-Release WASM artifacts are required for deployment:
+Optimized WASM artifacts are required for deployment:
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+make optimize
 ```
 
 Output paths:
 
-- `target/wasm32-unknown-unknown/release/settlement_contract.wasm`
-- `target/wasm32-unknown-unknown/release/governance_contract.wasm`
+- `target/optimized/settlement_contract_opt.wasm`
+- `target/optimized/governance_contract_opt.wasm`
 
 Build a single contract:
 
@@ -246,9 +250,10 @@ Never commit Soroban identity keys or `.soroban/` directory contents.
 Before requesting review, confirm:
 
 - [ ] `cargo fmt --all -- --check` passes
-- [ ] `cargo clippy --all-targets -- -D warnings` passes
-- [ ] `cargo test --all` passes
-- [ ] `cargo build --target wasm32-unknown-unknown --release` succeeds
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `bash scripts/tests/tooling_smoke_test.sh` passes
+- [ ] `make wasm_size` succeeds
 - [ ] New behavior has corresponding unit tests
 - [ ] Snapshot changes (if any) are intentional and documented
 - [ ] PR description references the related issue (e.g. `Closes #125`)

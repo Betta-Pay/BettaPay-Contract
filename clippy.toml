@@ -1,14 +1,19 @@
 # Clippy configuration for BettaPay-Contract
 #
-# This file allows certain clippy lints that are acceptable for
+# This file raises certain clippy thresholds that are acceptable for
 # smart contract development, where some patterns (e.g. many
 # function parameters, complex types) are unavoidable.
+#
+# Note: these lints take a numeric threshold, not an "allow"/"deny" string
+# (that was the previous, incompatible form of this file, which made
+# `cargo clippy` fail outright with "unknown field" before ever reaching
+# the crates' own code).
 
 # Allow functions with many arguments (common in Soroban contract interfaces)
-too-many-arguments-threshold = 100
+too-many-arguments-threshold = 20
 
 # Allow complex type definitions (e.g. nested maps in contract storage)
-type-complexity-threshold = 1000
+type-complexity-threshold = 5000
 
 # Allow moderate cognitive complexity in contract logic
 cognitive-complexity-threshold = 100

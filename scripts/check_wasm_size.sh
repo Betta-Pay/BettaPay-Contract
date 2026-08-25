@@ -4,43 +4,23 @@
 
 set -euo pipefail
 
-# ANSI color codes
-BOLD='\033[1m'
-BLUE='\033[34m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-RED='\033[31m'
-NC='\033[0m' # No Color
+# Load shared helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
 # Limits (in bytes)
 # Soroban contracts should optimally be under 64KB (65536 bytes)
 WARN_LIMIT=65536
 ERROR_LIMIT=131072 # 128KB hard boundary
 
-log_info() {
-  echo -e "${BLUE}${BOLD}[INFO]${NC} $1"
-}
-
-log_success() {
-  echo -e "${GREEN}${BOLD}[SUCCESS]${NC} $1"
-}
-
-log_warn() {
-  echo -e "${YELLOW}${BOLD}[WARNING]${NC} $1"
-}
-
-log_error() {
-  echo -e "${RED}${BOLD}[ERROR]${NC} $1" >&2
-}
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WASM_DIR="$ROOT_DIR/target/wasm32-unknown-unknown/release"
+ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+WASM_DIR="${WASM_DIR:-$ROOT_DIR/target/optimized}"
 
 log_info "Auditing Wasm binary sizes in $WASM_DIR..."
 
 if [ ! -d "$WASM_DIR" ]; then
-  log_error "Wasm release directory not found."
-  log_info "Please build contracts first: cargo build --target wasm32-unknown-unknown --release"
+  log_error "Optimized Wasm directory not found."
+  log_info "Please optimize contracts first: make optimize"
   exit 1
 fi
 
@@ -59,7 +39,7 @@ EXCEEDED_ERROR=0
 EXCEEDED_WARN=0
 
 echo "================================================================"
-echo -e "${BOLD}Checking compiled Wasm binaries...${NC}"
+echo -e "${BOLD}Checking deployed, optimized Wasm binaries...${NC}"
 echo "================================================================"
 
 for FILE in "${WASM_FILES[@]}"; do

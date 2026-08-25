@@ -1,18 +1,7 @@
 use soroban_sdk::testutils::{Address as _, Events};
-use soroban_sdk::{symbol_short, Address, Env, FromVal, Symbol};
+use soroban_sdk::{Address, FromVal, Symbol};
 
 use super::*;
-
-fn setup() -> (Env, GovernanceContractClient<'static>, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let recovery_address = Address::generate(&env);
-    let contract_id = env.register_contract(None, GovernanceContract);
-    let client = GovernanceContractClient::new(&env, &contract_id);
-    client.init(&admin, &recovery_address);
-    (env, client, admin)
-}
 
 #[test]
 fn upsert_anchor_emits_anchor_upserted_event() {
@@ -31,18 +20,17 @@ fn upsert_anchor_emits_anchor_upserted_event() {
     assert_eq!(topics.len(), 2);
     assert_eq!(
         Symbol::from_val(&env, &topics.get(0).unwrap()),
-        Symbol::new(&env, "anchor_upserted")
+        Symbol::new(&env, bettapay_common::events::ANCHOR_UPSERTED_EVENT)
     );
     assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), asset);
 
-    let (old_anchor, current): (Option<Address>, Address) =
-        FromVal::from_val(&env, &data);
+    let (old_anchor, current): (Option<Address>, Address) = FromVal::from_val(&env, &data);
     assert_eq!(old_anchor, None);
     assert_eq!(current, anchor);
 }
 
 #[test]
-fn remove_anchor_emits_anchor_rm_and_removed_events() {
+fn remove_anchor_emits_anchor_removed_event() {
     let (env, client, admin) = setup();
     let asset = Address::generate(&env);
     let anchor = Address::generate(&env);
@@ -53,24 +41,13 @@ fn remove_anchor_emits_anchor_rm_and_removed_events() {
     client.remove_anchor(&admin, &asset);
 
     let events = env.events().all();
-    assert_eq!(events.len(), prev + 2, "two events emitted");
+    assert_eq!(events.len(), prev + 1, "exactly one event emitted");
 
-    // First event: anchor_rm with short symbol
-    let (_contract_id, topics, data) = events.get(prev).unwrap();
-    assert_eq!(topics.len(), 1);
-    assert_eq!(
-        Symbol::from_val(&env, &topics.get(0).unwrap()),
-        symbol_short!("anchor_rm")
-    );
-    let (event_asset,): (Address,) = FromVal::from_val(&env, &data);
-    assert_eq!(event_asset, asset);
-
-    // Second event: anchor_removed with full symbol
-    let (_contract_id, topics, _data) = events.get(prev + 1).unwrap();
+    let (_contract_id, topics, _data) = events.get(prev).unwrap();
     assert_eq!(topics.len(), 2);
     assert_eq!(
         Symbol::from_val(&env, &topics.get(0).unwrap()),
-        Symbol::new(&env, "anchor_removed")
+        Symbol::new(&env, bettapay_common::events::ANCHOR_REMOVED_EVENT)
     );
     assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), asset);
 }
@@ -91,8 +68,7 @@ fn upsert_anchor_update_also_emits_event() {
     assert_eq!(events.len(), prev + 1, "update emits one event");
 
     let (_contract_id, _topics, data) = events.get(prev).unwrap();
-    let (old_anchor, current): (Option<Address>, Address) =
-        FromVal::from_val(&env, &data);
+    let (old_anchor, current): (Option<Address>, Address) = FromVal::from_val(&env, &data);
     assert_eq!(old_anchor, Some(anchor_a));
     assert_eq!(current, anchor_b);
 }
