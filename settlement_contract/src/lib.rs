@@ -195,6 +195,8 @@ pub(crate) const RULE_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 pub(crate) const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
+pub(crate) const SCHEDULED_OP_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
+pub(crate) const SCHEDULED_OP_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
 
 pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 2 * 24 * 60 * 60; // 48 hours
 
