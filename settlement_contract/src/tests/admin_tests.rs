@@ -2,8 +2,8 @@
 //! `init`, `transfer_admin`, `pause`, `unpause`, `upgrade`, `recovery`.
 
 use crate::*;
-use soroban_sdk::testutils::{Address as _, Events, Ledger};
-use soroban_sdk::{Address, Env, FromVal, Symbol, TryFromVal};
+use soroban_sdk::testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke};
+use soroban_sdk::{Address, Env, FromVal, IntoVal, Symbol, TryFromVal};
 
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use bettapay_common::events::{AdminTransferred, PendingRecovery};
@@ -46,6 +46,83 @@ fn rejects_double_initialization() {
     let recovery_address = Address::generate(&env);
     client.init(&admins, &1, &governance, &recovery_address);
     let _ = env;
+}
+
+// Issue #471: init used to authenticate only the first `threshold` admins, so
+// with `admins.len() > threshold` the extras were stored without ever proving
+// key control — a later `change_threshold` could then elevate an admin who
+// never consented at init. Every proposed admin must authenticate.
+#[test]
+fn init_requires_auth_from_every_admin_when_threshold_below_len() {
+    let env = Env::default();
+    // No mock_all_auths: only the auths explicitly mocked below succeed.
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env); // extra admin beyond threshold
+    let admins = soroban_sdk::vec![&env, admin_a.clone(), admin_b.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    // Only the in-threshold admin authenticates; the extra admin does not.
+    let invoke = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "init",
+        args: (admins.clone(), 1u32, &governance, &recovery).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &admin_a,
+        invoke: &invoke,
+    }]);
+
+    assert!(
+        client
+            .try_init(&admins, &1, &governance, &recovery)
+            .is_err(),
+        "init must fail when an admin beyond the threshold never authenticated"
+    );
+    assert!(
+        !client.is_initialized(),
+        "failed init must not leave the contract initialized"
+    );
+}
+
+// Issue #471: the same len > threshold setup succeeds once every proposed
+// admin has authenticated, and all of them are stored.
+#[test]
+fn init_accepts_all_admins_authenticated_when_threshold_below_len() {
+    let env = Env::default();
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin_a.clone(), admin_b.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    let invoke = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "init",
+        args: (admins.clone(), 1u32, &governance, &recovery).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[
+        MockAuth {
+            address: &admin_a,
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &admin_b,
+            invoke: &invoke,
+        },
+    ]);
+
+    client.init(&admins, &1, &governance, &recovery);
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 1);
 }
 
 #[test]
