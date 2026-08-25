@@ -320,6 +320,121 @@ fn set_default_rule_rejected_when_paused() {
 }
 
 // ---------------------------------------------------------------------------
+// paused-state consistency (issue #476)
+// ---------------------------------------------------------------------------
+
+// All privileged entry points must return `Paused` (#5) — never `Unauthorized`
+// (#3) — when the contract is paused, regardless of whether the caller is an
+// admin. This pins the "pause-before-auth" ordering documented in the ADR.
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.update_governance(&soroban_sdk::vec![&env, non_admin], &new_governance);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_rejected_when_paused_for_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.update_governance(&admins, &new_governance);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn register_merchant_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.register_merchant(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn set_settlement_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&soroban_sdk::vec![&env, non_admin], &merchant, &rule);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn clear_settlement_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&admins, &merchant, &rule);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.clear_settlement_rule(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn set_default_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&soroban_sdk::vec![&env, non_admin], &rule);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn unregister_merchant_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.unregister_merchant(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+// ---------------------------------------------------------------------------
 // fee ceiling (issue #521)
 // ---------------------------------------------------------------------------
 
