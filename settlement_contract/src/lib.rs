@@ -106,6 +106,11 @@
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
 //!
+//! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
+//! governance: pausing while already paused panics with `AlreadyPaused`, and
+//! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
+//! `unpaused` event is only ever emitted on an actual state transition.
+//!
 //! ## Event Convention
 //!
 //! This contract follows a consistent event emission pattern (see Issue #49):

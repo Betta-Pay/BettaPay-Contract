@@ -72,6 +72,10 @@ pub enum SettlementError {
     AmountTooSmall = 313,
     AmountZero = 314,
     AmountNegative = 315,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 316,
+    /// `unpause` was called while the contract was already unpaused.
+    AlreadyUnpaused = 317,
 }
 
 const _: () = {
@@ -113,4 +117,6 @@ const _: () = {
     assert!(SettlementError::AmountTooSmall as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountZero as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountNegative as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::AlreadyPaused as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::AlreadyUnpaused as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };
