@@ -432,7 +432,7 @@ impl SettlementContract {
             panic_with_error!(env, SettlementError::MerchantExists);
         }
 
-        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().set(&key, &());
         env.storage()
             .persistent()
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);

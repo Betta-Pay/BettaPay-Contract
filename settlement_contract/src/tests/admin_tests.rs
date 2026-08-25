@@ -435,6 +435,58 @@ fn unregister_merchant_rejected_when_paused_for_non_admin() {
 }
 
 // ---------------------------------------------------------------------------
+// merchant marker consistency (issue #477)
+// ---------------------------------------------------------------------------
+
+/// Both the direct `register_merchant` and the timelocked `_register_merchant`
+/// must write the same marker type for `DataKey::Merchant`. This test reads
+/// the raw storage value after each path and asserts they are identical.
+#[test]
+fn merchant_marker_is_identical_across_direct_and_timelocked_paths() {
+    use crate::types::DataKey;
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, client, admins, _merchant) = setup();
+    let merchant_a = Address::generate(&env);
+    let merchant_b = Address::generate(&env);
+
+    // --- Direct path ---
+    client.register_merchant(&admins, &merchant_a);
+
+    // Both writers must store a value that is readable as `()`.
+    let marker_a: () = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Merchant(merchant_a.clone()))
+            .unwrap()
+    });
+
+    // --- Timelocked path ---
+    let operation = Operation::RegisterMerchant(merchant_b.clone());
+    client.schedule(
+        &admins.get(0).unwrap(),
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+
+    let marker_b: () = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Merchant(merchant_b.clone()))
+            .unwrap()
+    });
+
+    // Both writers must produce the same stored value type.
+    assert_eq!(
+        marker_a, marker_b,
+        "direct and timelocked register_merchant must store identical marker values"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // fee ceiling (issue #521)
 // ---------------------------------------------------------------------------
 
