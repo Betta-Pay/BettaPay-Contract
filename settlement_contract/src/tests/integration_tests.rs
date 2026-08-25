@@ -548,7 +548,8 @@ fn multisig_threshold_works_independently_on_both_contracts() {
         "settlement rejects sub-threshold signers"
     );
 
-    // change_threshold requires threshold + 1 = 3 signers.
+    // change_threshold requires the current threshold (2) — three signers
+    // still satisfy it.
     gov_client.change_threshold(&three_signers, &3);
     assert_eq!(gov_client.get_threshold(), 3);
 

@@ -193,8 +193,16 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Direct path ---
     client.transfer_admin(&initial_admins, &new_admins, &new_threshold);
-    assert_eq!(client.get_admin(), new_admins, "direct path stores full admin set");
-    assert_eq!(client.get_threshold(), new_threshold, "direct path stores threshold");
+    assert_eq!(
+        client.get_admin(),
+        new_admins,
+        "direct path stores full admin set"
+    );
+    assert_eq!(
+        client.get_threshold(),
+        new_threshold,
+        "direct path stores threshold"
+    );
 
     // Reset back to single-admin so the timelock path starts from a clean state.
     let reset_admins = soroban_sdk::vec![&env, a1.clone()];

@@ -210,13 +210,17 @@ impl SettlementContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        // Require the current threshold, not threshold + 1. With an N-of-N
+        // admin set (threshold == admin count) no distinct set of signers
+        // could ever satisfy N+1, which would lock the contract out of
+        // lowering its threshold permanently (Issue #464).
+        verify_admin_auth(&env, &signers, current_threshold);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, SettlementError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
 
         env.storage()
             .instance()
