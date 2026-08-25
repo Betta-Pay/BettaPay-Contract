@@ -173,6 +173,41 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #475: timelocked TransferAdmin to the identical admin set must be
+// rejected with SameAdmin, matching the direct path's guard.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn timelocked_transfer_admin_rejects_same_admin() {
+    use crate::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::Env;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let a1 = Address::generate(&env);
+    let recovery = Address::generate(&env);
+
+    let governance = super::register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    let initial_admins = soroban_sdk::vec![&env, a1.clone()];
+    client.init(&initial_admins, &1, &governance, &recovery);
+
+    // Schedule a transfer to the same admin set — must be rejected on execute.
+    let operation = Operation::TransferAdmin(initial_admins.clone(), 1);
+    client.schedule(&a1, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+}
+
+// ---------------------------------------------------------------------------
 // Scheduled-operation TTL must match the named policy constants.
 // ---------------------------------------------------------------------------
 

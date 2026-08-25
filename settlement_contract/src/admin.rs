@@ -165,7 +165,13 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         validate_admins_and_threshold(&env, &new_admins, new_threshold);
 
-        let old_admin = read_admin(&env);
+        let old_admins = read_admins(&env);
+        let old_threshold = read_threshold(&env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(&env, SettlementError::SameAdmin);
+        }
+
+        let old_admin = storage::primary_admin(&old_admins).unwrap();
         write_admins(&env, &new_admins, new_threshold);
         let primary_new_admin = new_admins.get(0).unwrap();
         events::emit_admin_transferred(
@@ -379,8 +385,15 @@ impl SettlementContract {
     }
 
     fn _transfer_admin(env: &Env, new_admins: Vec<Address>, new_threshold: u32) {
-        let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
+
+        let old_admins = read_admins(env);
+        let old_threshold = read_threshold(env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(env, SettlementError::SameAdmin);
+        }
+
+        let old_admin = storage::primary_admin(&old_admins).unwrap();
         write_admins(env, &new_admins, new_threshold);
         let primary_new_admin = new_admins.get(0).unwrap();
         events::emit_admin_transferred(

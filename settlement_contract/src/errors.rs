@@ -72,6 +72,9 @@ pub enum SettlementError {
     AmountTooSmall = 313,
     AmountZero = 314,
     AmountNegative = 315,
+    /// `transfer_admin` was called with the identical admin set and threshold
+    /// already stored.  Matches the governance contract's `SameAdmin` guard.
+    SameAdmin = 316,
 }
 
 const _: () = {
@@ -113,4 +116,5 @@ const _: () = {
     assert!(SettlementError::AmountTooSmall as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountZero as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AmountNegative as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::SameAdmin as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };
