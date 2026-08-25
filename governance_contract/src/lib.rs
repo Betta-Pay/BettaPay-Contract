@@ -275,6 +275,8 @@ pub enum GovernanceError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// A recovery is already pending; initiate_recovery cannot overwrite it.
+    RecoveryAlreadyPending = 15,
     /// The anchor for the specified asset was not found.
     AnchorMissing = 200,
     InvalidParamValue = 201,
@@ -300,6 +302,9 @@ const _: () = {
     assert!(GovernanceError::RecoveryDelayActive as u32 == error_codes::RECOVERY_DELAY_ACTIVE);
     assert!(GovernanceError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(GovernanceError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(
+        GovernanceError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
+    );
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::AlreadyPaused as u32 >= error_codes::GOVERNANCE_RANGE_START);
@@ -442,6 +447,14 @@ impl GovernanceContract {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
         assert_not_zero(&env, &new_admin, GovernanceError::InvalidAdmin);
+
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, GovernanceError::RecoveryAlreadyPending);
+        }
 
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
@@ -657,7 +670,9 @@ impl GovernanceContract {
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
-        env.storage().persistent().extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         env.events().publish(
             (Symbol::new(&env, events::ANCHOR_UPSERTED_EVENT), asset),
             (old_anchor, anchor),
@@ -823,8 +838,8 @@ mod anchor_no_event_error_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -866,7 +881,10 @@ mod tests {
         let bad_hash = upload_test_wasm(&env); // empty wasm — no supports_interface
 
         let result = client.try_upgrade(&admins, &bad_hash);
-        assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+        assert!(
+            result.is_err(),
+            "upgrade with non-conforming wasm must be rejected"
+        );
 
         // Contract is intact after the failed upgrade.
         let live_client = GovernanceContractClient::new(&env, &client.address);
@@ -1352,6 +1370,28 @@ mod tests {
             Symbol::from_val(&env, &unpause_topics.get(0).unwrap()),
             Symbol::new(&env, bettapay_common::events::UNPAUSED_EVENT)
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn initiate_recovery_rejects_overwrite_while_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admins = vec![&env, admin1, admin2];
+        let recovery_address = Address::generate(&env);
+        let first_target = Address::generate(&env);
+        let second_target = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &2, &recovery_address);
+
+        client.initiate_recovery(&first_target);
+
+        // Second initiation must be rejected — a recovery is already pending.
+        client.initiate_recovery(&second_target);
     }
 
     // -----------------------------------------------------------------------

@@ -106,6 +106,14 @@ impl SettlementContract {
             SettlementError::InvalidAdmin,
         );
 
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
+        }
+
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,

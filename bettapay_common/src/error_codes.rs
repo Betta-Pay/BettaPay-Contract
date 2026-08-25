@@ -48,6 +48,8 @@ pub const OPERATION_ALREADY_SCHEDULED: u32 = 12;
 pub const INVALID_WASM_INTERFACE: u32 = 13;
 /// The provided multisig threshold is invalid.
 pub const INVALID_THRESHOLD: u32 = 14;
+/// A recovery operation is already pending; a second one cannot be initiated.
+pub const RECOVERY_ALREADY_PENDING: u32 = 15;
 
 /// Lowest code reserved for `governance_contract`-only errors.
 pub const GOVERNANCE_RANGE_START: u32 = 200;
@@ -71,6 +73,7 @@ pub const SHARED_CODES: &[(&str, u32)] = &[
     ("OperationAlreadyScheduled", OPERATION_ALREADY_SCHEDULED),
     ("InvalidWasmInterface", INVALID_WASM_INTERFACE),
     ("InvalidThreshold", INVALID_THRESHOLD),
+    ("RecoveryAlreadyPending", RECOVERY_ALREADY_PENDING),
 ];
 
 /// Asserts that a contract's full `(name, code)` table is internally

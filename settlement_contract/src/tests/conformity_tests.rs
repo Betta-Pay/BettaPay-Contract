@@ -12,7 +12,7 @@
 use crate::errors::SettlementError;
 use governance_contract::GovernanceError;
 
-fn governance_codes() -> [(&'static str, u32); 16] {
+fn governance_codes() -> [(&'static str, u32); 17] {
     [
         (
             "AlreadyInitialized",
@@ -40,6 +40,10 @@ fn governance_codes() -> [(&'static str, u32); 16] {
             GovernanceError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", GovernanceError::InvalidThreshold as u32),
+        (
+            "RecoveryAlreadyPending",
+            GovernanceError::RecoveryAlreadyPending as u32,
+        ),
         ("AnchorMissing", GovernanceError::AnchorMissing as u32),
         (
             "InvalidParamValue",
@@ -51,7 +55,7 @@ fn governance_codes() -> [(&'static str, u32); 16] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 24] {
+fn settlement_codes() -> [(&'static str, u32); 25] {
     [
         (
             "AlreadyInitialized",
@@ -91,6 +95,10 @@ fn settlement_codes() -> [(&'static str, u32); 24] {
             SettlementError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", SettlementError::InvalidThreshold as u32),
+        (
+            "RecoveryAlreadyPending",
+            SettlementError::RecoveryAlreadyPending as u32,
+        ),
         ("MerchantExists", SettlementError::MerchantExists as u32),
         ("MerchantMissing", SettlementError::MerchantMissing as u32),
         (

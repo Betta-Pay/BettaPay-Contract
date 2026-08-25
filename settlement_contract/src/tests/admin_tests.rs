@@ -390,7 +390,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -426,6 +429,32 @@ fn recovery_executes_after_delay() {
     client.execute_recovery();
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn initiate_recovery_rejects_overwrite_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let first_target = Address::generate(&env);
+    let second_target = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    client.init(
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&first_target);
+
+    // Second initiation must be rejected — a recovery is already pending.
+    client.initiate_recovery(&second_target);
 }
 
 // ---------------------------------------------------------------------------
