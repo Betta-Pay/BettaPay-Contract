@@ -361,11 +361,16 @@ impl GovernanceContract {
             .publish((Symbol::new(&env, "recovery_cancelled"),), admin);
     }
 
+    /// Execute a pending recovery once its exact execution timestamp is reached.
+    ///
+    /// This operation is intentionally permissionless: anyone may submit it after the
+    /// recovery delay, while the recovery address controls which target was proposed.
     pub fn execute_recovery(env: Env) {
         let pending = read_pending_recovery(&env);
         if env.ledger().timestamp() < pending.execute_after {
             panic_with_error!(&env, GovernanceError::RecoveryDelayActive);
         }
+        validate_nonzero_address(&env, &pending.new_admin, GovernanceError::InvalidAdmin);
 
         let old_admin = read_admin(&env);
         env.storage()

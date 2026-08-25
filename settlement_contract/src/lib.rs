@@ -347,11 +347,16 @@ impl SettlementContract {
             .publish((Symbol::new(&env, "recovery_cancelled"),), admin);
     }
 
+    /// Execute a pending recovery once its exact execution timestamp is reached.
+    ///
+    /// This operation is intentionally permissionless: anyone may submit it after the
+    /// recovery delay, while the recovery address controls which target was proposed.
     pub fn execute_recovery(env: Env) {
         let pending = read_pending_recovery(&env);
         if env.ledger().timestamp() < pending.execute_after {
             panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
+        validate_nonzero_address(&env, &pending.new_admin, SettlementError::InvalidAdmin);
 
         env.storage()
             .instance()
@@ -1108,6 +1113,56 @@ mod tests {
         client.execute_recovery();
 
         assert_eq!(client.get_admin(), new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn recovery_rejects_execution_before_exact_delay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery_address = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let governance = register_governance(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+
+        client.init(&admin, &governance, &recovery_address);
+        client.initiate_recovery(&new_admin);
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp += RECOVERY_DELAY_SECONDS - 1;
+        });
+
+        client.execute_recovery();
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn recovery_rejects_corrupted_zero_target_at_execution() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery_address = Address::generate(&env);
+        let governance = register_governance(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+        let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
+
+        client.init(&admin, &governance, &recovery_address);
+        env.as_contract(&client.address, || {
+            env.storage().instance().set(
+                &DataKey::PendingRecovery,
+                &PendingRecovery {
+                    new_admin: zero_address,
+                    execute_after: env.ledger().timestamp(),
+                },
+            );
+        });
+
+        client.execute_recovery();
     }
 
     #[test]
