@@ -18,8 +18,9 @@ We chose a **selective pause model** where:
   - `set_settlement_rule`, `clear_settlement_rule`
   - `set_default_rule`
   - `store_payment_reference`
-  - `transfer_admin`, `update_governance`
+  - `update_governance`
 - Read-only operations (`get_admin`, `is_merchant_registered`, `get_settlement_rule`, `get_default_rule`, `get_payment_reference`, `is_paused`, `calculate_fee_split`) remain accessible even when paused.
+- Administrative operations (`upgrade`, `transfer_admin`, `initiate_recovery`, `cancel_recovery`, `execute_recovery`, `schedule`, `execute`, `cancel`) are intentionally NOT blocked to allow emergency fixes.
 
 ## Consequences
 

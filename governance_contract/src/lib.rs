@@ -103,7 +103,7 @@
 //! | 5 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 6 | `Paused` | Contract is paused |
 //! | 7 | `InvalidAdmin` | Transfer target is zero-address or current admin |
-//! | 8 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
+//! | 8 | `InvalidParamValue` | Supplied system parameter value is negative |
 //! | 9 | `InvalidRecoveryAddress` | Recovery address is zero-address or otherwise invalid |
 //! | 10 | `RecoveryNotPending` | No recovery operation is currently pending |
 //! | 11 | `RecoveryDelayActive` | Recovery delay period has not yet elapsed |
@@ -115,6 +115,18 @@
 //! | 17 | `InvalidWasmInterface` | The deployed WASM does not implement the required interface |
 //! | 18 | `InvalidThreshold` | The provided multisig threshold is invalid |
 //! | 19 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
+//! | 5 | `Paused` | Contract is paused |
+//! | 6 | `InvalidAdmin` | Transfer target is zero-address or current admin |
+//! | 7 | `InvalidRecoveryAddress` | Recovery address is zero-address or otherwise invalid |
+//! | 8 | `RecoveryNotPending` | No recovery operation is currently pending |
+//! | 9 | `RecoveryDelayActive` | Recovery delay period has not yet elapsed |
+//! | 13 | `InvalidWasmInterface` | The deployed WASM does not implement the required interface |
+//! | 14 | `InvalidThreshold` | The provided multisig threshold is invalid |
+//! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
+//! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
+//! | 202 | `AlreadyPaused` | `pause` called while the contract was already paused |
+//! | 203 | `AlreadyUnpaused` | `unpause` called while the contract was already unpaused |
+//! | 204 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //!
 //! ## Event Conventions
 //!
@@ -175,7 +187,7 @@ use bettapay_common::{
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
-    IntoVal, Symbol, SymbolStr, TryFromVal, Vec,
+    IntoVal, Symbol, Vec,
 };
 
 #[derive(Clone)]
@@ -212,15 +224,6 @@ enum DataKey {
     /// Storage key for the contract admin addresses.
     Admin,
 
-    /// Storage key for the multisig admin threshold.
-    Threshold,
-
-    /// Storage key for the recovery address that can reset the admin.
-    RecoveryAddress,
-
-    /// Storage key for the pending recovery operation.
-    PendingRecovery,
-
     /// Storage key for arbitrary system parameters.
     SystemParam(Symbol),
 
@@ -229,13 +232,6 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
-
-    /// Storage key for the pause state flag.
-    Paused,
-
-    /// Storage key for a scheduled operation.
-    /// Uses persistent storage, keyed by operation hash, to store execution timestamp.
-    ScheduledOperation(BytesN<32>),
 }
 
 // Discriminants below are pinned to `bettapay_common::error_codes` so that a
@@ -263,12 +259,6 @@ pub enum GovernanceError {
     InvalidRecoveryAddress = 7,
     RecoveryNotPending = 8,
     RecoveryDelayActive = 9,
-    /// The scheduled operation is not yet ready for execution.
-    ExecutionNotReady = 10,
-    /// The operation has not been scheduled.
-    OperationNotScheduled = 11,
-    /// The operation has already been scheduled.
-    OperationAlreadyScheduled = 12,
     /// The deployed WASM does not implement the required interface.
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
@@ -296,12 +286,6 @@ const _: () = {
     );
     assert!(GovernanceError::RecoveryNotPending as u32 == error_codes::RECOVERY_NOT_PENDING);
     assert!(GovernanceError::RecoveryDelayActive as u32 == error_codes::RECOVERY_DELAY_ACTIVE);
-    assert!(GovernanceError::ExecutionNotReady as u32 == error_codes::EXECUTION_NOT_READY);
-    assert!(GovernanceError::OperationNotScheduled as u32 == error_codes::OPERATION_NOT_SCHEDULED);
-    assert!(
-        GovernanceError::OperationAlreadyScheduled as u32
-            == error_codes::OPERATION_ALREADY_SCHEDULED
-    );
     assert!(GovernanceError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(GovernanceError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
@@ -357,7 +341,7 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &admins);
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &threshold);
+            .set(&CommonDataKey::Threshold, &threshold);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
@@ -483,7 +467,7 @@ impl GovernanceContract {
         let old_admin = storage::primary_admin(&old_admins).unwrap();
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
-        env.storage().instance().set(&DataKey::Threshold, &1u32);
+        env.storage().instance().set(&CommonDataKey::Threshold, &1u32);
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
@@ -521,7 +505,7 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &new_admins);
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &new_threshold);
+            .set(&CommonDataKey::Threshold, &new_threshold);
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
@@ -532,17 +516,17 @@ impl GovernanceContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
-
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
 
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold + 1);
+
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &new_threshold);
+            .set(&CommonDataKey::Threshold, &new_threshold);
         env.events().publish(
             (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
             (current_threshold, new_threshold),
@@ -574,10 +558,6 @@ impl GovernanceContract {
     }
 
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
-        if symbol_len(&env, &key) > 32 {
-            panic_with_error!(&env, GovernanceError::InvalidParamValue);
-        }
-
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
         if value < 0 {
@@ -602,10 +582,6 @@ impl GovernanceContract {
     }
 
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
-        if symbol_len(&env, &key) > 32 {
-            panic_with_error!(&env, GovernanceError::InvalidParamValue);
-        }
-
         let storage_key = DataKey::SystemParam(key);
         if env.storage().persistent().has(&storage_key) {
             env.storage().persistent().extend_ttl(
@@ -617,6 +593,12 @@ impl GovernanceContract {
         env.storage().persistent().get(&storage_key)
     }
 
+    /// Sets the global fee configuration.
+    ///
+    /// **Fee Ceiling Policy**: Governance is the trust root for cross-contract fee ceilings.
+    /// While individual fees are bounded by `MAX_FEE_BPS` and their sum by `BPS_DENOMINATOR`,
+    /// Governance is fully trusted to set safe rates within those technical boundaries.
+    ///
     pub fn set_fee_config(env: Env, signers: Vec<Address>, config: FeeConfig) {
         assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
@@ -661,10 +643,15 @@ impl GovernanceContract {
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {
         assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_zero(&env, &asset, GovernanceError::InvalidAdmin);
+        assert_not_zero(&env, &anchor, GovernanceError::InvalidAdmin);
+        if asset == anchor {
+            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+        }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
-        env.storage().persistent().extend_ttl(&key, 50_000, 100_000);
+        env.storage().persistent().extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         env.events().publish(
             (Symbol::new(&env, events::ANCHOR_UPSERTED_EVENT), asset),
             (old_anchor, anchor),
@@ -712,7 +699,7 @@ fn read_admins(env: &Env) -> Vec<Address> {
 fn read_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::Threshold)
+        .get(&CommonDataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::NotInitialized))
 }
 
@@ -798,17 +785,6 @@ fn assert_not_paused(env: &Env) {
     }
 }
 
-/// Returns the character length of a `Symbol`.
-///
-/// `Symbol` has no `ToString`/`Display` impl available on the wasm target
-/// (soroban-sdk gates that behind `not(target_family = "wasm")`), so length
-/// is measured via `SymbolStr`, which is available on every target.
-fn symbol_len(env: &Env, key: &Symbol) -> usize {
-    SymbolStr::try_from_val(env, &key.to_symbol_val())
-        .map(|s| s.len())
-        .unwrap_or(0)
-}
-
 /// Shared test setup used across the main test module and the anchor_*
 /// sub-modules, so a change to `init`'s signature only needs updating here.
 #[cfg(test)]
@@ -839,9 +815,14 @@ mod anchor_removal_tests;
 mod anchor_no_event_error_tests;
 
 #[cfg(test)]
+mod real_auth_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::storage::Persistent;
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -1038,6 +1019,34 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn set_fee_config_rejects_fees_exceeding_ceiling() {
+        let (_env, client, admins, _recovery) = setup();
+        
+        // Sum exceeds BPS_DENOMINATOR
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_000,
+            network_fee_bps: 5_001,
+        };
+
+        client.set_fee_config(&admins, &cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn set_fee_config_rejects_individual_fee_exceeding_max() {
+        let (_env, client, admins, _recovery) = setup();
+        
+        // Individual fee exceeds MAX_FEE_BPS (governance trust root)
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_001,
+            network_fee_bps: 0,
+        };
+
+        client.set_fee_config(&admins, &cfg);
+    }
+
+    #[test]
     fn upserts_and_removes_anchor() {
         let (env, client, admins, _recovery) = setup();
         let asset = Address::generate(&env);
@@ -1055,6 +1064,41 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn rejects_upsert_anchor_with_zero_address_asset() {
+        let (env, client, admins, _recovery) = setup();
+        let zero_address = Address::from_string(&String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
+        let anchor = Address::generate(&env);
+
+        client.upsert_anchor(&admins, &zero_address, &anchor);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn rejects_upsert_anchor_with_zero_address_anchor() {
+        let (env, client, admins, _recovery) = setup();
+        let asset = Address::generate(&env);
+        let zero_address = Address::from_string(&String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
+
+        client.upsert_anchor(&admins, &asset, &zero_address);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn rejects_upsert_anchor_where_asset_equals_anchor() {
+        let (env, client, admins, _recovery) = setup();
+        let asset = Address::generate(&env);
+
+        client.upsert_anchor(&admins, &asset, &asset);
+    }
+
+    #[test]
     fn get_anchor_extends_anchor_ttl() {
         let (env, client, admins, _recovery) = setup();
         let asset = Address::generate(&env);
@@ -1063,6 +1107,46 @@ mod tests {
         client.upsert_anchor(&admins, &asset, &anchor);
         assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
         assert_eq!(client.get_anchor(&asset), Some(anchor));
+    }
+
+    #[test]
+    fn upsert_anchor_uses_same_ttl_policy_as_read() {
+        let (env, client, admins, _recovery) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+        let seq = env.ledger().sequence();
+
+        client.upsert_anchor(&admins, &asset, &anchor);
+
+        let live_until_after_write = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::Anchor(asset.clone()))
+        });
+
+        // The write path bumps with ANCHOR_TTL_BUMP (via extend_ttl with the
+        // ANCHOR_TTL threshold/bump pair), so the remaining TTL (live-until
+        // minus the current ledger) must clear the anchor bump policy.
+        assert!(
+            live_until_after_write - seq >= ANCHOR_TTL_BUMP,
+            "write path remaining TTL {} < ANCHOR_TTL_BUMP ({ANCHOR_TTL_BUMP})",
+            live_until_after_write - seq
+        );
+
+        assert_eq!(client.get_anchor(&asset), Some(anchor));
+
+        let live_until_after_read = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::Anchor(asset.clone()))
+        });
+
+        // The read path uses the same ANCHOR_TTL_THRESHOLD / ANCHOR_TTL_BUMP,
+        // so it never shrinks the policy established by the write.
+        assert!(
+            live_until_after_read >= live_until_after_write,
+            "read path live-until ({live_until_after_read}) should not be below write path ({live_until_after_write})"
+        );
     }
 
     #[test]
@@ -1120,6 +1204,91 @@ mod tests {
         );
     }
 
+    proptest! {
+        #[test]
+        fn valid_fee_configs_are_accepted(
+            (platform_fee_bps, network_fee_bps) in
+                (5u32..=5_000, 5u32..=5_000)
+                    .prop_filter("fee sum must fit the denominator", |(platform, network)| {
+                        *platform + *network <= BPS_DENOMINATOR
+                    }),
+        ) {
+            let env = Env::default();
+            let admin = Address::generate(&env);
+            let recovery = Address::generate(&env);
+            let admins = vec![&env, admin];
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.init(&admins, &1, &recovery);
+
+            let config = FeeConfig {
+                platform_fee_bps,
+                network_fee_bps,
+            };
+            client.set_fee_config(&admins, &config);
+            let stored = client.get_fee_config().unwrap();
+            prop_assert_eq!(stored.platform_fee_bps, platform_fee_bps);
+            prop_assert_eq!(stored.network_fee_bps, network_fee_bps);
+        }
+
+        #[test]
+        fn fee_configs_with_an_out_of_range_leg_are_rejected(
+            platform_fee_bps in 0u32..=5_000,
+            network_fee_bps in 0u32..=5_000,
+            invalid_platform in any::<bool>(),
+        ) {
+            let invalid_value = if invalid_platform {
+                5_001
+            } else {
+                4
+            };
+            let config = if invalid_platform {
+                FeeConfig {
+                    platform_fee_bps: invalid_value,
+                    network_fee_bps,
+                }
+            } else {
+                FeeConfig {
+                    platform_fee_bps,
+                    network_fee_bps: invalid_value,
+                }
+            };
+            let env = Env::default();
+            let admin = Address::generate(&env);
+            let recovery = Address::generate(&env);
+            let admins = vec![&env, admin];
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.init(&admins, &1, &recovery);
+
+            prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
+        }
+
+        #[test]
+        fn threshold_validation_accepts_exact_admin_count_and_rejects_out_of_range(
+            admin_count in 1u32..=5,
+            threshold in 0u32..=6,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+            let mut admins = Vec::new(&env);
+            for _ in 0..admin_count {
+                admins.push_back(Address::generate(&env));
+            }
+            let recovery = Address::generate(&env);
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+
+            let result = client.try_init(&admins, &threshold, &recovery);
+            if threshold == 0 || threshold > admin_count {
+                prop_assert!(result.is_err());
+            } else {
+                prop_assert!(result.is_ok());
+                prop_assert_eq!(client.get_threshold(), threshold);
+            }
+        }
+    }
+
     #[test]
     #[should_panic]
     fn rejects_removing_unknown_anchor() {
@@ -1173,11 +1342,10 @@ mod tests {
     // itself (SCSYMBOL_LIMIT) at construction time, not merely by an SDK
     // convenience check. `Symbol::new` below panics with
     // `Error(Value, InvalidInput)` before `update_system_param` is ever
-    // invoked, so this test necessarily observes the SDK/protocol-level
-    // panic rather than `GovernanceError::InvalidParamValue` — there is no
-    // public API path to construct an in-memory `Symbol` over 32 characters,
-    // so the contract's own length guard (`symbol_len` in this file, kept as
-    // defense-in-depth) can never actually be reached through it.
+    // invoked, so there is no public API path to construct an in-memory
+    // `Symbol` over 32 characters. The test documents this protocol-level
+    // invariant and ensures the contract does not assert a code path that
+    // cannot be reached through it.
     #[test]
     #[should_panic(expected = "Error(Value, InvalidInput)")]
     fn rejects_oversized_symbol_key() {
@@ -1246,6 +1414,46 @@ mod tests {
         // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
         let single_signer = vec![&env, a1.clone()];
         client.change_threshold(&single_signer, &2);
+    }
+
+    // Issue #565: setting a threshold above the admin count must surface
+    // `InvalidThreshold` (#14), not `Unauthorized` (#3) from the auth gate.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &1, &recovery);
+
+        // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
+        client.change_threshold(&admins, &3);
+    }
+
+    // Issue #565: threshold == 0 must also be rejected before the auth gate.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn change_threshold_zero_rejects_with_invalid_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &2, &recovery);
+
+        client.change_threshold(&admins, &0);
     }
 
     #[test]

@@ -438,7 +438,7 @@ pub struct PaymentRecord {
 | `unpause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Resumes mutating contract operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the contract is currently paused. |
 | `register_merchant`| `merchant: Address` | `()` | Stored Admin | `Paused`, `InvalidAddress`, `MerchantExists` | Registers a new merchant. The merchant must not already exist and cannot be the zero address. |
-| `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry and deletes their specific rule. |
+| `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry, deletes their specific rule, and orphans their payment records — post-unregister reads of those records fail with `PaymentOrphaned`. |
 | `set_settlement_rule`| `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin | `Paused`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
 | `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
 | `set_default_rule` | `new_rule: SettlementRule` | `()` | Stored Admin | `InvalidFeeBps`, `InvalidSettlementDelay` | Configures the global fallback rule applied when no merchant-specific rule exists. |
@@ -447,8 +447,8 @@ pub struct PaymentRecord {
 | `is_merchant_registered`| `merchant: Address` | `bool` | None | None | Checks if a merchant is present in the registry. |
 | `get_settlement_rule`| `merchant: Address` | `Option<SettlementRule>` | None | None | Reads the merchant-specific settlement rule override. |
 | `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. |
-| `get_payment_reference`| `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the logged payment record. Refreshes the entry's TTL when queried. |
-| `get_payments` | `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves logged payment records. Missing references are ignored. |
+| `get_payment_reference`| `merchant: Address`, `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the merchant's logged payment record for the reference. Refreshes the entry's TTL when queried. |
+| `get_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves the merchant's logged payment records. Missing references are ignored. |
 
 ---
 
@@ -535,3 +535,10 @@ This diagram highlights the main interaction pattern: the backend and operators 
 ## Dependencies
 
 No cross-contract calls. Both contracts are independently deployable and stateless across each other. The backend services call them via Stellar RPC.
+
+## Security
+
+Found a security vulnerability? Please do **not** open a public GitHub issue.
+See [`SECURITY.md`](SECURITY.md) for the reporting process (GitHub Security
+Advisories preferred, email fallback), the vulnerability report template, the
+list of report owners, and our 90-day responsible disclosure window.
