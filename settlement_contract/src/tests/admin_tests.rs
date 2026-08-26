@@ -307,10 +307,13 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert!(
+        client.is_paused(),
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -454,7 +457,11 @@ fn set_default_rule_rejects_fee_sum_exceeding_denominator_scheduled() {
         auto_settle: true,
     };
     let operation = Operation::SetDefaultRule(rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &soroban_sdk::vec![&env, admin],
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.execute(&operation);

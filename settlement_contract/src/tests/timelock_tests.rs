@@ -1,8 +1,8 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use crate::{Operation, SettlementContractClient, DEFAULT_TIMELOCK_DELAY_SECONDS};
 use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::Address;
+use soroban_sdk::{Address, Env};
 
 use super::setup;
 
@@ -33,14 +33,14 @@ fn schedule_rejects_non_admin_and_insufficient_delay() {
     let non_admin = Address::generate(&env);
 
     assert!(client
-        .try_schedule(&soroban_sdk::vec![&env, non_admin], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .try_schedule(
+            &soroban_sdk::vec![&env, non_admin],
+            &operation,
+            &DEFAULT_TIMELOCK_DELAY_SECONDS
+        )
         .is_err());
     assert!(client
-        .try_schedule(
-            &admins,
-            &operation,
-            &(DEFAULT_TIMELOCK_DELAY_SECONDS - 1),
-        )
+        .try_schedule(&admins, &operation, &(DEFAULT_TIMELOCK_DELAY_SECONDS - 1),)
         .is_err());
 }
 
@@ -60,7 +60,10 @@ fn admin_can_cancel_but_non_admin_cannot() {
     let operation = Operation::RegisterMerchant(merchant);
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client
-        .try_cancel(&soroban_sdk::vec![&env, Address::generate(&env)], &operation)
+        .try_cancel(
+            &soroban_sdk::vec![&env, Address::generate(&env)],
+            &operation
+        )
         .is_err());
     client.cancel(&admins, &operation);
 
@@ -113,11 +116,7 @@ fn expired_schedule_cannot_execute() {
     let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
 
-    client.schedule(
-        &admins,
-        &operation,
-        &DEFAULT_TIMELOCK_DELAY_SECONDS,
-    );
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     // `schedule` bumps the persistent entry to 30 days (518,400 ledgers).
     // Keep the contract instance alive while advancing past only the
@@ -138,7 +137,12 @@ fn expired_schedule_cannot_execute() {
     client.execute(&operation);
 }
 
-fn setup_multisig() -> (Env, SettlementContractClient<'static>, soroban_sdk::Vec<Address>, Address) {
+fn setup_multisig() -> (
+    Env,
+    SettlementContractClient<'static>,
+    soroban_sdk::Vec<Address>,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let a1 = Address::generate(&env);
@@ -208,7 +212,11 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Timelocked path ---
     let operation = Operation::TransferAdmin(new_admins.clone(), new_threshold);
-    client.schedule(&soroban_sdk::vec![&env, a1.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &soroban_sdk::vec![&env, a1.clone()],
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);

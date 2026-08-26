@@ -20,9 +20,8 @@ use soroban_sdk::{Address, Env};
 // ---------------------------------------------------------------------------
 
 mod panicking_gov {
-    use crate::FeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
-    use soroban_sdk::{contract, contractimpl, Env};
+
     use crate::GovFeeConfig;
 
     /// A governance stub whose `get_fee_config` always traps (simulates a
