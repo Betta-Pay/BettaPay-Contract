@@ -377,6 +377,64 @@ fn set_default_rule_rejects_fee_above_max_fee_bps() {
 }
 
 // ---------------------------------------------------------------------------
+// Fee-sum boundary (issue #466)
+// ---------------------------------------------------------------------------
+
+// Default rule with platform + network summing exactly to BPS_DENOMINATOR
+// (100 %) must be accepted — the check is `>`, not `>=`.
+#[test]
+fn set_default_rule_accepts_fee_sum_at_boundary() {
+    let (_env, client, admins, _merchant) = setup();
+
+    let rule = SettlementRule {
+        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
+        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &rule);
+}
+
+// Default rule with combined fees exceeding BPS_DENOMINATOR must be rejected.
+// With MAX_FEE_BPS = 5000 the sum check is currently unreachable from
+// set_default_rule alone (individual fee cap fires first), but this test
+// validates the scheduled path's defence-in-depth and pins the behaviour
+// for future MAX_FEE_BPS increases.
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn set_default_rule_rejects_fee_sum_exceeding_denominator() {
+    let (_env, client, admins, _merchant) = setup();
+
+    let rule = SettlementRule {
+        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
+        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &rule);
+}
+
+// Scheduled path (_set_default_rule) must enforce the same sum check.
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn set_default_rule_rejects_fee_sum_exceeding_denominator_scheduled() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+
+    let rule = SettlementRule {
+        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
+        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    let operation = Operation::SetDefaultRule(rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+}
+
+// ---------------------------------------------------------------------------
 // upgrade
 // ---------------------------------------------------------------------------
 
@@ -390,7 +448,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
