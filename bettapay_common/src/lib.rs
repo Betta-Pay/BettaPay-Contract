@@ -37,4 +37,4 @@ pub mod constants;
 pub mod error_codes;
 pub mod events;
 pub mod storage;
-pub mod upgrade;
+pub mod types;
