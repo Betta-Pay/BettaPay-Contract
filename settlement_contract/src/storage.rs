@@ -1,7 +1,7 @@
 use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
 
 use bettapay_common::{
-    events::{self, PendingRecovery},
+    events::PendingRecovery,
     storage::{self, CommonDataKey},
 };
 
@@ -203,6 +203,13 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
 
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, and finally using the bootstrap fallback.
+///
+/// This is a **pure resolution** function — it does NOT emit events.
+/// Callers that need to signal an unconfigured deployment (e.g. mutating
+/// entry points such as `store_payment_reference` or `set_settlement_rule`)
+/// must check whether the returned rule equals [`BOOTSTRAP_DEFAULT_RULE`]
+/// and emit `bootstrap_fallback` explicitly. Read-only paths (e.g.
+/// `calculate_fee_split`) must not emit events.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
@@ -233,10 +240,6 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
-    env.events().publish(
-        (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
-        BOOTSTRAP_DEFAULT_RULE,
-    );
     BOOTSTRAP_DEFAULT_RULE
 }
 

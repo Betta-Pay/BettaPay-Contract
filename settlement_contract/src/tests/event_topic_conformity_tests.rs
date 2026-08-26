@@ -257,19 +257,41 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 }
 
 #[test]
-fn bootstrap_fallback_uses_canonical_topic() {
+fn bootstrap_fallback_uses_canonical_topic_on_mutation() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so this call falls all the way through to the
-    // bootstrap fallback rule.
+    // always returns None, so store_payment_reference falls all the way
+    // through to the bootstrap fallback rule. Mutating entry points must
+    // emit the bootstrap_fallback event (issue #485).
     let before = env.events().all().len();
-    client.calculate_fee_split(&merchant, &1_000);
+    let reference = BytesN::<32>::from_array(&env, &[1u8; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
     assert!(env.events().all().len() > before);
     assert_eq!(
         last_topic(&env),
         Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT)
+    );
+}
+
+/// Regression test for issue #485: read-only rule resolution must NOT
+/// emit bootstrap_fallback. Only mutating entry points should signal an
+/// unconfigured deployment.
+#[test]
+fn read_path_does_not_emit_bootstrap_fallback() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // No merchant rule, no default rule, and MockGovernance's get_fee_config
+    // always returns None — calculate_fee_split resolves to bootstrap but
+    // must NOT emit bootstrap_fallback because it is a read-only path.
+    let before = env.events().all().len();
+    client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "read-only calculate_fee_split must not emit bootstrap_fallback"
     );
 }
 
