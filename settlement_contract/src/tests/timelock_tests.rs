@@ -1,8 +1,8 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use crate::{Operation, SettlementContractClient, DEFAULT_TIMELOCK_DELAY_SECONDS};
 use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::Address;
+use soroban_sdk::{Address, Env};
 
 use super::setup;
 

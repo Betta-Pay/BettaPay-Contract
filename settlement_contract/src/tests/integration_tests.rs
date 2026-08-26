@@ -731,6 +731,7 @@ proptest! {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #313)")]
 fn calculate_fee_split_rejects_amount_zero() {
     let (_env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
@@ -959,7 +960,11 @@ fn timelocked_unregister_also_orphans_payments() {
     settle_client.store_payment_reference(&merchant, &reference, &1_000);
 
     let operation = Operation::UnregisterMerchant(merchant.clone());
-    settle_client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    settle_client.schedule(
+        &soroban_sdk::vec![&env, admin],
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     settle_client.execute(&operation);

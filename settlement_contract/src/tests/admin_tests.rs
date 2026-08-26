@@ -310,7 +310,7 @@ fn set_default_rule_rejected_when_paused() {
     
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert!(client.is_paused(), "Contract must be paused before testing rejection");
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
