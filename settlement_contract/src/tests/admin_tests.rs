@@ -5,7 +5,9 @@ use crate::*;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, Env, FromVal, Symbol, TryFromVal};
 
-use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
+use bettapay_common::constants::{
+    BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
+};
 use bettapay_common::events::{AdminTransferred, PendingRecovery};
 use bettapay_common::storage::CommonDataKey;
 
@@ -93,11 +95,7 @@ fn every_admin_writer_preserves_the_vector_shape() {
     let scheduled_admin = Address::generate(&env);
     let scheduled_admins = soroban_sdk::vec![&env, scheduled_admin.clone()];
     let operation = Operation::TransferAdmin(scheduled_admins, 1);
-    client.schedule(
-        &admins.get(0).unwrap(),
-        &operation,
-        &DEFAULT_TIMELOCK_DELAY_SECONDS,
-    );
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.execute(&operation);
@@ -295,12 +293,26 @@ fn clear_settlement_rule_rejected_when_paused() {
 
 // Issue #231: the global default settlement rule must not be updated while paused.
 #[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn register_merchant_rejects_admin_address() {
+    let (_env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+
+    // The admin cannot be registered as a merchant
+    client.register_merchant(&admins, &admin);
+}
+
+#[test]
+// SettlementError::Paused maps to error code 5
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
+    
+    // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert!(client.is_paused());
+    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
 
+    // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
         platform_fee_bps: 250,
         network_fee_bps: 50,
@@ -315,7 +327,7 @@ fn set_default_rule_rejected_when_paused() {
 // ---------------------------------------------------------------------------
 
 // Both fees are independently capped at MAX_FEE_BPS (5000, i.e. 50%), even
-// before governance has configured a FeeConfig - settlement no longer relies
+// before governance has configured a GovFeeConfig - settlement no longer relies
 // solely on `validate_fee_against_governance` (which is a no-op with no
 // governance config set) to keep per-fee values below 100%.
 #[test]
@@ -376,6 +388,20 @@ fn set_default_rule_rejects_fee_above_max_fee_bps() {
     client.set_default_rule(&admins, &rule);
 }
 
+#[test]
+fn bootstrap_default_rule_satisfies_setter_fee_validation() {
+    let rule = BOOTSTRAP_DEFAULT_RULE;
+
+    assert!(rule.platform_fee_bps >= MIN_FEE_BPS);
+    assert_eq!(rule.network_fee_bps, MIN_FEE_BPS);
+    assert!(rule.platform_fee_bps <= MAX_FEE_BPS);
+    assert!(rule.network_fee_bps <= MAX_FEE_BPS);
+    assert!(rule.platform_fee_bps <= BPS_DENOMINATOR);
+    assert!(rule.network_fee_bps <= BPS_DENOMINATOR);
+    assert!(rule.platform_fee_bps + rule.network_fee_bps <= BPS_DENOMINATOR);
+    assert!(rule.settlement_delay_ledger <= MAX_SETTLEMENT_DELAY_LEDGER);
+}
+
 // ---------------------------------------------------------------------------
 // upgrade
 // ---------------------------------------------------------------------------
@@ -398,6 +424,48 @@ fn executes_contract_wasm_upgrade_successfully() {
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
     assert_eq!(live_client.get_admin(), admins);
+}
+
+// ---------------------------------------------------------------------------
+// change_threshold
+// ---------------------------------------------------------------------------
+
+// Issue #565: setting a threshold above the admin count must surface
+// `InvalidThreshold` (#14), not `Unauthorized` (#3) from the auth gate.
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&admins, &1, &governance, &recovery);
+
+    // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
+    client.change_threshold(&admins, &3);
+}
+
+// Issue #565: threshold == 0 must also be rejected before the auth gate.
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn change_threshold_zero_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&admins, &2, &governance, &recovery);
+
+    client.change_threshold(&admins, &0);
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ use bettapay_common::{
 };
 
 use crate::errors::SettlementError;
-use crate::types::{DataKey, FeeConfig, SettlementRule};
+use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 use crate::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
     READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
@@ -34,13 +34,13 @@ pub(crate) fn write_admins(env: &Env, admins: &Vec<Address>, threshold: u32) {
     env.storage().instance().set(&DataKey::Admin, admins);
     env.storage()
         .instance()
-        .set(&DataKey::Threshold, &threshold);
+        .set(&CommonDataKey::Threshold, &threshold);
 }
 
 pub(crate) fn read_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::Threshold)
+        .get(&CommonDataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
@@ -128,7 +128,7 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
         SettlementError::InvalidGovernance,
     );
     let args: Vec<Val> = Vec::new(env);
-    let _: Option<FeeConfig> =
+    let _: Option<GovFeeConfig> =
         env.invoke_contract(governance, &Symbol::new(env, "get_fee_config"), args);
 }
 
@@ -146,8 +146,50 @@ pub(crate) fn validate_nonzero_address(
     }
 }
 
-/// Returns whether a merchant has been registered and keeps the marker entry warm in storage.
+/// Panics with [`SettlementError::PaymentOrphaned`] when the merchant's
+/// payment records are no longer readable.
+///
+/// Policy (issue #490): unregistering a merchant orphans its payment
+/// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone that
+/// survives re-registration, and a merchant that was never registered has no
+/// readable history either. A payment read therefore requires both a live
+/// merchant marker and no tombstone.
+pub(crate) fn assert_payments_readable(env: &Env, merchant: &Address) {
+    let registered = is_merchant_registered_internal(env, merchant.clone());
+    let archived = env
+        .storage()
+        .persistent()
+        .has(&DataKey::ArchivedMerchant(merchant.clone()));
+    if !registered || archived {
+        panic_with_error!(env, SettlementError::PaymentOrphaned);
+    }
+}
+
+/// Returns whether a merchant has been registered.
+///
+/// TTL-neutral: does not touch the merchant marker's TTL. Use this from
+/// public/unauthenticated read paths (`is_merchant_registered`,
+/// `calculate_fee_split`) — those are callable by anyone for any merchant
+/// address, so if they bumped the TTL a third party could keep an arbitrary
+/// merchant's marker alive indefinitely, subverting natural eviction.
+/// Merchant- or admin-authenticated paths that need to keep an active
+/// merchant's marker warm should use
+/// [`is_merchant_registered_and_bump_ttl`] instead.
 pub(crate) fn is_merchant_registered_internal(env: &Env, merchant: Address) -> bool {
+    let key = DataKey::Merchant(merchant);
+    env.storage().persistent().has(&key)
+}
+
+/// Returns whether a merchant has been registered, keeping the marker entry
+/// warm in storage if so.
+///
+/// Only call this from a path that already required merchant or admin
+/// authentication for this action (e.g. `store_payment_reference`,
+/// `set_settlement_rule`) — never from a public/unauthenticated read, or a
+/// third party could use it as a liveness oracle to keep an arbitrary
+/// merchant's marker alive indefinitely. See
+/// [`is_merchant_registered_internal`] for the TTL-neutral read-only check.
+pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) -> bool {
     let key = DataKey::Merchant(merchant);
     let exists = env.storage().persistent().has(&key);
     if exists {
@@ -186,7 +228,7 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
             .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
-    // Protocol fee source: governance's FeeConfig, when available.
+    // Protocol fee source: governance's GovFeeConfig, when available.
     if let Some(rule) = read_governance_fee_rule(env) {
         return rule;
     }
@@ -209,7 +251,7 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
     let args: Vec<Val> = Vec::new(env);
-    match env.try_invoke_contract::<Option<FeeConfig>, SettlementError>(
+    match env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         args,
@@ -241,7 +283,7 @@ pub(crate) fn assert_not_paused(env: &Env) {
     }
 }
 
-/// Reads the governance FeeConfig via cross-contract call and validates that
+/// Reads the governance GovFeeConfig via cross-contract call and validates that
 /// the settlement rule fees do not exceed governance's configured ceilings.
 ///
 /// When governance has no fee config set (`Ok(Ok(None))`), local hardcoded
@@ -252,7 +294,7 @@ pub(crate) fn assert_not_paused(env: &Env) {
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
-    let result = env.try_invoke_contract::<Option<FeeConfig>, SettlementError>(
+    let result = env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         Vec::new(env),
