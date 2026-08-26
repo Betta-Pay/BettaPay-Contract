@@ -71,6 +71,11 @@ pub enum SettlementError {
     FeeExceedsGovernanceConfig = 312,
     AmountTooSmall = 313,
     BatchTooLarge = 314,
+    /// The merchant's payment records are orphaned: the merchant was
+    /// unregistered (or never registered), so its payment history is no
+    /// longer readable even if the merchant is later re-registered.
+    /// Raised by `get_payment_reference` and `get_payments`.
+    PaymentOrphaned = 315,
 }
 
 const _: () = {
@@ -111,4 +116,5 @@ const _: () = {
     );
     assert!(SettlementError::AmountTooSmall as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::BatchTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

@@ -7,7 +7,7 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_rule_or_default, read_threshold,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, read_rule_or_default, read_threshold,
     validate_fee_against_governance, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
@@ -30,7 +30,7 @@ impl SettlementContract {
 
         validate_fee_against_governance(&env, &rule);
 
-        if !is_merchant_registered_internal(&env, merchant.clone()) {
+        if !is_merchant_registered_and_bump_ttl(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
         if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
@@ -85,15 +85,17 @@ impl SettlementContract {
 
         env.storage().persistent().remove(&key);
 
-        let fallback = read_rule_or_default(&env, merchant.clone());
+        // We intentionally read the default rule directly from storage rather
+        // than using `read_rule_or_default` to avoid mistakenly emitting a
+        // `bootstrap_fallback` event during the clearing process.
+        let fallback = env
+            .storage()
+            .persistent()
+            .get::<_, SettlementRule>(&DataKey::DefaultRule)
+            .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
 
-        env.events().publish(
-            (
-                Symbol::new(&env, events::SETTLEMENT_RULE_CLEARED_EVENT),
-                merchant,
-            ),
-            (admin, removed, fallback),
-        );
+        // Canonical event shape shared with the unregister path (issue #491).
+        events::emit_settlement_rule_cleared(&env, &merchant, &admin, &removed, &fallback);
     }
 
     pub fn set_default_rule(env: Env, signers: Vec<Address>, new_rule: SettlementRule) {
