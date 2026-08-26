@@ -101,9 +101,9 @@ impl SettlementContract {
         }
 
         // ISSUE 495: Reentrancy guard.
-        // We write a dummy record to storage immediately so that if the external 
-        // read_governance_fee_rule call results in a reentrant call back to this 
-        // contract, the `has` check above will catch it. This dummy record is 
+        // We write a dummy record to storage immediately so that if the external
+        // read_governance_fee_rule call results in a reentrant call back to this
+        // contract, the `has` check above will catch it. This dummy record is
         // overwritten by the actual record at the end of this function.
         let dummy_record = PaymentRecord {
             amount: 0,
@@ -192,7 +192,7 @@ impl SettlementContract {
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(env, SettlementError::BatchTooLarge);
         }
-        
+
         let mut payments = Vec::new(&env);
         for reference in refs.iter() {
             let key = DataKey::Payment(reference);

@@ -11,8 +11,8 @@ use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_internal, read_admin, read_admins, read_governance,
     read_pending_recovery, read_recovery_address, read_rule_or_default, read_threshold,
-    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
+    validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, SettlementRule};
 use crate::{
@@ -468,6 +468,11 @@ impl SettlementContract {
         assert_not_paused(env);
         let admin = read_admin(env);
 
+        // Standard validation order (shared with the direct path in settlement.rs):
+        // 1. Merchant existence
+        // 2. Fee range (hardcoded protocol bounds)
+        // 3. Governance ceiling
+        // 4. Settlement delay
         if !is_merchant_registered_internal(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
@@ -483,6 +488,7 @@ impl SettlementContract {
         if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
+        validate_fee_against_governance(env, &rule);
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
         }
@@ -536,6 +542,10 @@ impl SettlementContract {
         assert_not_paused(env);
         let admin = read_admin(env);
 
+        // Standard validation order (shared with the direct path in settlement.rs):
+        // 1. Fee range (hardcoded protocol bounds)
+        // 2. Governance ceiling
+        // 3. Settlement delay
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
@@ -546,6 +556,7 @@ impl SettlementContract {
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
+        validate_fee_against_governance(env, &new_rule);
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
         }

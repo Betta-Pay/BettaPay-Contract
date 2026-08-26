@@ -64,7 +64,11 @@ fn upgrade_uses_canonical_topic() {
     let result = client.try_upgrade(&admins, &bad_hash);
     assert!(result.is_err(), "non-conforming wasm must be rejected");
     // No event emitted on failure.
-    assert_eq!(env.events().all().len(), before, "no event on failed upgrade");
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no event on failed upgrade"
+    );
 }
 
 #[test]

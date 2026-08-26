@@ -657,7 +657,9 @@ impl GovernanceContract {
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
-        env.storage().persistent().extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         env.events().publish(
             (Symbol::new(&env, events::ANCHOR_UPSERTED_EVENT), asset),
             (old_anchor, anchor),
@@ -823,8 +825,8 @@ mod anchor_no_event_error_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -866,7 +868,10 @@ mod tests {
         let bad_hash = upload_test_wasm(&env); // empty wasm — no supports_interface
 
         let result = client.try_upgrade(&admins, &bad_hash);
-        assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+        assert!(
+            result.is_err(),
+            "upgrade with non-conforming wasm must be rejected"
+        );
 
         // Contract is intact after the failed upgrade.
         let live_client = GovernanceContractClient::new(&env, &client.address);

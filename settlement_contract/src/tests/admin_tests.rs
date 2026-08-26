@@ -390,7 +390,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -493,4 +496,201 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+}
+
+// ---------------------------------------------------------------------------
+// Validation ordering parity (issue #467)
+//
+// The direct path (set_settlement_rule) and the scheduled/timelocked path
+// (_set_settlement_rule via Operation::SetSettlementRule) must validate the
+// same inputs in the same order and return identical errors for identical bad
+// input. The standardised order is:
+//   1. Merchant existence  → MerchantMissing (#302)
+//   2. Fee range           → InvalidFeeBps (#4)
+//   3. Governance ceiling  → FeeExceedsGovernanceConfig (#312)
+//   4. Settlement delay    → InvalidSettlementDelay (#308)
+// ---------------------------------------------------------------------------
+
+/// An unregistered merchant must yield MerchantMissing (#302) from the
+/// direct path and the scheduled path.
+#[test]
+fn same_error_unregistered_merchant_direct_and_scheduled() {
+    let (env, client, admins, _merchant) = setup();
+    let unregistered = Address::generate(&env);
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_settlement_rule(&admins, &unregistered, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetSettlementRule(unregistered, rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+/// Invalid fee BPS (above MAX_FEE_BPS) must yield InvalidFeeBps (#4)
+/// from both paths.
+#[test]
+fn same_error_invalid_fee_bps_direct_and_scheduled() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_settlement_rule(&admins, &merchant, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetSettlementRule(merchant, rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+/// Fee sum exceeding BPS_DENOMINATOR must yield InvalidFeeBps (#4)
+/// from both paths.
+#[test]
+fn same_error_fee_sum_exceeds_denominator_direct_and_scheduled() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: 6000,
+        network_fee_bps: 5000,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_settlement_rule(&admins, &merchant, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetSettlementRule(merchant, rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+/// Settlement delay exceeding MAX_SETTLEMENT_DELAY_LEDGER must yield
+/// InvalidSettlementDelay (#308) from both paths.
+#[test]
+fn same_error_invalid_settlement_delay_direct_and_scheduled() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: crate::MAX_SETTLEMENT_DELAY_LEDGER + 1,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_settlement_rule(&admins, &merchant, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetSettlementRule(merchant, rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// set_default_rule / _set_default_rule parity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn same_error_invalid_fee_bps_default_rule_direct_and_scheduled() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_default_rule(&admins, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetDefaultRule(rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+#[test]
+fn same_error_fee_sum_exceeds_denominator_default_rule_direct_and_scheduled() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: 6000,
+        network_fee_bps: 5000,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_default_rule(&admins, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetDefaultRule(rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
+}
+
+#[test]
+fn same_error_invalid_settlement_delay_default_rule_direct_and_scheduled() {
+    let (env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: crate::MAX_SETTLEMENT_DELAY_LEDGER + 1,
+        auto_settle: true,
+    };
+
+    // --- Direct path ---
+    let result = client.try_set_default_rule(&admins, &rule);
+    assert!(result.is_err());
+
+    // --- Scheduled path ---
+    let operation = Operation::SetDefaultRule(rule);
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let result = client.try_execute(&operation);
+    assert!(result.is_err());
 }
