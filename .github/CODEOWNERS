@@ -1,0 +1,38 @@
+# BettaPay CODEOWNERS
+#
+# GitHub requests a review from the matched owner(s) automatically when a
+# pull request touches these paths. That's advisory by default; enabling
+# "Require review from Code Owners" under branch protection for `main`
+# makes it a hard merge gate. See CONTRIBUTING.md's "Code Ownership"
+# section for why these specific paths are gated and how enforcement
+# works.
+#
+# GitHub CODEOWNERS syntax: later, more specific patterns override earlier
+# ones for a given path, so keep broad defaults first and narrow
+# exceptions below them. Owners must be GitHub usernames (`@user`) or
+# teams (`@org/team`) with write access to this repository.
+
+# Architecture Decision Records. These record *why* a cross-cutting
+# tradeoff was made a certain way (see adr/003-ttl-value-selection.md for
+# an example) — changing an accepted decision, or its rationale, needs
+# sign-off from someone who can weigh the original tradeoff, not just a
+# style/wording review.
+/adr/                               @therealjhay
+
+# Shared cross-contract constants (BPS_DENOMINATOR, TTL thresholds/bumps,
+# recovery delay, ...). A change here silently affects both contracts at
+# once, so it needs the same reviewer who understands the ADRs that
+# justify these specific values.
+/bettapay_common/src/constants.rs   @therealjhay
+
+# Deployment, build, and CI-invoked tooling. Breaking these breaks every
+# contributor's local `make all` and the CI gate itself.
+/scripts/                           @therealjhay
+/Makefile                           @therealjhay
+/.github/workflows/                 @therealjhay
+/.github/CODEOWNERS                 @therealjhay
+
+# Contributor-facing process documentation.
+/CONTRIBUTING.md                    @therealjhay
+/SECURITY.md                        @therealjhay
+/DEVELOPMENT.md                     @therealjhay
