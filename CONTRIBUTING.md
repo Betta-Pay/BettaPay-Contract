@@ -182,7 +182,13 @@ cargo test -p settlement_contract merchant_lifecycle_uses_canonical_topics
 
 ### Test snapshots
 
-Some tests write JSON snapshots under `test_snapshots/tests/`. If you intentionally change contract behavior that affects emitted events or storage layout, update snapshots as part of your PR and explain the change in the PR description.
+Soroban's `Env` test harness writes a JSON snapshot for every `#[test]` under each crate's `test_snapshots/` directory. The path always mirrors the test's Rust module path — keep that in mind when adding or moving test files:
+
+- Tests declared directly inside `#[cfg(test)] mod tests { ... }` (in `src/lib.rs`, or in a crate's `src/tests/mod.rs`) land in `test_snapshots/tests/<test_name>.json`.
+- A dedicated test file declared as its own top-level module (`#[cfg(test)] mod foo_tests;`) lands in `test_snapshots/foo_tests/<test_name>.json`. Do not additionally wrap that file's contents in `mod tests { ... }` — that adds a redundant `tests/` segment to the path (`foo_tests/tests/<test_name>.json`) that doesn't match any sibling module and just adds confusion.
+- A crate that groups its test files under one `src/tests/` directory (`settlement_contract/src/tests/`) will legitimately see `test_snapshots/tests/<submodule>/<test_name>.json` — that nesting reflects a real `tests::<submodule>` module path, not a layout bug.
+
+If you intentionally change contract behavior that affects emitted events or storage layout, update snapshots as part of your PR (re-run `cargo test --workspace` to regenerate them, or `make check_snapshots`) and explain the change in the PR description.
 
 ### CI parity
 
@@ -193,9 +199,9 @@ make all
 ```
 
 This deterministically runs formatting, workspace compilation, Clippy with all
-targets and features, workspace tests, script smoke tests, WASM optimization,
-and the deployed-artifact size check. Run the same command locally to avoid CI
-failures.
+targets and features, workspace tests, a test-snapshot drift check, script
+smoke tests, WASM optimization, and the deployed-artifact size check. Run the
+same command locally to avoid CI failures.
 
 ## Building WASM Binaries
 
