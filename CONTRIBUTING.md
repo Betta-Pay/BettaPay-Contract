@@ -8,6 +8,7 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Workspace Configuration](#workspace-configuration)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
+- [Code Ownership](#code-ownership)
 - [Upgrades and Storage Migrations](DEVELOPMENT.md)
 - [Testing](#testing)
 - [Building WASM Binaries](#building-wasm-binaries)
@@ -153,6 +154,19 @@ If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` ha
 3. **Make focused changes** — keep PRs scoped to a single concern (one contract fix, one feature, or one docs change).
 4. **Run local checks** before pushing (see [Testing](#testing) and [Pull Request Checklist](#pull-request-checklist)).
 5. **Open a pull request** against `main` with a clear description and test plan.
+
+## Code Ownership
+
+[`.github/CODEOWNERS`](.github/CODEOWNERS) gates review on paths where an unreviewed change can silently diverge from the rest of the workspace:
+
+- [`adr/`](adr/) — Architecture Decision Records. Changing an accepted decision, or the rationale behind it, needs sign-off from someone who understands the original tradeoff.
+- [`bettapay_common/src/constants.rs`](bettapay_common/src/constants.rs) — constants shared by both contracts (TTL policy, `BPS_DENOMINATOR`, the recovery delay, ...). A change here silently affects both contracts at once.
+- [`scripts/`](scripts/), [`Makefile`](Makefile), [`.github/workflows/`](.github/workflows/) — deployment and CI-invoked tooling. Breaking these breaks every contributor's local `make all` and the CI gate itself.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), [`DEVELOPMENT.md`](DEVELOPMENT.md) — contributor-facing process docs.
+
+**How it's enforced:** GitHub requests a review from the matched owner(s) automatically when a PR touches one of these paths — that's advisory on its own. To make it a hard merge gate, a repo admin needs to enable **"Require review from Code Owners"** under Settings → Branches → branch protection rule for `main` (this is a GitHub repository setting, not something a config file in the repo can turn on by itself). `make check_codeowners` (part of `make all`, so it runs in CI on every PR) validates the file itself: every pattern must still resolve to a real path in the repository, and every owner must be a syntactically valid `@user` or `@org/team` handle. It catches CODEOWNERS drifting out of sync with the repo (e.g. a gated path getting renamed) — it does not and cannot enforce that reviews actually happened; that half is the branch protection setting above.
+
+If you're touching a gated path and don't have another maintainer to loop in, say so in the PR description — the owner list can always be adjusted as the contributor base grows.
 
 ## Testing
 
