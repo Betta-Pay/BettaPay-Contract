@@ -535,3 +535,7 @@ This diagram highlights the main interaction pattern: the backend and operators 
 ## Dependencies
 
 No cross-contract calls. Both contracts are independently deployable and stateless across each other. The backend services call them via Stellar RPC.
+
+## Security
+
+Found a vulnerability? See [SECURITY.md](SECURITY.md) for the reporting process, disclosure timeline, and report owners — please don't open a public issue for undisclosed security problems.
