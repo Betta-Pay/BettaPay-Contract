@@ -248,6 +248,22 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
 /// unexpected error value — is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] instead of silently collapsing to
 /// `None`.
+///
+/// # Settlement timing fields (issue #484)
+///
+/// Governance provides protocol-level fee ceilings only. The resulting
+/// `SettlementRule` **always** has `settlement_delay_ledger: 0` (immediate
+/// settlement) and `auto_settle: false` (no automatic settlement). These
+/// values are intentionally fixed by design:
+///
+/// - Settlement timing is a per-merchant or admin-configured operational
+///   concern, not a protocol-wide governance policy.
+/// - The bootstrap default uses the same values (`0` / `false`), so
+///   merchants without any rule see consistent behavior.
+/// - If governance-controlled settlement timing is needed in the future,
+///   extend `GovFeeConfig` and this function in a coordinated upgrade.
+///
+/// See also: [`GovFeeConfig`][crate::GovFeeConfig].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
     let args: Vec<Val> = Vec::new(env);
