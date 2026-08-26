@@ -24,7 +24,7 @@ pub struct MockGovernance;
 
 #[contractimpl]
 impl MockGovernance {
-    pub fn get_fee_config(_env: Env) -> Option<FeeConfig> {
+    pub fn get_fee_config(_env: Env) -> Option<GovFeeConfig> {
         None
     }
 }

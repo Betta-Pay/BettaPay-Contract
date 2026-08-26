@@ -37,6 +37,8 @@ pub enum CommonDataKey {
     /// Pause-flag `bool` controlling whether mutating operations are blocked
     /// (instance storage).
     Paused,
+    /// Multisig admin threshold (instance storage).
+    Threshold,
 }
 
 /// Returns `true` if the contract is currently paused.
@@ -142,5 +144,51 @@ mod tests {
         let env = Env::default();
         let admins: Vec<Address> = vec![&env];
         assert_eq!(primary_admin(&admins), None);
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use soroban_sdk::{contracttype, Env, IntoVal, Val};
+
+    // The legacy shape of DataKey in settlement/governance contracts had
+    // data variants, so Soroban encoded unit variants as Symbols, not u32s.
+    #[derive(Clone)]
+    #[contracttype]
+    enum LegacyDataKey {
+        Admin,
+        Threshold,
+        RecoveryAddress,
+        PendingRecovery,
+        Governance,
+        Merchant(soroban_sdk::Address),
+    }
+
+    #[test]
+    fn common_data_key_encoding_matches_legacy() {
+        let env = Env::default();
+        let mut map: soroban_sdk::Map<Val, u32> = soroban_sdk::Map::new(&env);
+        
+        map.set(LegacyDataKey::RecoveryAddress.into_val(&env), 1u32);
+        assert_eq!(map.get(CommonDataKey::RecoveryAddress.into_val(&env)), Some(1u32), "RecoveryAddress encoding mismatch");
+
+        map.set(LegacyDataKey::PendingRecovery.into_val(&env), 2u32);
+        assert_eq!(map.get(CommonDataKey::PendingRecovery.into_val(&env)), Some(2u32), "PendingRecovery encoding mismatch");
+
+        // Note: Paused was also a unit variant in the legacy DataKey.
+        // We'll just define another legacy enum for it or reuse the same.
+        #[derive(Clone)]
+        #[contracttype]
+        enum LegacyDataKey2 {
+            Paused,
+            SystemParam(soroban_sdk::Symbol),
+        }
+        
+        map.set(LegacyDataKey2::Paused.into_val(&env), 3u32);
+        assert_eq!(map.get(CommonDataKey::Paused.into_val(&env)), Some(3u32), "Paused encoding mismatch");
+
+        map.set(LegacyDataKey::Threshold.into_val(&env), 4u32);
+        assert_eq!(map.get(CommonDataKey::Threshold.into_val(&env)), Some(4u32), "Threshold encoding mismatch");
     }
 }
