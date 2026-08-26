@@ -1,4 +1,4 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, Map, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::{self, PendingRecovery},
@@ -231,30 +231,27 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
 /// `None`.
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
-    let args: Vec<Val> = Vec::new(env);
-    match env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
+    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
-        args,
+        Vec::new(env),
     ) {
-        // Governance returned a populated fee config — convert to a rule.
-        Ok(Ok(Some(config))) => {
-            let rule = SettlementRule {
-                platform_fee_bps: config.platform_fee_bps,
-                network_fee_bps: config.network_fee_bps,
-                settlement_delay_ledger: 0,
-                auto_settle: false,
-            };
-            if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-                panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-            }
-            Some(rule)
-        }
-        // Governance has no fee config set yet — fall through to bootstrap.
-        Ok(Ok(None)) => None,
-        // Governance call failed (contract error or host error).
+        Ok(Ok(val)) => val,
         _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let config = try_read_governance_fee_config(env, raw_val)?;
+
+    let rule = SettlementRule {
+        platform_fee_bps: config.platform_fee_bps,
+        network_fee_bps: config.network_fee_bps,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
+        panic_with_error!(env, SettlementError::InvalidSettlementDelay);
     }
+    Some(rule)
 }
 
 /// Ensures the contract is not paused before mutating state or performing privileged actions.
@@ -262,6 +259,73 @@ pub(crate) fn assert_not_paused(env: &Env) {
     if storage::is_paused(env) {
         panic_with_error!(env, SettlementError::Paused);
     }
+}
+
+/// Validates the raw return value from governance's `get_fee_config` as a
+/// properly-shaped `GovFeeConfig` (a Soroban `#[contracttype]` struct encoded
+/// as a map keyed by field name).
+///
+/// Returns:
+/// - `Some(GovFeeConfig)` when the raw value is a map with both required fields
+///   (`platform_fee_bps` and `network_fee_bps`).
+/// - `None` when the raw value is `Void` (governance has no config set yet).
+///
+/// Panics with [`SettlementError::GovernanceCallFailed`] when the governance
+/// contract returned a malformed config (issue #483):
+/// - A map with fewer or more than 2 entries (e.g. a 1-field config that omits
+///   `network_fee_bps`).
+/// - A map that is missing either required key.
+/// - A value whose fields are not `u32`.
+///
+/// # Why this function exists
+///
+/// `try_invoke_contract::<Option<GovFeeConfig>, SettlementError>` deserialises
+/// the return value into `Option<GovFeeConfig>` in the **calling** contract's
+/// guest code. If the governance contract returned a struct with a different
+/// shape (e.g. 1 field instead of 2), the host-side `map_unpack_to_slice`
+/// panics and the panic is **not** caught by `try_invoke_contract`'s
+/// `Result`-based error handling — it propagates as an opaque host trap
+/// ("escalating error to panic") rather than surfacing as the typed
+/// `GovernanceCallFailed` error.
+///
+/// This function avoids that path by:
+/// 1. Calling `try_invoke_contract::<Val, SettlementError>` to get the raw
+///    `Val` return value without triggering typed deserialisation.
+/// 2. Converting the raw `Val` to `Map<Symbol, Val>` (safe: returns `Err` for
+///    non-map values like `Void`).
+/// 3. Validating the map structure (entry count, required keys, field types)
+///    before constructing `GovFeeConfig`.
+fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfig> {
+    // A Void return means governance has no fee config set yet.
+    // Map::try_from_val safely returns Err for non-map values.
+    let map: Map<Symbol, Val> = match Map::try_from_val(env, &raw_val) {
+        Ok(m) => m,
+        Err(_) => return None,
+    };
+
+    // Issue #483: assert exactly 2 fields before reading.
+    // A governance returning a single-field config (e.g. only platform_fee_bps)
+    // must be rejected rather than silently skipping the network-fee ceiling.
+    if map.len() != 2 {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+
+    let platform_fee_bps = match map.get(Symbol::new(env, "platform_fee_bps")) {
+        Some(val) => u32::try_from_val(env, &val)
+            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
+        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let network_fee_bps = match map.get(Symbol::new(env, "network_fee_bps")) {
+        Some(val) => u32::try_from_val(env, &val)
+            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
+        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    Some(GovFeeConfig {
+        platform_fee_bps,
+        network_fee_bps,
+    })
 }
 
 /// Reads the governance GovFeeConfig via cross-contract call and validates that
@@ -275,19 +339,19 @@ pub(crate) fn assert_not_paused(env: &Env) {
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
-    let result = env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
+    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         Vec::new(env),
-    );
-
-    let fee_config = match result {
-        // Governance returned a populated fee config — check fee ceilings.
-        Ok(Ok(Some(cfg))) => cfg,
-        // Governance has no fee config set — no ceiling to enforce.
-        Ok(Ok(None)) => return,
-        // Governance call failed (contract error or host error).
+    ) {
+        Ok(Ok(val)) => val,
         _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let fee_config = match try_read_governance_fee_config(env, raw_val) {
+        Some(cfg) => cfg,
+        // Governance has no fee config set — no ceiling to enforce.
+        None => return,
     };
 
     if rule.platform_fee_bps > fee_config.platform_fee_bps {
