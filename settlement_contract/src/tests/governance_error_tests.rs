@@ -39,6 +39,43 @@ mod panicking_gov {
 
 use panicking_gov::PanickingGovernance;
 
+// ---------------------------------------------------------------------------
+// Malformed governance stub — returns a 1-field struct where GovFeeConfig
+// expects 2 fields (issue #483).
+// ---------------------------------------------------------------------------
+
+mod malformed_gov {
+    use soroban_sdk::{contract, contractimpl, contracttype, Env};
+
+    /// A 1-field config struct: only `platform_fee_bps`, missing
+    /// `network_fee_bps`. When the settlement contract attempts to
+    /// deserialize this into `Option<GovFeeConfig>`, the missing field
+    /// causes a deserialization failure that must surface as
+    /// `GovernanceCallFailed`.
+    #[derive(Clone)]
+    #[contracttype]
+    pub struct OneFieldFeeConfig {
+        pub platform_fee_bps: u32,
+    }
+
+    #[contract]
+    pub struct MalformedGovernance;
+
+    #[contractimpl]
+    impl MalformedGovernance {
+        /// Returns a 1-field config where the settlement contract expects
+        /// 2 fields (platform_fee_bps + network_fee_bps). This simulates
+        /// a governance contract upgrade that forgot the network fee field.
+        pub fn get_fee_config(_env: Env) -> Option<OneFieldFeeConfig> {
+            Some(OneFieldFeeConfig {
+                platform_fee_bps: 200,
+            })
+        }
+    }
+}
+
+use malformed_gov::MalformedGovernance;
+
 /// Helper: directly injects a governance address into the settlement contract's
 /// instance storage, bypassing `validate_governance` (which would itself call
 /// `get_fee_config` and fail against the panicking stub).
@@ -181,4 +218,113 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
     };
 
     client.set_default_rule(&soroban_sdk::vec![&env, admin], &rule);
+}
+
+// ---------------------------------------------------------------------------
+// Malformed governance config (1-field, missing network_fee_bps)
+// ---------------------------------------------------------------------------
+
+/// Governance stub that returns a 1-field config struct (only
+/// `platform_fee_bps`). The settlement contract expects `Option<GovFeeConfig>`
+/// with 2 fields (`platform_fee_bps` + `network_fee_bps`).
+///
+/// The cross-contract deserialization of a mismatched struct shape must fail,
+/// surfacing as `GovernanceCallFailed` (code 311) rather than silently
+/// accepting the config and skipping the network-fee ceiling.
+///
+/// This test proves issue #483: a 1-field governance config is rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn malformed_one_field_config_rejected_write_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let malformed_gov = env.register_contract(None, MalformedGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+
+    // Inject governance that returns a 1-field config.
+    inject_governance(&env, &contract_id, &malformed_gov);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    // set_settlement_rule -> validate_fee_against_governance -> get_fee_config.
+    // The 1-field response cannot deserialize into GovFeeConfig (2 fields),
+    // so GovernanceCallFailed must be raised — the network-fee ceiling must
+    // NOT be silently skipped.
+    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
+}
+
+/// Same malformed 1-field config exercised through `set_default_rule` to
+/// confirm the read-through-validate path also rejects it.
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn malformed_one_field_config_rejected_default_rule() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let malformed_gov = env.register_contract(None, MalformedGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+
+    // Inject governance that returns a 1-field config.
+    inject_governance(&env, &contract_id, &malformed_gov);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    // set_default_rule -> validate_fee_against_governance -> get_fee_config.
+    // Must surface GovernanceCallFailed for malformed 1-field config.
+    client.set_default_rule(&soroban_sdk::vec![&env, admin], &rule);
+}
+
+/// Malformed 1-field config also rejected on the read path (calculate_fee_split
+/// falls through to read_governance_fee_rule when no merchant/default rule is set).
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn malformed_one_field_config_rejected_read_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let malformed_gov = env.register_contract(None, MalformedGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+
+    // Inject governance that returns a 1-field config.
+    inject_governance(&env, &contract_id, &malformed_gov);
+
+    // No rule set → resolution falls through to governance read path.
+    // The 1-field response fails deserialization → GovernanceCallFailed.
+    client.calculate_fee_split(&merchant, &10_000);
 }
