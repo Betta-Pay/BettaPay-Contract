@@ -47,5 +47,9 @@ jobs:
 
       - name: Run script smoke tests
         run: make test_scripts
+
+      - name: Validate CODEOWNERS
+        run: make check_codeowners
+
       - name: Make All
         run: make all

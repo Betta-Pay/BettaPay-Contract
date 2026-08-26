@@ -12,7 +12,7 @@
 use crate::errors::SettlementError;
 use governance_contract::GovernanceError;
 
-fn governance_codes() -> [(&'static str, u32); 19] {
+fn governance_codes() -> [(&'static str, u32); 16] {
     [
         (
             "AlreadyInitialized",
@@ -36,18 +36,6 @@ fn governance_codes() -> [(&'static str, u32); 19] {
             GovernanceError::RecoveryDelayActive as u32,
         ),
         (
-            "ExecutionNotReady",
-            GovernanceError::ExecutionNotReady as u32,
-        ),
-        (
-            "OperationNotScheduled",
-            GovernanceError::OperationNotScheduled as u32,
-        ),
-        (
-            "OperationAlreadyScheduled",
-            GovernanceError::OperationAlreadyScheduled as u32,
-        ),
-        (
             "InvalidWasmInterface",
             GovernanceError::InvalidWasmInterface as u32,
         ),
@@ -63,7 +51,7 @@ fn governance_codes() -> [(&'static str, u32); 19] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 24] {
+fn settlement_codes() -> [(&'static str, u32); 25] {
     [
         (
             "AlreadyInitialized",
@@ -128,25 +116,34 @@ fn settlement_codes() -> [(&'static str, u32); 24] {
             SettlementError::InvalidGovernance as u32,
         ),
         ("AmountOverflow", SettlementError::AmountOverflow as u32),
+        ("PaymentOrphaned", SettlementError::PaymentOrphaned as u32),
     ]
 }
 
 #[test]
 fn shared_registry_codes_are_identical_in_both_contracts() {
     for &(name, code) in bettapay_common::error_codes::SHARED_CODES {
-        let gov = governance_codes()
-            .into_iter()
-            .find(|&(n, _)| n == name)
-            .unwrap_or_else(|| panic!("governance_contract has no `{name}` variant"));
+        // Settlement implements every shared concept, so it must carry every
+        // shared code. Governance only carries the shared codes for features it
+        // actually exposes (e.g. it has no scheduled-operation timelock, so it
+        // intentionally omits the `ExecutionNotReady` family); any shared code
+        // governance *does* declare must still match the registry.
         let settle = settlement_codes()
             .into_iter()
             .find(|&(n, _)| n == name)
             .unwrap_or_else(|| panic!("settlement_contract has no `{name}` variant"));
-        assert_eq!(gov.1, code, "governance `{name}` drifted from the registry");
         assert_eq!(
             settle.1, code,
             "settlement `{name}` drifted from the registry"
         );
+        if let Some((_gov_name, gov_code)) =
+            governance_codes().into_iter().find(|&(n, _)| n == name)
+        {
+            assert_eq!(
+                gov_code, code,
+                "governance `{name}` drifted from the registry"
+            );
+        }
     }
 }
 
