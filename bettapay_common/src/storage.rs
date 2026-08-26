@@ -3,18 +3,33 @@
 //! Each contract keeps its own private `DataKey` enum for keys that are
 //! contract-specific (e.g. settlement's `Merchant(Address)` or governance's
 //! `Anchor(Address)`). The keys that are semantically shared — the pause
-//! flag, the recovery address, and the pending recovery operation — live in
-//! [`CommonDataKey`] so every contract reads and writes them in exactly the
-//! same shape. The admin role is *not* one of these: both contracts store it
-//! as a multisig `Vec<Address>` under their own `DataKey::Admin`, so there is
-//! no single-`Address` shape for this crate to own.
+//! flag, the recovery address, and the pending recovery operation — are
+//! declared exactly once, in [`CommonDataKey`] below, and both contracts
+//! import that type rather than redeclaring their own `Paused` /
+//! `RecoveryAddress` / `PendingRecovery` variants. That single declaration
+//! is what "storage separation" means here: `governance_contract` and
+//! `settlement_contract` each have their own instance-storage ledger entry
+//! (Soroban storage is scoped per contract instance), so sharing this enum
+//! does not share any *data* between them — a settlement contract's
+//! `CommonDataKey::Paused` and a governance contract's
+//! `CommonDataKey::Paused` are two independent booleans in two independent
+//! ledger entries. The type is shared purely so both contracts agree on the
+//! wire shape of these keys; nothing here lets one contract read or write
+//! the other's storage. The admin role is *not* one of these: both
+//! contracts store it as a multisig `Vec<Address>` under their own
+//! `DataKey::Admin`, so there is no single-`Address` shape for this crate
+//! to own.
 //!
-//! The on-chain SCVal encoding of a Soroban `#[contracttype]` enum is based on
-//! the variant name only; the parent enum's Rust name is not part of the
-//! encoding. So a value written under `governance_contract::DataKey::Paused`
-//! reads back identically through `bettapay_common::CommonDataKey::Paused`,
-//! which is what allows both contracts to share this enum without disturbing
-//! any existing storage entry.
+//! Historical note: `Paused` (and `RecoveryAddress` / `PendingRecovery`)
+//! used to be declared redundantly in each contract's own `DataKey` enum
+//! as well as here. That was safe only because the on-chain SCVal encoding
+//! of a Soroban `#[contracttype]` enum is based on the variant name alone —
+//! the parent enum's Rust name is not part of the encoding — so a value
+//! written under the old `governance_contract::DataKey::Paused` read back
+//! identically through `CommonDataKey::Paused`. The duplicate variants have
+//! since been removed from both contracts' `DataKey` enums; `CommonDataKey`
+//! is now the single source for these keys, and no storage migration was
+//! needed to get there.
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
@@ -126,7 +141,55 @@ pub fn bump_instance_ttl(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, vec};
+    use soroban_sdk::{contract, testutils::Address as _, vec};
+
+    /// No-op contract used only to obtain a real, registered contract
+    /// address for [`Env::as_contract`] — instance storage helpers like
+    /// [`is_paused`]/[`set_paused`] can only be exercised inside a
+    /// registered contract's storage context.
+    #[contract]
+    struct DummyContract;
+
+    #[test]
+    fn is_paused_defaults_to_false_and_round_trips_via_common_data_key() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            // No entry written yet — CommonDataKey::Paused is the *only*
+            // pause key either contract can read, so a missing entry must
+            // read back as unpaused rather than panicking.
+            assert!(!is_paused(&env));
+
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn two_contract_instances_have_independent_paused_flags() {
+        // Instance storage is scoped per contract address, so pausing one
+        // instance under CommonDataKey::Paused must not affect another
+        // instance that happens to share the same key type — this is what
+        // "storage separation" means despite governance_contract and
+        // settlement_contract both using CommonDataKey.
+        let env = Env::default();
+        let governance_like = env.register_contract(None, DummyContract);
+        let settlement_like = env.register_contract(None, DummyContract);
+
+        env.as_contract(&governance_like, || {
+            set_paused(&env, true);
+        });
+
+        env.as_contract(&settlement_like, || {
+            assert!(!is_paused(&env));
+        });
+        env.as_contract(&governance_like, || {
+            assert!(is_paused(&env));
+        });
+    }
 
     #[test]
     fn primary_admin_returns_first_entry() {

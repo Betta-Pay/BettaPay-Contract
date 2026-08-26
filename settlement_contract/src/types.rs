@@ -144,10 +144,16 @@ pub struct FeeConfig {
     pub network_fee_bps: u32,
 }
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, and Paused live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
-// contract's own storage without a migration.
+// contract's own storage without a migration. Admin is NOT one of these:
+// both contracts keep it as their own `DataKey::Admin` below, since it's a
+// multisig `Vec<Address>` rather than the single-`Address` shape
+// `CommonDataKey` would need to own it. Storage stays fully separate
+// otherwise - this contract's `DataKey` and `CommonDataKey` share no
+// on-chain state, they simply both read/write the same instance-storage
+// ledger entry via distinct key variants.
 
 #[derive(Clone)]
 #[contracttype]
@@ -189,8 +195,6 @@ pub(crate) enum DataKey {
     DefaultRule,
     /// Persistent — one per payment, high volume.
     Payment(BytesN<32>),
-    /// Instance — singleton boolean, read on every mutating call.
-    Paused,
     /// Storage key for a scheduled operation.
     ScheduledOperation(BytesN<32>),
 }

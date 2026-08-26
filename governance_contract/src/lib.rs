@@ -202,10 +202,16 @@ const SYSTEM_PARAM_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
 const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, and Paused live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
-// contract's own storage without a migration.
+// contract's own storage without a migration. Admin is NOT one of these:
+// both contracts keep it as their own `DataKey::Admin` below, since it's a
+// multisig `Vec<Address>` rather than the single-`Address` shape
+// `CommonDataKey` would need to own it. Storage stays fully separate
+// otherwise - this contract's `DataKey` and `CommonDataKey` share no
+// on-chain state, they simply both read/write the same instance-storage
+// ledger entry via distinct key variants.
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
@@ -229,9 +235,6 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
-
-    /// Storage key for the pause state flag.
-    Paused,
 
     /// Storage key for a scheduled operation.
     /// Uses persistent storage, keyed by operation hash, to store execution timestamp.
