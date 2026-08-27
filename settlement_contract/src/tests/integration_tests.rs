@@ -731,6 +731,7 @@ proptest! {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #313)")]
 fn calculate_fee_split_rejects_amount_zero() {
     let (_env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);

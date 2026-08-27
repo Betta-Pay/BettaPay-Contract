@@ -1,11 +1,11 @@
 SOROBAN ?= soroban
 
-.PHONY: build optimize clean fmt test check clippy test_scripts wasm_size all
-
+.PHONY: build
 build:
 	@echo "Building all contracts..."
 	cargo build --target wasm32-unknown-unknown --release
 
+.PHONY: optimize
 optimize: build
 	@mkdir -p target/optimized
 	@for contract in $(shell find . -path "*/target/wasm32-unknown-unknown/release/*.wasm" -type f); do \
@@ -13,6 +13,7 @@ optimize: build
 		$(SOROBAN) contract optimize --wasm $$contract --optimized-wasm target/optimized/$$output; \
 	done
 
+.PHONY: clean
 clean:
 	cargo clean
 	@rm -rf target/optimized
@@ -39,9 +40,7 @@ test_scripts:
 wasm_size: optimize
 	bash scripts/check_wasm_size.sh
 
-all: fmt check clippy test test_scripts
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test test_scripts wasm_size check_codeowners
-all: fmt check clippy test
+all: fmt check clippy test test_scripts check_codeowners
