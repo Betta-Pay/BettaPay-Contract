@@ -89,10 +89,13 @@ pub struct ScheduledOp {
     pub execute_at: u64,
 }
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, Paused, and Threshold live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
-// contract's own storage without a migration.
+// contract's own storage without a migration, and for what "storage
+// separation" means for a key type shared this way. Admin stays local:
+// this contract stores it as a multisig `Vec<Address>` under its own
+// `DataKey::Admin`, which CommonDataKey does not own.
 
 #[derive(Clone)]
 #[contracttype]
