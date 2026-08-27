@@ -9,15 +9,10 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_admin, read_admins, read_governance,
-    read_pending_recovery, read_recovery_address, read_rule_or_default, read_threshold,
-    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
-    validate_nonzero_address, verify_admin_auth, write_admins,
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
-    read_threshold,
-    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -452,7 +447,7 @@ impl SettlementContract {
             SettlementError::ZeroAddress,
         );
         let admin = read_admin(env);
-        
+
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
         for i in 0..admins.len() {
@@ -537,7 +532,6 @@ impl SettlementContract {
         // 2. Fee range (hardcoded protocol bounds)
         // 3. Governance ceiling
         // 4. Settlement delay
-        if !is_merchant_registered_internal(env, merchant.clone()) {
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }

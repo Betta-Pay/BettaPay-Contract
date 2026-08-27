@@ -307,10 +307,13 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert!(
+        client.is_paused(),
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -585,7 +588,6 @@ fn upgrade_rejects_non_admin_before_interface_check() {
 fn same_error_unregistered_merchant_direct_and_scheduled() {
     let (env, client, admins, _merchant) = setup();
     let unregistered = Address::generate(&env);
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: 100,
         network_fee_bps: 50,
@@ -599,7 +601,7 @@ fn same_error_unregistered_merchant_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetSettlementRule(unregistered, rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -612,7 +614,6 @@ fn same_error_unregistered_merchant_direct_and_scheduled() {
 fn same_error_invalid_fee_bps_direct_and_scheduled() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
         network_fee_bps: 50,
@@ -626,7 +627,7 @@ fn same_error_invalid_fee_bps_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetSettlementRule(merchant, rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -639,7 +640,6 @@ fn same_error_invalid_fee_bps_direct_and_scheduled() {
 fn same_error_fee_sum_exceeds_denominator_direct_and_scheduled() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: 6000,
         network_fee_bps: 5000,
@@ -653,7 +653,7 @@ fn same_error_fee_sum_exceeds_denominator_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetSettlementRule(merchant, rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -666,7 +666,6 @@ fn same_error_fee_sum_exceeds_denominator_direct_and_scheduled() {
 fn same_error_invalid_settlement_delay_direct_and_scheduled() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: 100,
         network_fee_bps: 50,
@@ -680,7 +679,7 @@ fn same_error_invalid_settlement_delay_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetSettlementRule(merchant, rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -694,7 +693,6 @@ fn same_error_invalid_settlement_delay_direct_and_scheduled() {
 #[test]
 fn same_error_invalid_fee_bps_default_rule_direct_and_scheduled() {
     let (env, client, admins, _merchant) = setup();
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
         network_fee_bps: 50,
@@ -708,7 +706,7 @@ fn same_error_invalid_fee_bps_default_rule_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetDefaultRule(rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -718,7 +716,6 @@ fn same_error_invalid_fee_bps_default_rule_direct_and_scheduled() {
 #[test]
 fn same_error_fee_sum_exceeds_denominator_default_rule_direct_and_scheduled() {
     let (env, client, admins, _merchant) = setup();
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: 6000,
         network_fee_bps: 5000,
@@ -732,7 +729,7 @@ fn same_error_fee_sum_exceeds_denominator_default_rule_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetDefaultRule(rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);
@@ -742,7 +739,6 @@ fn same_error_fee_sum_exceeds_denominator_default_rule_direct_and_scheduled() {
 #[test]
 fn same_error_invalid_settlement_delay_default_rule_direct_and_scheduled() {
     let (env, client, admins, _merchant) = setup();
-    let admin = admins.get(0).unwrap();
     let rule = SettlementRule {
         platform_fee_bps: 100,
         network_fee_bps: 50,
@@ -756,7 +752,7 @@ fn same_error_invalid_settlement_delay_default_rule_direct_and_scheduled() {
 
     // --- Scheduled path ---
     let operation = Operation::SetDefaultRule(rule);
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     let result = client.try_execute(&operation);

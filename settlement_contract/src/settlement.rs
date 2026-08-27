@@ -33,9 +33,6 @@ impl SettlementContract {
         // 2. Fee range (hardcoded protocol bounds)
         // 3. Governance ceiling
         // 4. Settlement delay
-        if !is_merchant_registered_internal(&env, merchant.clone()) {
-        validate_fee_against_governance(&env, &rule);
-
         if !is_merchant_registered_and_bump_ttl(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }

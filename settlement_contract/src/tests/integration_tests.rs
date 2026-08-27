@@ -1100,7 +1100,6 @@ fn store_payment_reference_prevents_reentrancy() {
 #[test]
 #[should_panic(expected = "Error(Contract, #314)")]
 fn get_payments_rejects_batch_too_large() {
-    let (env, _gov, _gov_admins, settle_client, _settle_admins, _merchant) = setup_both();
     let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
@@ -1110,13 +1109,11 @@ fn get_payments_rejects_batch_too_large() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    settle_client.get_payments(&refs);
     settle_client.get_payments(&merchant, &refs);
 }
 
 #[test]
 fn get_payments_accepts_max_batch_size() {
-    let (env, _gov, _gov_admins, settle_client, _settle_admins, _merchant) = setup_both();
     let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
@@ -1125,7 +1122,6 @@ fn get_payments_accepts_max_batch_size() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    let payments = settle_client.get_payments(&refs);
     let payments = settle_client.get_payments(&merchant, &refs);
     assert_eq!(payments.len(), 0); // No payments stored, but succeeds
 }
@@ -1197,8 +1193,15 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
             last_event_sym = sym;
         } else if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
             update_found = true;
-            assert!(fallback_found, "bootstrap_fallback must precede settlement_rule_updated");
-            assert_eq!(last_event_sym, Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT), "events must be sequential");
+            assert!(
+                fallback_found,
+                "bootstrap_fallback must precede settlement_rule_updated"
+            );
+            assert_eq!(
+                last_event_sym,
+                Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT),
+                "events must be sequential"
+            );
             last_event_sym = sym;
         }
     }
