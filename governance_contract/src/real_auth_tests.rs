@@ -17,7 +17,7 @@ fn fee_anchor_and_system_param_writes_require_real_authorization() {
     let key = Symbol::new(&env, "real_auth");
     env.mock_auths(&[]);
 
-assert!(client
+    assert!(client
         .try_set_fee_config(&admins, &valid_fee_config())
         .is_err());
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
