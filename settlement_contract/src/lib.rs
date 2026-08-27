@@ -184,7 +184,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 use soroban_sdk::contract;
 
 pub use errors::SettlementError;
-pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, SettlementRule};
+pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///

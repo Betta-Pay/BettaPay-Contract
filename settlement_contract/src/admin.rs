@@ -14,7 +14,7 @@ use crate::storage::{
     read_threshold, validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
 };
-use crate::types::{DataKey, Operation, SettlementRule};
+use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
@@ -259,15 +259,30 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SettlementError::OperationAlreadyScheduled);
+        // The hash only indexes storage; a match on `key` alone does not
+        // prove `operation` is what was scheduled. Compare the stored XDR
+        // bytes to tell a genuine re-schedule of the same operation (still
+        // rejected as a duplicate) apart from two *different* operations
+        // whose hashes happen to collide (issue #570).
+        if let Some(existing) = env.storage().persistent().get::<_, ScheduledOp>(&key) {
+            if existing.operation_xdr == operation_xdr {
+                panic_with_error!(&env, SettlementError::OperationAlreadyScheduled);
+            }
+            panic_with_error!(&env, SettlementError::OperationHashCollision);
         }
 
         let execute_at = env.ledger().timestamp() + execute_in;
-        env.storage().persistent().set(&key, &execute_at);
+        env.storage().persistent().set(
+            &key,
+            &ScheduledOp {
+                operation_xdr,
+                execute_at,
+            },
+        );
         env.storage()
             .persistent()
             .extend_ttl(&key, 17280 * 14, 17280 * 30);
@@ -280,16 +295,24 @@ impl SettlementContract {
 
     /// Executes a previously scheduled administrative operation.
     pub fn execute(env: Env, operation: Operation) {
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        let execute_at: u64 = env
+        let scheduled: ScheduledOp = env
             .storage()
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
 
-        if env.ledger().timestamp() < execute_at {
+        // Guard against a hash collision letting an operation that was never
+        // scheduled ride the timelock slot of a different, already-pending
+        // one (issue #570).
+        if scheduled.operation_xdr != operation_xdr {
+            panic_with_error!(&env, SettlementError::OperationNotScheduled);
+        }
+
+        if env.ledger().timestamp() < scheduled.execute_at {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
@@ -326,10 +349,19 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let caller = signers.get(0).unwrap();
 
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        if !env.storage().persistent().has(&key) {
+        let scheduled: ScheduledOp = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
+
+        // A hash match alone doesn't prove this is the operation that was
+        // scheduled — see the equivalent check in `execute()` (issue #570).
+        if scheduled.operation_xdr != operation_xdr {
             panic_with_error!(&env, SettlementError::OperationNotScheduled);
         }
 
