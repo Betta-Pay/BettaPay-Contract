@@ -224,15 +224,6 @@ enum DataKey {
     /// Storage key for the contract admin addresses.
     Admin,
 
-    /// Storage key for the multisig admin threshold.
-    Threshold,
-
-    /// Storage key for the recovery address that can reset the admin.
-    RecoveryAddress,
-
-    /// Storage key for the pending recovery operation.
-    PendingRecovery,
-
     /// Storage key for arbitrary system parameters.
     SystemParam(Symbol),
 
@@ -241,9 +232,6 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
-
-    /// Storage key for the pause state flag.
-    Paused,
 }
 
 // Discriminants below are pinned to `bettapay_common::error_codes` so that a
@@ -358,7 +346,7 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &admins);
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &threshold);
+            .set(&CommonDataKey::Threshold, &threshold);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
@@ -492,7 +480,7 @@ impl GovernanceContract {
         let old_admin = storage::primary_admin(&old_admins).unwrap();
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
-        env.storage().instance().set(&DataKey::Threshold, &1u32);
+        env.storage().instance().set(&CommonDataKey::Threshold, &1u32);
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
@@ -530,7 +518,7 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &new_admins);
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &new_threshold);
+            .set(&CommonDataKey::Threshold, &new_threshold);
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
@@ -541,17 +529,17 @@ impl GovernanceContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
-
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
 
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold + 1);
+
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &new_threshold);
+            .set(&CommonDataKey::Threshold, &new_threshold);
         env.events().publish(
             (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
             (current_threshold, new_threshold),
@@ -618,6 +606,12 @@ impl GovernanceContract {
         env.storage().persistent().get(&storage_key)
     }
 
+    /// Sets the global fee configuration.
+    ///
+    /// **Fee Ceiling Policy**: Governance is the trust root for cross-contract fee ceilings.
+    /// While individual fees are bounded by `MAX_FEE_BPS` and their sum by `BPS_DENOMINATOR`,
+    /// Governance is fully trusted to set safe rates within those technical boundaries.
+    ///
     pub fn set_fee_config(env: Env, signers: Vec<Address>, config: FeeConfig) {
         assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
@@ -720,7 +714,7 @@ fn read_admins(env: &Env) -> Vec<Address> {
 fn read_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::Threshold)
+        .get(&CommonDataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::NotInitialized))
 }
 
@@ -836,8 +830,13 @@ mod anchor_removal_tests;
 mod anchor_no_event_error_tests;
 
 #[cfg(test)]
+mod real_auth_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::testutils::storage::Persistent;
     use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
@@ -1039,6 +1038,34 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn set_fee_config_rejects_fees_exceeding_ceiling() {
+        let (_env, client, admins, _recovery) = setup();
+        
+        // Sum exceeds BPS_DENOMINATOR
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_000,
+            network_fee_bps: 5_001,
+        };
+
+        client.set_fee_config(&admins, &cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn set_fee_config_rejects_individual_fee_exceeding_max() {
+        let (_env, client, admins, _recovery) = setup();
+        
+        // Individual fee exceeds MAX_FEE_BPS (governance trust root)
+        let cfg = FeeConfig {
+            platform_fee_bps: 5_001,
+            network_fee_bps: 0,
+        };
+
+        client.set_fee_config(&admins, &cfg);
+    }
+
+    #[test]
     fn upserts_and_removes_anchor() {
         let (env, client, admins, _recovery) = setup();
         let asset = Address::generate(&env);
@@ -1196,6 +1223,93 @@ mod tests {
         );
     }
 
+    proptest! {
+        #[test]
+        fn valid_fee_configs_are_accepted(
+            (platform_fee_bps, network_fee_bps) in
+                (5u32..=5_000, 5u32..=5_000)
+                    .prop_filter("fee sum must fit the denominator", |(platform, network)| {
+                        *platform + *network <= BPS_DENOMINATOR
+                    }),
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+            let admin = Address::generate(&env);
+            let recovery = Address::generate(&env);
+            let admins = vec![&env, admin];
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.init(&admins, &1, &recovery);
+
+            let config = FeeConfig {
+                platform_fee_bps,
+                network_fee_bps,
+            };
+            client.set_fee_config(&admins, &config);
+            let stored = client.get_fee_config().unwrap();
+            prop_assert_eq!(stored.platform_fee_bps, platform_fee_bps);
+            prop_assert_eq!(stored.network_fee_bps, network_fee_bps);
+        }
+
+        #[test]
+        fn fee_configs_with_an_out_of_range_leg_are_rejected(
+            platform_fee_bps in 0u32..=5_000,
+            network_fee_bps in 0u32..=5_000,
+            invalid_platform in any::<bool>(),
+        ) {
+            let invalid_value = if invalid_platform {
+                5_001
+            } else {
+                4
+            };
+            let config = if invalid_platform {
+                FeeConfig {
+                    platform_fee_bps: invalid_value,
+                    network_fee_bps,
+                }
+            } else {
+                FeeConfig {
+                    platform_fee_bps,
+                    network_fee_bps: invalid_value,
+                }
+            };
+            let env = Env::default();
+            env.mock_all_auths();
+            let admin = Address::generate(&env);
+            let recovery = Address::generate(&env);
+            let admins = vec![&env, admin];
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.init(&admins, &1, &recovery);
+
+            prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
+        }
+
+        #[test]
+        fn threshold_validation_accepts_exact_admin_count_and_rejects_out_of_range(
+            admin_count in 1u32..=5,
+            threshold in 0u32..=6,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+            let mut admins = Vec::new(&env);
+            for _ in 0..admin_count {
+                admins.push_back(Address::generate(&env));
+            }
+            let recovery = Address::generate(&env);
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+
+            let result = client.try_init(&admins, &threshold, &recovery);
+            if threshold == 0 || threshold > admin_count {
+                prop_assert!(result.is_err());
+            } else {
+                prop_assert!(result.is_ok());
+                prop_assert_eq!(client.get_threshold(), threshold);
+            }
+        }
+    }
+
     #[test]
     #[should_panic]
     fn rejects_removing_unknown_anchor() {
@@ -1321,6 +1435,46 @@ mod tests {
         // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
         let single_signer = vec![&env, a1.clone()];
         client.change_threshold(&single_signer, &2);
+    }
+
+    // Issue #565: setting a threshold above the admin count must surface
+    // `InvalidThreshold` (#14), not `Unauthorized` (#3) from the auth gate.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &1, &recovery);
+
+        // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
+        client.change_threshold(&admins, &3);
+    }
+
+    // Issue #565: threshold == 0 must also be rejected before the auth gate.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn change_threshold_zero_rejects_with_invalid_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &2, &recovery);
+
+        client.change_threshold(&admins, &0);
     }
 
     #[test]

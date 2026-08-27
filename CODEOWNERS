@@ -1,0 +1,39 @@
+# CODEOWNERS for BettaPay-Contract
+#
+# This file defines who must review changes to cross-cutting or
+# governance-sensitive paths before they can be merged (ADRs, shared
+# protocol constants, deployment/CI scripts, and repo-governance files).
+#
+# NOTE FOR MAINTAINERS: The handles below are placeholders inferred from
+# commit history (most active contributor / merger of PRs into `main`).
+# Replace `@0xjhay` with the actual maintainer username(s) and/or create a
+# `@Betta-Pay/maintainers` GitHub team and reference it here once it
+# exists, so review load isn't pinned to a single person.
+#
+# Syntax reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# - Last matching pattern wins, so more specific rules are listed after
+#   more general ones.
+# - Patterns are relative to the repository root and use gitignore-style
+#   globbing.
+
+# Default fallback: unmatched paths have no required owner.
+
+# Architecture Decision Records — decisions here affect both contracts and
+# must stay consistent with the code that implements them.
+/adr/                              @0xjhay
+
+# Shared protocol constants — used by both governance_contract and
+# settlement_contract; drift here silently changes fee/TTL/recovery
+# behavior across the whole protocol.
+bettapay_common/src/constants.rs   @0xjhay
+**/constants.rs                    @0xjhay
+
+# Deployment / simulation / CI-support scripts.
+/scripts/                          @0xjhay
+/Makefile                          @0xjhay
+
+# Repo governance and process files.
+/CODEOWNERS                        @0xjhay
+/SECURITY.md                       @0xjhay
+/CONTRIBUTING.md                   @0xjhay
+/.github/workflows/                @0xjhay
