@@ -3,7 +3,10 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Symbol, 
 use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
-use crate::storage::{assert_not_paused, is_merchant_registered_internal, read_rule_or_default};
+use crate::storage::{
+    assert_not_paused, is_merchant_registered_internal, read_rule_or_default,
+    read_rule_or_default_readonly,
+};
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, MIN_PAYMENT_AMOUNT,
@@ -196,7 +199,9 @@ impl SettlementContract {
         if amount < MIN_PAYMENT_AMOUNT {
             panic_with_error!(env, SettlementError::AmountTooSmall);
         }
-        let rule = read_rule_or_default(&env, merchant);
+        // Quote reads must be side-effect free: do not extend merchant/rule
+        // TTLs and do not emit bootstrap telemetry for arbitrary callers.
+        let rule = read_rule_or_default_readonly(&env, merchant);
         calculate_split(&env, amount, &rule)
     }
 

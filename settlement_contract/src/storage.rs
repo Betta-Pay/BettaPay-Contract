@@ -162,6 +162,21 @@ pub(crate) fn is_merchant_registered_internal(env: &Env, merchant: Address) -> b
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, and finally using the bootstrap fallback.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
+    read_rule_or_default_with_effects(env, merchant, true)
+}
+
+/// Resolves a settlement rule without changing persistent TTLs or emitting
+/// bootstrap telemetry. This is used by public quote/read paths, where any
+/// caller can otherwise keep entries alive and generate unbounded events.
+pub(crate) fn read_rule_or_default_readonly(env: &Env, merchant: Address) -> SettlementRule {
+    read_rule_or_default_with_effects(env, merchant, false)
+}
+
+fn read_rule_or_default_with_effects(
+    env: &Env,
+    merchant: Address,
+    apply_effects: bool,
+) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
@@ -169,9 +184,11 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         .persistent()
         .get::<_, SettlementRule>(&merchant_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        if apply_effects {
+            env.storage()
+                .persistent()
+                .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        }
         return rule;
     }
     // Fall back to the admin-controlled global default when present.
@@ -181,9 +198,11 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         .persistent()
         .get::<_, SettlementRule>(&default_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        if apply_effects {
+            env.storage()
+                .persistent()
+                .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        }
         return rule;
     }
     // Protocol fee source: governance's FeeConfig, when available.
@@ -191,10 +210,12 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
-    env.events().publish(
-        (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
-        BOOTSTRAP_DEFAULT_RULE,
-    );
+    if apply_effects {
+        env.events().publish(
+            (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
+            BOOTSTRAP_DEFAULT_RULE,
+        );
+    }
     BOOTSTRAP_DEFAULT_RULE
 }
 

@@ -2,7 +2,7 @@
 
 use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
-use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::testutils::{Address as _, Ledger, PersistentStorage};
 use soroban_sdk::Address;
 
 use super::setup;
@@ -26,6 +26,26 @@ fn scheduled_operation_executes_only_after_delay() {
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
     assert_eq!(client.get_threshold(), 1);
     assert!(client.try_execute(&operation).is_err());
+}
+
+#[test]
+fn calculate_fee_split_read_is_ttl_and_event_neutral() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let merchant_key = crate::types::DataKey::Merchant(merchant.clone());
+    let before_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&merchant_key)
+    });
+    let before_events = env.events().all().len();
+
+    client.calculate_fee_split(&merchant, &1_000);
+
+    let after_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&merchant_key)
+    });
+    assert_eq!(after_ttl, before_ttl);
+    assert_eq!(env.events().all().len(), before_events);
 }
 
 #[test]
