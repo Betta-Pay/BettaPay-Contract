@@ -56,7 +56,7 @@ What is on the ledger today, and which storage kind holds it.
 | `DefaultRule` | persistent | `SettlementRule` |
 | `Merchant(Address)` | persistent | merchant registration |
 | `Rule(Address)` | persistent | `SettlementRule` |
-| `Payment(BytesN<32>)` | persistent | `PaymentRecord` |
+| `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` |
 
 ### Governance contract
 
@@ -93,11 +93,13 @@ no "scan the prefix". Every read requires the caller to already know the exact
 key.
 
 This is visible in the existing API surface: `get_payments` takes
-`references: Vec<BytesN<32>>` from the caller rather than returning all
-payments, because returning all payments is not something the contract can do.
+`merchant` plus `references: Vec<BytesN<32>>` from the caller rather than
+returning all payments, because returning all payments is not something the
+contract can do.
 
 So "read the old-format data from storage" is only a well-defined instruction
-for fixed keys. For `Payment(BytesN<32>)` the contract does not and cannot know
+for fixed keys. For `Payment(Address, BytesN<32>)` the contract does not and
+cannot know
 which references exist.
 
 ### 2. A contract can only touch its own storage
@@ -304,8 +306,8 @@ impl PaymentRecordV1 {
 Updating the actual contract getter entry point [`get_payment_reference`](settlement_contract/src/payments.rs) to convert in place on read:
 
 ```rust,ignore
-pub fn get_payment_reference(env: Env, reference: BytesN<32>) -> Option<PaymentRecord> {
-    let key = DataKey::Payment(reference);
+pub fn get_payment_reference(env: Env, merchant: Address, reference: BytesN<32>) -> Option<PaymentRecord> {
+    let key = DataKey::Payment(merchant, reference);
 
     // New format first: after conversion this is the only branch taken.
     if let Some(record) = env.storage().persistent().get::<_, PaymentRecord>(&key) {

@@ -21,7 +21,7 @@ use soroban_sdk::{Address, Env};
 
 mod panicking_gov {
     use soroban_sdk::{contract, contractimpl, Env};
-    use crate::FeeConfig;
+    use crate::GovFeeConfig;
 
     /// A governance stub whose `get_fee_config` always traps (simulates a
     /// broken or mis-deployed governance contract).
@@ -31,7 +31,7 @@ mod panicking_gov {
     #[contractimpl]
     impl PanickingGovernance {
         #[allow(unused_variables)]
-        pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
+        pub fn get_fee_config(env: Env) -> Option<GovFeeConfig> {
             panic!("governance trap")
         }
     }
@@ -104,11 +104,11 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
     client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
-    // Empty governance returns None — bootstrap default should apply (100 bps platform, 0 network).
+    // Empty governance returns None — bootstrap default should apply (100 bps platform, 5 network).
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
-    assert_eq!(split.network_fee_amount, 0);
-    assert_eq!(split.merchant_amount, 9_900);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------

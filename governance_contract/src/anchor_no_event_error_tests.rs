@@ -212,12 +212,23 @@ fn update_system_param_emits_no_event_when_unauthorized() {
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn change_threshold_emits_no_event_when_insufficient_signatures() {
-    let (env, client, admins) = setup();
-    // Threshold is 2, so change_threshold requires 3 signatures (current + 1).
-    let single_signer = vec![&env, admins.get(0).unwrap()];
+    // Manual setup: 3 admins, threshold 2.  change_threshold requires 3 signers
+    // (current_threshold + 1), but we only provide 1 → Unauthorized (#3).
+    // The new_threshold (2) is within bounds so the bound check passes first.
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let a3 = Address::generate(&env);
+    let admins = vec![&env, a1.clone(), a2.clone(), a3.clone()];
+    let recovery = Address::generate(&env);
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    client.init(&admins, &2, &recovery);
 
+    let single_signer = vec![&env, a1.clone()];
     let prev = env.events().all().len();
-    client.change_threshold(&single_signer, &3);
+    client.change_threshold(&single_signer, &2);
     assert_eq!(
         env.events().all().len(),
         prev,
