@@ -9,12 +9,13 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_admin, read_admins, read_governance,
-    read_pending_recovery, read_recovery_address, read_rule_or_default, read_threshold,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
+    read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
+    read_threshold,
     validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
 };
-use crate::types::{DataKey, Operation, SettlementRule};
+use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
@@ -183,17 +184,17 @@ impl SettlementContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
-
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, SettlementError::InvalidThreshold);
         }
 
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold + 1);
+
         env.storage()
             .instance()
-            .set(&DataKey::Threshold, &new_threshold);
+            .set(&CommonDataKey::Threshold, &new_threshold);
         env.events().publish(
             (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
             (current_threshold, new_threshold),
@@ -257,26 +258,38 @@ impl SettlementContract {
     }
 
     /// Schedules an administrative operation to be executed after a timelock.
-    pub fn schedule(env: Env, caller: Address, operation: Operation, execute_in: u64) {
-        let admin = read_admin(&env);
-        if caller != admin {
-            panic_with_error!(&env, SettlementError::Unauthorized);
-        }
-        caller.require_auth();
+    pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        let caller = signers.get(0).unwrap();
 
         if execute_in < DEFAULT_TIMELOCK_DELAY_SECONDS {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SettlementError::OperationAlreadyScheduled);
+        // The hash only indexes storage; a match on `key` alone does not
+        // prove `operation` is what was scheduled. Compare the stored XDR
+        // bytes to tell a genuine re-schedule of the same operation (still
+        // rejected as a duplicate) apart from two *different* operations
+        // whose hashes happen to collide (issue #570).
+        if let Some(existing) = env.storage().persistent().get::<_, ScheduledOp>(&key) {
+            if existing.operation_xdr == operation_xdr {
+                panic_with_error!(&env, SettlementError::OperationAlreadyScheduled);
+            }
+            panic_with_error!(&env, SettlementError::OperationHashCollision);
         }
 
         let execute_at = env.ledger().timestamp() + execute_in;
-        env.storage().persistent().set(&key, &execute_at);
+        env.storage().persistent().set(
+            &key,
+            &ScheduledOp {
+                operation_xdr,
+                execute_at,
+            },
+        );
         env.storage()
             .persistent()
             .extend_ttl(&key, 17280 * 14, 17280 * 30);
@@ -289,16 +302,24 @@ impl SettlementContract {
 
     /// Executes a previously scheduled administrative operation.
     pub fn execute(env: Env, operation: Operation) {
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        let execute_at: u64 = env
+        let scheduled: ScheduledOp = env
             .storage()
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
 
-        if env.ledger().timestamp() < execute_at {
+        // Guard against a hash collision letting an operation that was never
+        // scheduled ride the timelock slot of a different, already-pending
+        // one (issue #570).
+        if scheduled.operation_xdr != operation_xdr {
+            panic_with_error!(&env, SettlementError::OperationNotScheduled);
+        }
+
+        if env.ledger().timestamp() < scheduled.execute_at {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
@@ -331,17 +352,23 @@ impl SettlementContract {
     }
 
     /// Cancels a scheduled administrative operation.
-    pub fn cancel(env: Env, caller: Address, operation: Operation) {
-        let admin = read_admin(&env);
-        if caller != admin {
-            panic_with_error!(&env, SettlementError::Unauthorized);
-        }
-        caller.require_auth();
+    pub fn cancel(env: Env, signers: Vec<Address>, operation: Operation) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        let caller = signers.get(0).unwrap();
 
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 
-        if !env.storage().persistent().has(&key) {
+        let scheduled: ScheduledOp = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
+
+        // A hash match alone doesn't prove this is the operation that was
+        // scheduled — see the equivalent check in `execute()` (issue #570).
+        if scheduled.operation_xdr != operation_xdr {
             panic_with_error!(&env, SettlementError::OperationNotScheduled);
         }
 
@@ -409,6 +436,15 @@ impl SettlementContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
+    /// Internal method to register a merchant.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
+    /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
+    /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
+    /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     fn _register_merchant(env: &Env, merchant: Address) {
         assert_not_paused(env);
         validate_nonzero_address(
@@ -418,6 +454,14 @@ impl SettlementContract {
             SettlementError::ZeroAddress,
         );
         let admin = read_admin(env);
+        
+        // Prevent an admin from being registered as a merchant
+        let admins = read_admins(env);
+        for i in 0..admins.len() {
+            if admins.get(i).unwrap() == merchant {
+                panic_with_error!(env, SettlementError::InvalidAdmin);
+            }
+        }
 
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
@@ -437,6 +481,12 @@ impl SettlementContract {
         );
     }
 
+    /// Internal method to unregister a merchant.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not currently registered.
     fn _unregister_merchant(env: &Env, merchant: Address) {
         assert_not_paused(env);
         let admin = read_admin(env);
@@ -448,17 +498,27 @@ impl SettlementContract {
 
         env.storage().persistent().remove(&key);
 
+        // Orphan the merchant's payment history, matching the direct
+        // unregister_merchant path (issue #490).
+        let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+        env.storage().persistent().set(&archived_key, &());
+        env.storage().persistent().extend_ttl(
+            &archived_key,
+            MERCHANT_TTL_THRESHOLD,
+            MERCHANT_TTL_BUMP,
+        );
+
         let rule_key = DataKey::Rule(merchant.clone());
         let old_rule: Option<SettlementRule> = env.storage().persistent().get(&rule_key);
         if let Some(old_rule) = old_rule {
             env.storage().persistent().remove(&rule_key);
-            env.events().publish(
-                (
-                    Symbol::new(env, events::SETTLEMENT_RULE_CLEARED_EVENT),
-                    merchant.clone(),
-                ),
-                (admin.clone(), old_rule),
-            );
+            // Same canonical event shape as clear_settlement_rule (issue #491).
+            let fallback = env
+                .storage()
+                .persistent()
+                .get::<_, SettlementRule>(&DataKey::DefaultRule)
+                .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
+            events::emit_settlement_rule_cleared(env, &merchant, &admin, &old_rule, &fallback);
         }
 
         env.events().publish(
@@ -474,7 +534,7 @@ impl SettlementContract {
         assert_not_paused(env);
         let admin = read_admin(env);
 
-        if !is_merchant_registered_internal(env, merchant.clone()) {
+        if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
         if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
