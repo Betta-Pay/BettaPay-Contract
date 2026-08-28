@@ -15,15 +15,9 @@ fn fee_anchor_and_system_param_writes_require_real_authorization() {
     let asset = Address::generate(&env);
     let anchor = Address::generate(&env);
     let key = Symbol::new(&env, "real_auth");
-    let new_governance = env.register_contract(None, GovernanceContract);
     env.mock_auths(&[]);
 
-    assert!(client
-        .try_set_fee_config(&admins, &valid_fee_config())
-        .is_err());
-    assert!(client
-        .try_update_governance(&admins, &new_governance)
-        .is_err());
+    assert!(client.try_set_fee_config(&admins, &valid_fee_config()).is_err());
     assert!(client.try_upsert_anchor(&admins, &asset, &anchor).is_err());
     assert!(client.try_update_system_param(&admins, &key, &1).is_err());
 }

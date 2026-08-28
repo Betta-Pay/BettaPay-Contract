@@ -58,7 +58,14 @@
 //! cause of the emergency:
 //! - `upgrade` — deploy a fix
 //! - `transfer_admin` — rotate compromised keys
+//! - `change_threshold` — re-balance the admin multisig
 //! - `update_system_param` — adjust system configuration
+//! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — repair a
+//!   lost or corrupted admin set
+//!
+//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes` and
+//! `pause_allows_admin_transfer_threshold_and_recovery`. See also
+//! [`adr/001-selective-pause-model.md`](https://github.com/Betta-Pay/BettaPay-Contract/blob/main/adr/001-selective-pause-model.md).
 //!
 //! ### Fee Configuration
 //! [`GovernanceContract::set_fee_config`] stores a [`FeeConfig`] struct that
@@ -218,6 +225,10 @@ const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
 // contract's own storage without a migration.
+//
+// The schema-version marker (issue #507) is instance storage and is written
+// at `init`, so the first real storage migration has a defined baseline to
+// distinguish "pre-marker" from "current" data.
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
@@ -232,7 +243,15 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
+
+    /// Instance-storage schema version (u32) written at `init`. Baseline for
+    /// the first storage migration (issue #507).
+    SchemaVersion,
 }
+
+/// The schema version this build expects. `init` writes this value and
+/// `migrate` advances any stored value below it.
+const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 // Discriminants below are pinned to `bettapay_common::error_codes` so that a
 // numeric error code means the same thing in both contracts (issue #517).
@@ -345,6 +364,9 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
         let admin = admins.get(0).unwrap();
         env.events()
             .publish((Symbol::new(&env, events::INITIALIZED_EVENT),), admin);
@@ -463,8 +485,13 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::RecoveryDelayActive);
         }
 
-        let old_admins = read_admins(&env);
-        let old_admin = storage::primary_admin(&old_admins).unwrap();
+        // Issue #514: never let event-building read the possibly-corrupt admin
+        // entry and abort recovery before it can repair the set. Resolve the
+        // old admin to `Option` and fall back to the zero-address sentinel
+        // when the entry is missing or has no primary admin, so recovery
+        // always succeeds in replacing the set.
+        let old_admin = read_optional_primary_admin(&env);
+
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
         env.storage()
@@ -557,6 +584,29 @@ impl GovernanceContract {
 
     pub fn is_paused(env: Env) -> bool {
         storage::is_paused(&env)
+    }
+
+    /// Idempotent schema migration entry point.
+    ///
+    /// Issue #507: ships the schema-version marker and a migration entry point
+    /// so the first real storage migration has a defined baseline. There is no
+    /// existing storage-format difference to convert yet, so calling `migrate`
+    /// simply confirms the `SchemaVersion` marker. It is admin-gated and
+    /// idempotent: a contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
+    pub fn migrate(env: Env, signers: Vec<Address>) {
+        assert_not_paused(&env);
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        let admin = signers.get(0).unwrap();
+
+        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
+            env.storage()
+                .instance()
+                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+        }
+        env.events().publish(
+            (Symbol::new(&env, events::MIGRATED_EVENT),),
+            (admin, CURRENT_SCHEMA_VERSION),
+        );
     }
 
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
@@ -693,7 +743,12 @@ impl GovernanceContract {
 }
 
 fn read_admins(env: &Env) -> Vec<Address> {
-    storage::bump_instance_ttl(env);
+    // Admin reads use the 50k/100k instance policy (issue #515), matching
+    // settlement's `read_admins` and ADR 003's "Admin & Governance" guidance,
+    // rather than the standard 14/30-day `bump_instance_ttl` policy.
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     env.storage()
         .instance()
         .get(&DataKey::Admin)
@@ -766,6 +821,32 @@ fn read_pending_recovery(env: &Env) -> PendingRecovery {
         .instance()
         .get(&CommonDataKey::PendingRecovery)
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending))
+}
+
+/// Returns the instance-storage schema version, defaulting to the current
+/// version when the marker is absent. Per DEVELOPMENT.md, an entry written
+/// before the marker existed is treated as version 1 (issue #507).
+fn read_schema_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SchemaVersion)
+        .unwrap_or(CURRENT_SCHEMA_VERSION)
+}
+
+/// Returns the primary admin address, or the zero-address sentinel when the
+/// admin entry is missing or has no primary. Used only by `execute_recovery`,
+/// which must be able to repair a corrupt admin set (issue #514).
+fn read_optional_primary_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get::<_, Vec<Address>>(&DataKey::Admin)
+        .and_then(|admins| storage::primary_admin(&admins))
+        .unwrap_or_else(|| {
+            Address::from_string(&soroban_sdk::String::from_str(
+                env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ))
+        })
 }
 
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
@@ -1221,6 +1302,7 @@ mod tests {
                     }),
         ) {
             let env = Env::default();
+            env.mock_all_auths();
             let admin = Address::generate(&env);
             let recovery = Address::generate(&env);
             let admins = vec![&env, admin];
@@ -1261,6 +1343,7 @@ mod tests {
                 }
             };
             let env = Env::default();
+            env.mock_all_auths();
             let admin = Address::generate(&env);
             let recovery = Address::generate(&env);
             let admins = vec![&env, admin];
@@ -1540,5 +1623,156 @@ mod tests {
             .deployer()
             .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
         client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #507: schema-version marker + migrate skeleton
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
+        let (env, client, admins, _recovery) = setup();
+
+        let version = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+        });
+        assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+
+        client.migrate(&admins);
+        client.migrate(&admins);
+
+        let version_after = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+        });
+        assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, events::MIGRATED_EVENT)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn migrate_is_blocked_while_paused() {
+        let (_env, client, admins, _recovery) = setup();
+        client.pause(&admins);
+        client.migrate(&admins);
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #514: execute_recovery repairs a corrupt/empty admin set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn execute_recovery_repairs_an_empty_corrupt_admin_set() {
+        use soroban_sdk::testutils::Ledger;
+        let (env, client, _admins, _recovery_address) = setup();
+        let recovered = Address::generate(&env);
+
+        client.initiate_recovery(&recovered);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + RECOVERY_DELAY_SECONDS + 1);
+
+        // Corrupt the admin entry: overwrite with an empty admin set so there
+        // is no primary admin to read when building the recovery event.
+        env.as_contract(&client.address, || {
+            let empty: Vec<Address> = Vec::new(&env);
+            env.storage().instance().set(&DataKey::Admin, &empty);
+        });
+
+        client.execute_recovery();
+
+        assert_eq!(client.get_admin(), vec![&env, recovered.clone()]);
+        assert_eq!(client.get_threshold(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #515: governance admin reads use the 50k/100k instance policy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_admin_uses_50k_100k_instance_ttl_policy() {
+        use soroban_sdk::testutils::storage::Instance;
+        let (env, client, _admins, _recovery) = setup();
+
+        client.get_admin();
+
+        let ttl = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+        assert!(
+            ttl >= READ_INSTANCE_TTL_BUMP,
+            "expected get_admin to bump instance TTL to at least {READ_INSTANCE_TTL_BUMP}, got {ttl}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #516: reconciled pause matrix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pause_blocks_fee_and_anchor_writes() {
+        let (env, client, admins, _recovery) = setup();
+        client.pause(&admins);
+        assert!(client.is_paused());
+
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+        let cfg = FeeConfig {
+            platform_fee_bps: 120,
+            network_fee_bps: 35,
+        };
+
+        assert!(
+            client.try_set_fee_config(&admins, &cfg).is_err(),
+            "set_fee_config must be blocked while paused"
+        );
+        assert!(
+            client.try_upsert_anchor(&admins, &asset, &anchor).is_err(),
+            "upsert_anchor must be blocked while paused"
+        );
+        assert!(
+            client.try_remove_anchor(&admins, &asset).is_err(),
+            "remove_anchor must be blocked while paused"
+        );
+    }
+
+    #[test]
+    fn pause_allows_admin_transfer_threshold_and_recovery() {
+        use soroban_sdk::testutils::Ledger;
+        let env = Env::default();
+        env.mock_all_auths();
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery_address = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        client.init(&admins, &1, &recovery_address);
+
+        client.pause(&admins);
+        assert!(client.is_paused());
+
+        // change_threshold (threshold 1 -> needs threshold + 1 = 2 signers)
+        client.change_threshold(&admins, &2);
+        assert_eq!(client.get_threshold(), 2);
+
+        // transfer_admin (threshold 2 -> needs 2 signers)
+        let new_a = Address::generate(&env);
+        client.transfer_admin(&admins, &vec![&env, new_a.clone()], &1);
+        assert_eq!(client.get_admin(), vec![&env, new_a.clone()]);
+
+        // recovery flow
+        let recovered = Address::generate(&env);
+        client.initiate_recovery(&recovered);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + RECOVERY_DELAY_SECONDS + 1);
+        client.execute_recovery();
+        assert_eq!(client.get_admin(), vec![&env, recovered.clone()]);
+        assert_eq!(client.get_threshold(), 1);
     }
 }
