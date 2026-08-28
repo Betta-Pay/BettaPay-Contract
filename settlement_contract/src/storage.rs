@@ -1,3 +1,18 @@
+//! Settlement contract storage and governance cross-contract helpers.
+//!
+//! Governance is reached via two cross-contract paths. Both must fail safely
+//! with the typed [`SettlementError::GovernanceCallFailed`] (code 311) instead
+//! of an untyped host panic:
+//!
+//! - **Read path** — [`read_governance_fee_rule`], reached from
+//!   `calculate_fee_split` when no merchant or default rule is set. A governance
+//!   trap, host error, or unexpected return value surfaces as
+//!   `GovernanceCallFailed`; a `None` config falls through to the bootstrap default.
+//! - **Write path** — [`validate_fee_against_governance`], reached from
+//!   `set_settlement_rule` / `set_default_rule`. Any governance call failure
+//!   (contract trap, host error, or contract-returned error) surfaces as
+//!   `GovernanceCallFailed`, so a broken or mis-deployed governance contract
+//!   cannot abort the transaction with a raw panic.
 use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
 
 use bettapay_common::{

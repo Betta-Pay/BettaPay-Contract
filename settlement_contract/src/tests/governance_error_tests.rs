@@ -39,6 +39,30 @@ mod panicking_gov {
 
 use panicking_gov::PanickingGovernance;
 
+// A second failing-governance stub that returns a *typed error* rather than
+// trapping. This exercises the `Ok(Err(_))` branch of `try_invoke_contract`
+// (a contract that deliberately rejects the read), as opposed to the trap
+// branch exercised by `PanickingGovernance`.
+mod erroring_gov {
+    use soroban_sdk::{contract, contractimpl, Env};
+    use crate::GovFeeConfig;
+    use crate::errors::SettlementError;
+
+    /// A governance stub whose `get_fee_config` returns a typed error.
+    #[contract]
+    pub struct ErroringGovernance;
+
+    #[contractimpl]
+    impl ErroringGovernance {
+        #[allow(unused_variables)]
+        pub fn get_fee_config(env: Env) -> Result<Option<GovFeeConfig>, SettlementError> {
+            Err(SettlementError::GovernanceCallFailed)
+        }
+    }
+}
+
+use erroring_gov::ErroringGovernance;
+
 /// Helper: directly injects a governance address into the settlement contract's
 /// instance storage, bypassing `validate_governance` (which would itself call
 /// `get_fee_config` and fail against the panicking stub).
@@ -181,4 +205,43 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
     };
 
     client.set_default_rule(&soroban_sdk::vec![&env, admin], &rule);
+}
+
+/// Focused variant of the write-path test: governance returns a typed error
+/// (not a trap). This drives `validate_fee_against_governance` through the
+/// `Ok(Err(_))` branch of `try_invoke_contract`.
+///
+/// Expected: the typed `GovernanceCallFailed` error (code 311) — a deliberate
+/// governance rejection must not surface as an untyped host panic.
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn write_path_governance_error_surfaces_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let erroring_gov = env.register_contract(None, ErroringGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+
+    // Directly inject the error-returning governance address.
+    inject_governance(&env, &contract_id, &erroring_gov);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    // set_settlement_rule calls validate_fee_against_governance, which must
+    // surface GovernanceCallFailed instead of an untyped host panic.
+    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
 }
