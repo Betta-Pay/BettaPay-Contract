@@ -310,9 +310,8 @@ fn set_default_rule_rejected_when_paused() {
 
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(
+    assert!(
         client.is_paused(),
-        true,
         "Contract must be paused before testing rejection"
     );
 
