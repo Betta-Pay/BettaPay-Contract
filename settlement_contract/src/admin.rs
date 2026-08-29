@@ -101,6 +101,11 @@ impl SettlementContract {
         );
     }
 
+    /// Initiates recovery and vetoes every pending scheduled operation.
+    ///
+    /// Recovery is intentionally the emergency veto path: once the recovery
+    /// address authenticates, no operation scheduled under the compromised
+    /// admin can execute, including an upgrade or admin transfer.
     pub fn initiate_recovery(env: Env, new_admin: Address) {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
@@ -118,6 +123,7 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::PendingRecovery, &pending);
+        // `PendingRecovery` itself is the veto marker checked by `execute`.
         events::emit_recovery_initiated(&env, &recovery_address, &new_admin, pending.execute_after);
     }
 
@@ -342,6 +348,13 @@ impl SettlementContract {
     /// * [`OperationNotScheduled`](SettlementError::OperationNotScheduled) — if the operation was not scheduled.
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
     pub fn execute(env: Env, operation: Operation) {
+        if env.storage().instance().has(&CommonDataKey::PendingRecovery) {
+            // A pending recovery is an emergency veto over all scheduled ops.
+            // The recovery record remains until recovery execution/cancellation,
+            // so this also closes the race between the two transactions.
+            panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
         assert_not_paused(&env);
 
         let operation_xdr = operation.clone().to_xdr(&env);
