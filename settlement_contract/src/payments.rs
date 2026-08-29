@@ -5,11 +5,11 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_rule_or_default,
+    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, MIN_PAYMENT_AMOUNT,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
     PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
 };
 
@@ -206,7 +206,8 @@ impl SettlementContract {
         if reference == BytesN::from_array(&env, &[0; 32]) {
             panic_with_error!(&env, SettlementError::InvalidPaymentReference);
         }
-        if amount < MIN_PAYMENT_AMOUNT {
+        let min_amount = read_min_payment_amount(&env);
+        if amount < min_amount {
             panic_with_error!(&env, SettlementError::AmountTooSmall);
         }
 
@@ -283,7 +284,8 @@ impl SettlementContract {
         if !is_merchant_registered_internal(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
-        if amount < MIN_PAYMENT_AMOUNT {
+        let min_amount = read_min_payment_amount(&env);
+        if amount < min_amount {
             panic_with_error!(env, SettlementError::AmountTooSmall);
         }
         let rule = read_rule_or_default(&env, merchant);
