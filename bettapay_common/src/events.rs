@@ -79,6 +79,9 @@ pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 /// Topic emitted once, when `GovernanceContract::init` completes.
 pub const INITIALIZED_EVENT: &str = "initialized";
 
+/// Topic emitted when `migrate` completes (schema version management).
+pub const MIGRATED_EVENT: &str = "migrated";
+
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";
 

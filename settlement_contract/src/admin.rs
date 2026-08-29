@@ -12,6 +12,9 @@ use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
     read_threshold, validate_admins_and_threshold, validate_governance, validate_nonzero_address,
+    read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
+    read_recovery_address, read_rule_or_default, read_threshold,
+    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
@@ -146,7 +149,7 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
 
-        let old_admin = read_admin(&env);
+        let old_admin = read_optional_primary_admin(&env);
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         // Finalize the new admin configuration before consuming the recovery.
         // If validation or writing fails, the pending target remains available.
@@ -469,7 +472,7 @@ impl SettlementContract {
             panic_with_error!(env, SettlementError::MerchantExists);
         }
 
-        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().set(&key, &());
         env.storage()
             .persistent()
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
@@ -514,11 +517,10 @@ impl SettlementContract {
         if let Some(old_rule) = old_rule {
             env.storage().persistent().remove(&rule_key);
             // Same canonical event shape as clear_settlement_rule (issue #491).
-            let fallback = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::DefaultRule)
-                .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
+            // Use the shared fallback chain (default → governance → bootstrap)
+            // so the event matches the rule that will actually govern the next
+            // payment (issue #689).
+            let fallback = read_fallback_rule(env);
             events::emit_settlement_rule_cleared(env, &merchant, &admin, &old_rule, &fallback);
         }
 
