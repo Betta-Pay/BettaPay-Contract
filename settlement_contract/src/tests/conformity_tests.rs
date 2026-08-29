@@ -51,7 +51,7 @@ fn governance_codes() -> [(&'static str, u32); 16] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 24] {
+fn settlement_codes() -> [(&'static str, u32); 26] {
     [
         (
             "AlreadyInitialized",
@@ -116,6 +116,11 @@ fn settlement_codes() -> [(&'static str, u32); 24] {
             SettlementError::InvalidGovernance as u32,
         ),
         ("AmountOverflow", SettlementError::AmountOverflow as u32),
+        ("PaymentOrphaned", SettlementError::PaymentOrphaned as u32),
+        (
+            "OperationHashCollision",
+            SettlementError::OperationHashCollision as u32,
+        ),
     ]
 }
 
