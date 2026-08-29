@@ -29,6 +29,7 @@ fn emits_event_on_initialization() {
     let client = SettlementContractClient::new(&env, &contract_id);
 
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,
@@ -46,7 +47,8 @@ fn rejects_double_initialization() {
     let (env, client, admins, _) = setup();
     let governance = register_governance(&env);
     let recovery_address = Address::generate(&env);
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     let _ = env;
 }
 
@@ -441,7 +443,8 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
 
     // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
     client.change_threshold(&admins, &3);
@@ -460,7 +463,8 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &2, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
 
     client.change_threshold(&admins, &0);
 }
@@ -481,6 +485,7 @@ fn recovery_executes_after_delay() {
     let client = SettlementContractClient::new(&env, &contract_id);
 
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,

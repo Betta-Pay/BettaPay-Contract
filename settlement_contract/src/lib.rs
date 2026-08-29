@@ -230,6 +230,15 @@ pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 /// schedules; ordinary admin cancellation remains available as well.
 pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
 
+/// The single interface version advertised by `supports_interface`.
+///
+/// `upgrade` probes the incoming Wasm with `supports_interface(SUPPORTED_INTERFACE_VERSION)`
+/// before committing the swap. Any Wasm that returns `false` (or traps) is
+/// rejected with `InvalidWasmInterface`. Increment this constant in a future
+/// Wasm update when a breaking API change requires callers to distinguish the
+/// new contract from this one (issue #48).
+pub(crate) const SUPPORTED_INTERFACE_VERSION: u32 = 1;
+
 // Settlement-specific TTL policy for short-lived reads of admin / governance /
 // recovery addresses. Deliberately shorter than the protocol defaults so that
 // an inactive instance-side entry can still be evicted in days rather than

@@ -38,7 +38,8 @@ pub fn setup_governance() -> (
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &recovery_address);
     (env, client, admins, recovery_address)
 }
 
@@ -62,7 +63,8 @@ pub fn setup_both() -> (
     let gov_admins = soroban_sdk::vec![&env, gov_admin.clone()];
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    gov_client.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    gov_client.init(&deployer, &gov_admins, &1, &gov_recovery);
 
     let settle_admin = Address::generate(&env);
     let settle_recovery = Address::generate(&env);
@@ -70,7 +72,8 @@ pub fn setup_both() -> (
     let merchant = Address::generate(&env);
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &gov_id, &settle_recovery);
 
     (
         env,
@@ -255,7 +258,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
 
     let old_gov_id = env.register_contract(None, GovernanceContract);
     let old_gov = GovernanceContractClient::new(&env, &old_gov_id);
-    old_gov.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    old_gov.init(&deployer, &gov_admins, &1, &gov_recovery);
     old_gov.set_fee_config(
         &gov_admins,
         &GovFeeConfig {
@@ -266,7 +270,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
 
     let new_gov_id = env.register_contract(None, GovernanceContract);
     let new_gov = GovernanceContractClient::new(&env, &new_gov_id);
-    new_gov.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    new_gov.init(&deployer, &gov_admins, &1, &gov_recovery);
     new_gov.set_fee_config(
         &gov_admins,
         &GovFeeConfig {
@@ -281,7 +286,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
     let merchant = Address::generate(&env);
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &old_gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &old_gov_id, &settle_recovery);
     settle_client.register_merchant(&settle_admins, &merchant);
 
     let before = settle_client.calculate_fee_split(&merchant, &10_000);
@@ -518,12 +524,14 @@ fn multisig_threshold_works_independently_on_both_contracts() {
     let gov_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    gov_client.init(&gov_admins, &2, &gov_recovery);
+    let deployer = Address::generate(&env);
+    gov_client.init(&deployer, &gov_admins, &2, &gov_recovery);
 
     let settle_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &2, &gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &2, &gov_id, &settle_recovery);
 
     let one_signer = soroban_sdk::vec![&env, a1.clone()];
     let three_signers = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
@@ -1030,7 +1038,8 @@ fn store_payment_reference_prevents_reentrancy() {
     let settle_id = env.register_contract(None, SettlementContract);
     
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &mock_gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &mock_gov_id, &settle_recovery);
 
     let merchant = Address::generate(&env);
     settle_client.register_merchant(&settle_admins, &merchant);
