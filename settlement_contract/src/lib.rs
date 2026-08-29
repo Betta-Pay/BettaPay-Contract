@@ -74,8 +74,9 @@
 //! payload shapes defined in [`bettapay_common::events`] so an indexer can
 //! decode them identically no matter which contract published them.
 //! - Each entry point emits exactly the events tied to the state change it
-//!   performs; no two events emitted by the same call describe the same
-//!   logical change.
+//!   performs. Usually, no two events emitted by the same call describe the
+//!   same logical change, though exceptions exist (e.g., `_set_settlement_rule`
+//!   emits both `bootstrap_fallback` and `settlement_rule_updated` when falling back).
 //!
 //! ## Upgrade Process
 //!
@@ -96,10 +97,11 @@
 //!    struct — the old type is what keeps those entries readable.
 //! 4. Order is: upgrade the Wasm, then call `migrate`, then verify the
 //!    post-upgrade state, then remove the migration code in a later upgrade.
-//! 5. `Payment(BytesN<32>)`, `Merchant(Address)` and `Rule(Address)` are keyed
-//!    by value and Soroban cannot enumerate storage keys — which is why
-//!    [`SettlementContract::get_payments`] takes the references from the
-//!    caller. Convert these lazily on read, or pass the keys in explicitly.
+//! 5. `Payment(Address, BytesN<32>)`, `Merchant(Address)` and `Rule(Address)`
+//!    are keyed by value and Soroban cannot enumerate storage keys — which is
+//!    why [`SettlementContract::get_payments`] takes the merchant and the
+//!    references from the caller. Convert these lazily on read, or pass the
+//!    keys in explicitly.
 //! 6. Call `extend_ttl` on anything the migration rewrites: `set` alone does
 //!    not extend an entry's life, so a migrated record would otherwise expire
 //!    sooner than an untouched one.
@@ -120,6 +122,7 @@
 //! - `transfer_admin` — rotate compromised keys
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
+//! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
 //!
 //! ## Event Convention
 //!
@@ -181,7 +184,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 use soroban_sdk::contract;
 
 pub use errors::SettlementError;
-pub use types::{Bps, FeeConfig, FeeSplit, Operation, PaymentRecord, SettlementRule};
+pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///

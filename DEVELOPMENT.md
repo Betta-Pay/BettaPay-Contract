@@ -56,7 +56,7 @@ What is on the ledger today, and which storage kind holds it.
 | `DefaultRule` | persistent | `SettlementRule` |
 | `Merchant(Address)` | persistent | merchant registration |
 | `Rule(Address)` | persistent | `SettlementRule` |
-| `Payment(BytesN<32>)` | persistent | `PaymentRecord` |
+| `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` |
 
 ### Governance contract
 
@@ -66,6 +66,7 @@ What is on the ledger today, and which storage kind holds it.
 | `RecoveryAddress` | instance | `Address` |
 | `PendingRecovery` | instance | `PendingRecovery` |
 | `Paused` | instance | `bool` |
+| `SchemaVersion` | instance | `u32` (written at `init`, issue #507) |
 | `FeeConfig` | persistent | fee configuration |
 | `Anchor(Address)` | persistent | anchor address per asset |
 | `SystemParam(Symbol)` | persistent | numeric system parameter |
@@ -93,11 +94,13 @@ no "scan the prefix". Every read requires the caller to already know the exact
 key.
 
 This is visible in the existing API surface: `get_payments` takes
-`references: Vec<BytesN<32>>` from the caller rather than returning all
-payments, because returning all payments is not something the contract can do.
+`merchant` plus `references: Vec<BytesN<32>>` from the caller rather than
+returning all payments, because returning all payments is not something the
+contract can do.
 
 So "read the old-format data from storage" is only a well-defined instruction
-for fixed keys. For `Payment(BytesN<32>)` the contract does not and cannot know
+for fixed keys. For `Payment(Address, BytesN<32>)` the contract does not and
+cannot know
 which references exist.
 
 ### 2. A contract can only touch its own storage
@@ -123,7 +126,7 @@ contract of its own.
 
 ## The Migration Pattern
 
-*Note: Neither `migrate` nor `SchemaVersion` is currently implemented in the contracts. This section serves as a theoretical template for contributors when the first breaking change arises.*
+*Note: The governance contract now ships a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issue #507). The settlement contract has not adopted the marker yet; this section remains the template for when it does.*
 
 Ordering is the point: the code that can read both formats has to be deployed
 before anything is rewritten.
@@ -304,8 +307,8 @@ impl PaymentRecordV1 {
 Updating the actual contract getter entry point [`get_payment_reference`](settlement_contract/src/payments.rs) to convert in place on read:
 
 ```rust,ignore
-pub fn get_payment_reference(env: Env, reference: BytesN<32>) -> Option<PaymentRecord> {
-    let key = DataKey::Payment(reference);
+pub fn get_payment_reference(env: Env, merchant: Address, reference: BytesN<32>) -> Option<PaymentRecord> {
+    let key = DataKey::Payment(merchant, reference);
 
     // New format first: after conversion this is the only branch taken.
     if let Some(record) = env.storage().persistent().get::<_, PaymentRecord>(&key) {

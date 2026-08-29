@@ -21,7 +21,7 @@ use soroban_sdk::{Address, Env};
 
 mod panicking_gov {
     use soroban_sdk::{contract, contractimpl, Env};
-    use crate::FeeConfig;
+    use crate::GovFeeConfig;
 
     /// A governance stub whose `get_fee_config` always traps (simulates a
     /// broken or mis-deployed governance contract).
@@ -31,7 +31,7 @@ mod panicking_gov {
     #[contractimpl]
     impl PanickingGovernance {
         #[allow(unused_variables)]
-        pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
+        pub fn get_fee_config(env: Env) -> Option<GovFeeConfig> {
             panic!("governance trap")
         }
     }

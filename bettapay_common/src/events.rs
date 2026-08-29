@@ -6,6 +6,8 @@
 
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
+use crate::types::SettlementRule;
+
 /// Structured payload emitted with the `admin_transferred` event so that
 /// off-chain consumers can read the old and new admin by field name rather
 /// than by positional order.
@@ -77,6 +79,9 @@ pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 /// Topic emitted once, when `GovernanceContract::init` completes.
 pub const INITIALIZED_EVENT: &str = "initialized";
 
+/// Topic emitted when `migrate` completes (schema version management).
+pub const MIGRATED_EVENT: &str = "migrated";
+
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";
 
@@ -106,6 +111,10 @@ pub const SETTLEMENT_RULE_UPDATED_EVENT: &str = "settlement_rule_updated";
 /// Topic emitted when a merchant-specific settlement rule is cleared —
 /// either explicitly via `clear_settlement_rule`, or as a side effect of
 /// `unregister_merchant` removing a merchant that had one set.
+///
+/// Both removal paths publish through [`emit_settlement_rule_cleared`], so
+/// the data payload is always the same canonical triple
+/// `(admin, removed, fallback)` (issue #491).
 pub const SETTLEMENT_RULE_CLEARED_EVENT: &str = "settlement_rule_cleared";
 
 /// Topic emitted when the global default settlement rule is updated.
@@ -192,6 +201,33 @@ pub fn emit_recovery_executed(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, RECOVERY_EXECUTED_EVENT),),
         payload.clone(),
+    );
+}
+
+/// Emits the `settlement_rule_cleared` event with the canonical payload.
+///
+/// Topics: `(Symbol("settlement_rule_cleared"), Address merchant)`
+/// Data:    `(Address admin, SettlementRule removed, SettlementRule fallback)`
+///
+/// Every path that removes a merchant-specific settlement rule must publish
+/// through this helper — `clear_settlement_rule` and the side effect of
+/// `unregister_merchant` — so an indexer always sees the same data arity for
+/// the topic (issue #491). `removed` is the rule that was stored; `fallback`
+/// is the rule the merchant falls back to (default rule, or the bootstrap
+/// rule when none is stored).
+pub fn emit_settlement_rule_cleared(
+    env: &Env,
+    merchant: &Address,
+    admin: &Address,
+    removed: &SettlementRule,
+    fallback: &SettlementRule,
+) {
+    env.events().publish(
+        (
+            Symbol::new(env, SETTLEMENT_RULE_CLEARED_EVENT),
+            merchant.clone(),
+        ),
+        (admin.clone(), removed.clone(), fallback.clone()),
     );
 }
 
