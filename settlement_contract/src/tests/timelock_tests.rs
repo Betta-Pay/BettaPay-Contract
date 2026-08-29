@@ -53,10 +53,7 @@ fn calculate_fee_split_read_is_ttl_and_event_neutral() {
 #[test]
 fn recovery_vetoes_scheduled_operation_before_timelock_expiry() {
     let (env, client, admins, recovery) = setup();
-    let operation = Operation::TransferAdmin(
-        soroban_sdk::vec![&env, Address::generate(&env)],
-        1,
-    );
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
     let admin = admins.get(0).unwrap();
 
     client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
@@ -244,8 +241,16 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Direct path ---
     client.transfer_admin(&initial_admins, &new_admins, &new_threshold);
-    assert_eq!(client.get_admin(), new_admins, "direct path stores full admin set");
-    assert_eq!(client.get_threshold(), new_threshold, "direct path stores threshold");
+    assert_eq!(
+        client.get_admin(),
+        new_admins,
+        "direct path stores full admin set"
+    );
+    assert_eq!(
+        client.get_threshold(),
+        new_threshold,
+        "direct path stores threshold"
+    );
 
     // Reset back to single-admin so the timelock path starts from a clean state.
     let reset_admins = soroban_sdk::vec![&env, a1.clone()];
