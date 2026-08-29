@@ -4,12 +4,12 @@ use bettapay_common::events;
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_threshold, validate_nonzero_address,
-    verify_admin_auth,
+    assert_not_paused, is_merchant_registered_internal, read_fallback_rule, read_threshold,
+    validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, MERCHANT_TTL_BUMP,
+    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP,
     MERCHANT_TTL_THRESHOLD,
 };
 
@@ -100,13 +100,11 @@ impl SettlementContract {
         if let Some(old_rule) = old_rule {
             env.storage().persistent().remove(&rule_key);
             // Emit the same canonical event shape as clear_settlement_rule
-            // (issue #491): (admin, removed, fallback). The fallback is read
-            // directly from storage so no bootstrap_fallback event is emitted.
-            let fallback = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::DefaultRule)
-                .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
+            // (issue #491): (admin, removed, fallback). Use the shared
+            // fallback chain (default → governance → bootstrap) so the event
+            // matches the rule that will actually govern the next payment
+            // (issue #689).
+            let fallback = read_fallback_rule(&env);
             events::emit_settlement_rule_cleared(&env, &merchant, &admin, &old_rule, &fallback);
         }
 
