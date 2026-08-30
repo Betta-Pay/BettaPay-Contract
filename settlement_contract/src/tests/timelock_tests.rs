@@ -302,4 +302,3 @@ fn execute_rejects_when_contract_is_paused_and_preserves_scheduled_op() {
     client.execute(&operation);
     assert!(client.is_merchant_registered(&merchant));
 }
-

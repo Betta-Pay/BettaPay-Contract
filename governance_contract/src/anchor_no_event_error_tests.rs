@@ -222,9 +222,10 @@ fn change_threshold_emits_no_event_when_insufficient_signatures() {
     let a3 = Address::generate(&env);
     let admins = vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
-    client.init(&admins, &2, &recovery);
+    client.init(&deployer, &admins, &2, &recovery);
 
     let single_signer = vec![&env, a1.clone()];
     let prev = env.events().all().len();
