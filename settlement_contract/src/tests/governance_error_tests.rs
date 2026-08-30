@@ -10,8 +10,10 @@
 
 use crate::types::DataKey;
 use crate::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Events};
 use soroban_sdk::{Address, Env, FromVal, Symbol};
+
+use governance_contract::{GovernanceContract, GovernanceContractClient};
 
 // ---------------------------------------------------------------------------
 // Failing governance stub — lives in its own module to avoid symbol collisions
@@ -223,8 +225,8 @@ fn read_path_governance_valid_config_used() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let gov_id = env.register_contract(None, crate::GovernanceContract);
-    let gov_client = crate::GovernanceContractClient::new(&env, &gov_id);
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
     let gov_admin = Address::generate(&env);
     let recovery = Address::generate(&env);
     let deployer = Address::generate(&env);
