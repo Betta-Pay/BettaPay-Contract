@@ -10,8 +10,8 @@
 
 use crate::types::DataKey;
 use crate::*;
-use soroban_sdk::testutils::{Address as _, Events};
-use soroban_sdk::{Address, Env, FromVal, Symbol};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, Env};
 
 use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
 
@@ -267,7 +267,10 @@ fn read_path_governance_valid_config_used() {
 }
 
 /// Verifies that when governance has no config set (`Ok(Ok(None))`), the fallback
-/// to bootstrap default emits `BOOTSTRAP_FALLBACK_EVENT`.
+/// to bootstrap default applies the bootstrap fee values.
+///
+/// Note: `calculate_fee_split` is a read-only path and does not emit events
+/// (issue #691), so we verify the fee values directly.
 #[test]
 fn read_path_governance_none_emits_bootstrap_fallback_event() {
     let env = Env::default();
@@ -290,21 +293,9 @@ fn read_path_governance_none_emits_bootstrap_fallback_event() {
     );
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
-    client.calculate_fee_split(&merchant, &10_000);
-
-    let events = env.events().all();
-    let mut fallback_event_emitted = false;
-    for i in 0..events.len() {
-        let (_contract, topics, _data) = events.get(i).unwrap();
-        if !topics.is_empty() {
-            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
-            if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
-                fallback_event_emitted = true;
-            }
-        }
-    }
-    assert!(
-        fallback_event_emitted,
-        "BOOTSTRAP_FALLBACK_EVENT must be emitted when degrading to bootstrap defaults"
-    );
+    // Bootstrap default: 100 bps platform, 5 bps network.
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
 }
