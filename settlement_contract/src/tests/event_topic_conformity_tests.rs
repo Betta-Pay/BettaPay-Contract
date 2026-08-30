@@ -272,9 +272,9 @@ fn bootstrap_fallback_uses_canonical_topic() {
     // does not emit events (issue #691), so we verify the fee values
     // instead.
     let split = client.calculate_fee_split(&merchant, &1_000);
-    assert_eq!(split.platform_fee_amount, 100);
-    assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.platform_fee_amount, 10);
+    assert_eq!(split.network_fee_amount, 1);
+    assert_eq!(split.merchant_amount, 989);
 }
 
 #[test]
