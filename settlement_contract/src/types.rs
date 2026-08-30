@@ -139,4 +139,7 @@ pub(crate) enum DataKey {
     Payment(Address, BytesN<32>),
     /// Storage key for a scheduled operation.
     ScheduledOperation(BytesN<32>),
+    /// Instance — stored at `init` to gate initialization to the deployer
+    /// and prevent front-running (issue #684).
+    Deployer,
 }
