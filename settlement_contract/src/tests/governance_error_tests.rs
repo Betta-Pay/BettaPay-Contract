@@ -82,6 +82,8 @@ fn read_path_governance_failure_surfaces_typed_error() {
         &empty_gov,
         &recovery,
     );
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
 
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
@@ -113,6 +115,8 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
         &empty_gov,
         &recovery,
     );
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
     // Empty governance returns None — bootstrap default should apply (100 bps platform, 5 network).
@@ -151,6 +155,8 @@ fn write_path_governance_failure_surfaces_typed_error() {
         &empty_gov,
         &recovery,
     );
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
     // Directly inject the panicking governance address.
@@ -190,6 +196,8 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
         &empty_gov,
         &recovery,
     );
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
 
     // Directly inject the panicking governance address.
     inject_governance(&env, &contract_id, &panicking_gov);
@@ -203,3 +211,79 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
 
     client.set_default_rule(&soroban_sdk::vec![&env, admin], &rule);
 }
+
+// ---------------------------------------------------------------------------
+// Failure Variant Coverage for Governance Fee Rule Resolution
+// ---------------------------------------------------------------------------
+
+/// Verifies that when governance returns a valid `GovFeeConfig`, `read_governance_fee_rule`
+/// applies the configured fee BPS directly.
+#[test]
+fn read_path_governance_valid_config_used() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_id = env.register_contract(None, crate::GovernanceContract);
+    let gov_client = crate::GovernanceContractClient::new(&env, &gov_id);
+    let gov_admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    gov_client.init(&soroban_sdk::vec![&env, gov_admin.clone()], &1, &recovery);
+
+    // Set governance fee config: 250 platform bps, 50 network bps
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin],
+        &GovFeeConfig {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+        },
+    );
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &gov_id, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 250);
+    assert_eq!(split.network_fee_amount, 50);
+    assert_eq!(split.merchant_amount, 9_700);
+}
+
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the fallback
+/// to bootstrap default emits `BOOTSTRAP_FALLBACK_EVENT`.
+#[test]
+fn read_path_governance_none_emits_bootstrap_fallback_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let empty_gov = super::register_governance(&env);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    client.calculate_fee_split(&merchant, &10_000);
+
+    let events = env.events().all();
+    let mut fallback_event_emitted = false;
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() {
+            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+            if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
+                fallback_event_emitted = true;
+            }
+        }
+    }
+    assert!(
+        fallback_event_emitted,
+        "BOOTSTRAP_FALLBACK_EVENT must be emitted when degrading to bootstrap defaults"
+    );
+}
+

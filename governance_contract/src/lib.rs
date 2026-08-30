@@ -247,11 +247,23 @@ enum DataKey {
     /// Instance-storage schema version (u32) written at `init`. Baseline for
     /// the first storage migration (issue #507).
     SchemaVersion,
+    /// Instance — stored at `init` to gate initialization to the deployer
+    /// and prevent front-running (issue #684).
+    Deployer,
 }
 
 /// The schema version this build expects. `init` writes this value and
 /// `migrate` advances any stored value below it.
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// The single interface version advertised by `supports_interface`.
+///
+/// `upgrade` probes the incoming Wasm with `supports_interface(SUPPORTED_INTERFACE_VERSION)`
+/// before committing the swap. Any Wasm that returns `false` (or traps) is
+/// rejected with `InvalidWasmInterface`. Increment this constant in a future
+/// Wasm update when a breaking API change requires callers to distinguish
+/// the new contract from this one (issue #48).
+const SUPPORTED_INTERFACE_VERSION: u32 = 1;
 
 // Discriminants below are pinned to `bettapay_common::error_codes` so that a
 // numeric error code means the same thing in both contracts (issue #517).
@@ -320,7 +332,7 @@ pub struct GovernanceContract;
 #[contractimpl]
 impl GovernanceContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
-        version == 1
+        version == SUPPORTED_INTERFACE_VERSION
     }
 
     /// Initialises the governance contract and sets the initial administrator.
@@ -344,10 +356,12 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
-    pub fn init(env: Env, admins: Vec<Address>, threshold: u32, recovery_address: Address) {
+    pub fn init(env: Env, deployer: Address, admins: Vec<Address>, threshold: u32, recovery_address: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, GovernanceError::AlreadyInitialized);
         }
+        // Gate initialization to the deployer to prevent front-running (issue #684).
+        deployer.require_auth();
         validate_admins_and_threshold(&env, &admins, threshold);
         assert_not_zero(
             &env,
@@ -357,6 +371,7 @@ impl GovernanceContract {
         for i in 0..threshold {
             admins.get(i).unwrap().require_auth();
         }
+        env.storage().instance().set(&DataKey::Deployer, &deployer);
         env.storage().instance().set(&DataKey::Admin, &admins);
         env.storage()
             .instance()
@@ -389,6 +404,26 @@ impl GovernanceContract {
 
     pub fn get_recovery_address(env: Env) -> Address {
         read_recovery_address(&env)
+    }
+
+    pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        let admin = signers.get(0).unwrap();
+        assert_not_zero(
+            &env,
+            &new_recovery,
+            GovernanceError::InvalidRecoveryAddress,
+        );
+        env.storage()
+            .instance()
+            .set(&CommonDataKey::RecoveryAddress, &new_recovery);
+        env.events().publish(
+            (
+                Symbol::new(&env, events::RECOVERY_ADDRESS_UPDATED_EVENT),
+                new_recovery.clone(),
+            ),
+            admin,
+        );
     }
 
     /// Upgrades the contract Wasm code to a new version.
@@ -878,12 +913,13 @@ pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) 
     let env = Env::default();
     env.mock_all_auths();
 
+    let deployer = Address::generate(&env);
     let admin = Address::generate(&env);
     let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &recovery_address);
+    client.init(&deployer, &admins, &1, &recovery_address);
     (env, client, admins)
 }
 
@@ -925,7 +961,8 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &2, &recovery_address);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery_address);
         (env, client, admins, recovery_address)
     }
 
@@ -933,6 +970,69 @@ mod tests {
     fn upload_test_wasm(env: &Env) -> BytesN<32> {
         let wasm = Bytes::from_slice(env, &[]);
         env.deployer().upload_contract_wasm(wasm)
+    }
+
+    // -----------------------------------------------------------------------
+    // supports_interface — issue #48
+    // -----------------------------------------------------------------------
+    //
+    // These tests pin the exact version semantics so the function can never
+    // silently degrade into an always-true stub.
+
+    /// Version 1 is the current advertised interface; `supports_interface(1)`
+    /// must return `true`.
+    #[test]
+    fn supports_interface_returns_true_for_current_version() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        assert!(
+            client.supports_interface(&SUPPORTED_INTERFACE_VERSION),
+            "supports_interface must return true for the current interface version ({})",
+            SUPPORTED_INTERFACE_VERSION,
+        );
+    }
+
+    /// Version 0 has never been a valid interface version; it must be rejected.
+    #[test]
+    fn supports_interface_returns_false_for_version_zero() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        assert!(
+            !client.supports_interface(&0u32),
+            "supports_interface must return false for version 0",
+        );
+    }
+
+    /// Version 2 is a hypothetical future version not yet implemented; it
+    /// must be rejected so callers can distinguish old Wasm from new.
+    #[test]
+    fn supports_interface_returns_false_for_unknown_future_version() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        assert!(
+            !client.supports_interface(&(SUPPORTED_INTERFACE_VERSION + 1)),
+            "supports_interface must return false for a future version not yet implemented",
+        );
+    }
+
+    /// A large sentinel value must also be rejected (issue #48: must not be
+    /// an always-true stub).
+    #[test]
+    fn supports_interface_returns_false_for_large_sentinel() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        assert!(
+            !client.supports_interface(&u32::MAX),
+            "supports_interface must return false for a large out-of-range version",
+        );
     }
 
     #[test]
@@ -963,7 +1063,8 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
         let (_env, client, admins, recovery) = setup();
-        client.init(&admins, &2, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery);
     }
 
     #[test]
@@ -975,7 +1076,8 @@ mod tests {
         let recovery = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&vec![&env, admin], &0, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![env, admin], &0, &recovery);
     }
 
     #[test]
@@ -1308,7 +1410,8 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-            client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+            client.init(&deployer, &admins, &1, &recovery);
 
             let config = FeeConfig {
                 platform_fee_bps,
@@ -1349,7 +1452,8 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-            client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+            client.init(&deployer, &admins, &1, &recovery);
 
             prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
         }
@@ -1397,7 +1501,8 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         assert!(!client.is_initialized());
-        client.init(&vec![&env, admin.clone()], &1, &recovery_address);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![env, admin.clone()], &1, &recovery_address);
         assert!(client.is_initialized());
     }
 
@@ -1412,7 +1517,8 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         let admins = vec![&env, admin.clone()];
-        client.init(&admins, &1, &recovery_address);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery_address);
         assert!(client.is_initialized());
         assert_eq!(client.get_admin(), admins);
         assert_eq!(client.get_threshold(), 1);
@@ -1476,7 +1582,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
 
@@ -1499,7 +1606,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery);
 
         // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
         let single_signer = vec![&env, a1.clone()];
@@ -1521,7 +1629,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery);
 
         // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
         client.change_threshold(&admins, &3);
@@ -1541,7 +1650,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &2, &recovery);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery);
 
         client.change_threshold(&admins, &0);
     }
@@ -1752,7 +1862,8 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &1, &recovery_address);
+    let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery_address);
 
         client.pause(&admins);
         assert!(client.is_paused());

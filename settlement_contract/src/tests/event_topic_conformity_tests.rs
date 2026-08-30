@@ -126,7 +126,8 @@ fn threshold_changed_uses_canonical_topic() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
 
     client.change_threshold(&admins, &2);
     assert_eq!(
