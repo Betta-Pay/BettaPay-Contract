@@ -12,7 +12,7 @@ mod tests {
         let asset = Address::generate(&env);
         let anchor = Address::generate(&env);
         client.upsert_anchor(&admin, &asset, &anchor);
-        assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
+        assert_eq!(client.get_anchor(&asset), Some(anchor));
         client.remove_anchor(&admin, &asset);
         assert_eq!(client.get_anchor(&asset), None);
     }

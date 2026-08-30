@@ -422,7 +422,7 @@ impl GovernanceContract {
         env.events().publish(
             (
                 Symbol::new(&env, events::RECOVERY_ADDRESS_UPDATED_EVENT),
-                new_recovery.clone(),
+                new_recovery,
             ),
             admin,
         );
@@ -541,7 +541,7 @@ impl GovernanceContract {
             &env,
             &AdminTransferred {
                 old_admin,
-                new_admin: pending.new_admin.clone(),
+                new_admin: pending.new_admin,
             },
         );
     }
@@ -739,7 +739,7 @@ impl GovernanceContract {
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
-        env.storage().persistent().set(&key, &anchor.clone());
+        env.storage().persistent().set(&key, &anchor);
         env.storage()
             .persistent()
             .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
@@ -959,7 +959,7 @@ mod tests {
 
         let admin1 = Address::generate(&env);
         let admin2 = Address::generate(&env);
-        let admins = vec![&env, admin1.clone(), admin2.clone()];
+        let admins = vec![&env, admin1, admin2];
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
@@ -1246,7 +1246,7 @@ mod tests {
 
         let before_upsert = env.events().all().len();
         client.upsert_anchor(&admins, &asset, &anchor);
-        assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
+        assert_eq!(client.get_anchor(&asset), Some(anchor));
         assert!(env.events().all().len() > before_upsert);
 
         let before_remove = env.events().all().len();
