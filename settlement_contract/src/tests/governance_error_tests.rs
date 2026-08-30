@@ -13,7 +13,7 @@ use crate::*;
 use soroban_sdk::testutils::{Address as _, Events};
 use soroban_sdk::{Address, Env, FromVal, Symbol};
 
-use governance_contract::{GovernanceContract, GovernanceContractClient};
+use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
 
 // ---------------------------------------------------------------------------
 // Failing governance stub — lives in its own module to avoid symbol collisions
@@ -240,7 +240,7 @@ fn read_path_governance_valid_config_used() {
     // Set governance fee config: 250 platform bps, 50 network bps
     gov_client.set_fee_config(
         &soroban_sdk::vec![&env, gov_admin],
-        &GovFeeConfig {
+        &FeeConfig {
             platform_fee_bps: 250,
             network_fee_bps: 50,
         },
