@@ -263,7 +263,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
 #[test]
 fn bootstrap_fallback_uses_canonical_topic() {
-    let (env, client, admins, merchant) = setup();
+    let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     // No merchant rule, no default rule, and MockGovernance's get_fee_config

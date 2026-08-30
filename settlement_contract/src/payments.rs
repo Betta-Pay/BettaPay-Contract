@@ -113,8 +113,6 @@ mod tests {
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
             let expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
-            let expected_merchant =
-                (amount - expected_platform - expected_network).max(0);
 
             // Apply the same network-fee clamping that calculate_split does
             // (issue #683): when ceil-rounded fees exceed the gross, the
