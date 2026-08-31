@@ -74,6 +74,9 @@ pub const CONTRACT_UPGRADED_EVENT: &str = "contract_upgraded";
 /// Topic emitted when the multisig admin threshold changes.
 pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 
+/// Topic emitted when the recovery address is rotated (issue #694).
+pub const RECOVERY_ADDRESS_UPDATED_EVENT: &str = "recovery_address_updated";
+
 // --- governance_contract only ---
 
 /// Topic emitted once, when `GovernanceContract::init` completes.
