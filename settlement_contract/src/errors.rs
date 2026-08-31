@@ -41,6 +41,10 @@ pub enum SettlementError {
     InvalidThreshold = 14,
     /// A recovery is already pending; initiate_recovery cannot overwrite it.
     RecoveryAlreadyPending = 15,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 15,
+    /// `unpause` was called while the contract was already unpaused.
+    AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
     /// The target merchant address is not registered. Raised by
@@ -109,6 +113,8 @@ const _: () = {
     assert!(
         SettlementError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
     );
+    assert!(SettlementError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
+    assert!(SettlementError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
     assert!(SettlementError::MerchantExists as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::MerchantMissing as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(

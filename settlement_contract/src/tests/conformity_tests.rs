@@ -49,13 +49,11 @@ fn governance_codes() -> [(&'static str, u32); 17] {
             "InvalidParamValue",
             GovernanceError::InvalidParamValue as u32,
         ),
-        ("AlreadyPaused", GovernanceError::AlreadyPaused as u32),
-        ("AlreadyUnpaused", GovernanceError::AlreadyUnpaused as u32),
         ("SameAdmin", GovernanceError::SameAdmin as u32),
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 27] {
+fn settlement_codes() -> [(&'static str, u32); 28] {
     [
         (
             "AlreadyInitialized",
@@ -95,10 +93,8 @@ fn settlement_codes() -> [(&'static str, u32); 27] {
             SettlementError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", SettlementError::InvalidThreshold as u32),
-        (
-            "RecoveryAlreadyPending",
-            SettlementError::RecoveryAlreadyPending as u32,
-        ),
+        ("AlreadyPaused", SettlementError::AlreadyPaused as u32),
+        ("AlreadyUnpaused", SettlementError::AlreadyUnpaused as u32),
         ("MerchantExists", SettlementError::MerchantExists as u32),
         ("MerchantMissing", SettlementError::MerchantMissing as u32),
         (

@@ -48,7 +48,8 @@ fn setup_with_admins(
     let governance = register_governance(env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(env, &contract_id);
-    client.init(admins, &threshold, &governance, &recovery_address);
+    let deployer = Address::generate(env);
+    client.init(&deployer, admins, &threshold, &governance, &recovery_address);
     (client, recovery_address)
 }
 

@@ -27,7 +27,7 @@ use crate::{
 #[contractimpl]
 impl SettlementContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
-        version == 1
+        version == crate::SUPPORTED_INTERFACE_VERSION
     }
 
     /// Initialize the contract with the given admin address.
@@ -37,6 +37,7 @@ impl SettlementContract {
     /// * [`AlreadyInitialized`](SettlementError::AlreadyInitialized) — if the contract has already been initialized.
     pub fn init(
         env: Env,
+        deployer: Address,
         admins: Vec<Address>,
         threshold: u32,
         governance: Address,
@@ -45,6 +46,8 @@ impl SettlementContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, SettlementError::AlreadyInitialized);
         }
+        // Gate initialization to the deployer to prevent front-running (issue #684).
+        deployer.require_auth();
         validate_admins_and_threshold(&env, &admins, threshold);
         validate_governance(&env, &governance);
         validate_nonzero_address(
@@ -56,6 +59,7 @@ impl SettlementContract {
         for i in 0..threshold {
             admins.get(i).unwrap().require_auth();
         }
+        env.storage().instance().set(&DataKey::Deployer, &deployer);
         write_admins(&env, &admins, threshold);
         env.storage()
             .instance()
@@ -143,6 +147,27 @@ impl SettlementContract {
         events::emit_recovery_cancelled(&env, &admin);
     }
 
+    pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        let admin = signers.get(0).unwrap();
+        validate_nonzero_address(
+            &env,
+            &new_recovery,
+            SettlementError::InvalidRecoveryAddress,
+            SettlementError::InvalidRecoveryAddress,
+        );
+        env.storage()
+            .instance()
+            .set(&CommonDataKey::RecoveryAddress, &new_recovery);
+        env.events().publish(
+            (
+                Symbol::new(&env, events::RECOVERY_ADDRESS_UPDATED_EVENT),
+                new_recovery.clone(),
+            ),
+            admin,
+        );
+    }
+
     pub fn execute_recovery(env: Env) {
         let pending = read_pending_recovery(&env);
         if env.ledger().timestamp() < pending.execute_after {
@@ -174,6 +199,13 @@ impl SettlementContract {
     ) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         validate_admins_and_threshold(&env, &new_admins, new_threshold);
+
+        // Enforce admin/merchant exclusivity in both directions (issue #692).
+        for i in 0..new_admins.len() {
+            if is_merchant_registered_and_bump_ttl(&env, new_admins.get(i).unwrap()) {
+                panic_with_error!(&env, SettlementError::InvalidAdmin);
+            }
+        }
 
         let old_admin = read_admin(&env);
         write_admins(&env, &new_admins, new_threshold);
@@ -245,16 +277,20 @@ impl SettlementContract {
 
     pub fn pause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
+        if storage::is_paused(&env) {
+            panic_with_error!(&env, SettlementError::AlreadyPaused);
+        }
         let admin = signers.get(0).unwrap();
-        storage::set_paused(&env, true);
-        events::emit_paused(&env, &admin);
+        storage::apply_pause(&env, &admin);
     }
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
+        if !storage::is_paused(&env) {
+            panic_with_error!(&env, SettlementError::AlreadyUnpaused);
+        }
         let admin = signers.get(0).unwrap();
-        storage::set_paused(&env, false);
-        events::emit_unpaused(&env, &admin);
+        storage::apply_unpause(&env, &admin);
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -262,8 +298,16 @@ impl SettlementContract {
     }
 
     /// Schedules an administrative operation to be executed after a timelock.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
+    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `DEFAULT_TIMELOCK_DELAY_SECONDS`.
+    /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
     pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
         let caller = signers.get(0).unwrap();
 
         if execute_in < DEFAULT_TIMELOCK_DELAY_SECONDS {
@@ -305,7 +349,15 @@ impl SettlementContract {
     }
 
     /// Executes a previously scheduled administrative operation.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`OperationNotScheduled`](SettlementError::OperationNotScheduled) — if the operation was not scheduled.
+    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
     pub fn execute(env: Env, operation: Operation) {
+        assert_not_paused(&env);
+
         let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
@@ -331,11 +383,7 @@ impl SettlementContract {
 
         match operation {
             Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, new_gov),
-            Operation::CancelRecovery => {
-                let admin = read_admin(&env);
-                admin.require_auth();
-                Self::_cancel_recovery(&env)
-            }
+            Operation::CancelRecovery => Self::_cancel_recovery(&env),
             Operation::TransferAdmin(new_admins, new_threshold) => {
                 Self::_transfer_admin(&env, new_admins, new_threshold)
             }
@@ -356,8 +404,15 @@ impl SettlementContract {
     }
 
     /// Cancels a scheduled administrative operation.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
+    /// * [`OperationNotScheduled`](SettlementError::OperationNotScheduled) — if the operation was not scheduled.
     pub fn cancel(env: Env, signers: Vec<Address>, operation: Operation) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
         let caller = signers.get(0).unwrap();
 
         let operation_xdr = operation.clone().to_xdr(&env);
@@ -417,6 +472,12 @@ impl SettlementContract {
     fn _transfer_admin(env: &Env, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
+        // Enforce admin/merchant exclusivity in both directions (issue #692).
+        for i in 0..new_admins.len() {
+            if is_merchant_registered_and_bump_ttl(env, new_admins.get(i).unwrap()) {
+                panic_with_error!(env, SettlementError::InvalidAdmin);
+            }
+        }
         write_admins(env, &new_admins, new_threshold);
         let primary_new_admin = new_admins.get(0).unwrap();
         events::emit_admin_transferred(
@@ -476,6 +537,12 @@ impl SettlementContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+
+        // Remove any ArchivedMerchant tombstone from a prior registration so
+        // the re-registered merchant can read new payment records (issue #685).
+        let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+        env.storage().persistent().remove(&archived_key);
+
         env.events().publish(
             (
                 Symbol::new(env, events::MERCHANT_REGISTERED_EVENT),
