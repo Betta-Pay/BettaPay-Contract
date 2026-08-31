@@ -249,10 +249,8 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
-    env.events().publish(
-        (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
-        BOOTSTRAP_DEFAULT_RULE,
-    );
+    // No event emitted here — the hot path runs this on every payment and
+    // event spam would burn unnecessary compute (issue #691).
     BOOTSTRAP_DEFAULT_RULE
 }
 
