@@ -12,6 +12,7 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Testing](#testing)
 - [Building WASM Binaries](#building-wasm-binaries)
 - [Optional: Soroban CLI Scripts](#optional-soroban-cli-scripts)
+- [Code Ownership and Review Process](#code-ownership-and-review-process)
 - [Pull Request Checklist](#pull-request-checklist)
 - [Commit Message Conventions](#commit-message-conventions)
 - [Reporting Issues](#reporting-issues)
@@ -203,6 +204,17 @@ targets and features, workspace tests, a test-snapshot drift check, script
 smoke tests, WASM optimization, and the deployed-artifact size check. Run the
 same command locally to avoid CI failures.
 
+### Security documentation checks
+
+`scripts/tests/security_docs_test.sh` is a lightweight check that `SECURITY.md`
+still documents the vulnerability report template, the report owners, and the
+90-day disclosure window, and that `README.md` links to it. Run it after
+editing either file:
+
+```bash
+bash scripts/tests/security_docs_test.sh
+```
+
 ## Building WASM Binaries
 
 Optimized WASM artifacts are required for deployment:
@@ -251,6 +263,53 @@ Environment variables (all optional, with defaults for testnet):
 
 Never commit Soroban identity keys or `.soroban/` directory contents.
 
+## Code Ownership and Review Process
+
+Some paths in this repository are cross-cutting: a change there can silently
+affect both contracts, or change the process the whole project relies on.
+These paths are listed in [`CODEOWNERS`](CODEOWNERS) at the repo root, using
+GitHub's [CODEOWNERS syntax](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
+
+Currently mapped paths include:
+
+- `/adr/` — Architecture Decision Records
+- `bettapay_common/src/constants.rs` and any `**/constants.rs` — shared
+  protocol constants (fee bounds, TTL policy, recovery delay) used by both
+  contracts
+- `/scripts/` and `/Makefile` — deployment, simulation, and CI-support
+  tooling
+- `CODEOWNERS`, `SECURITY.md`, `CONTRIBUTING.md`, and `.github/workflows/**`
+  — repo governance and CI configuration itself
+
+**What this means for contributors:**
+
+- If your PR touches any file under one of the mapped paths, GitHub will
+  automatically request review from the listed owner(s) — check the
+  "Reviewers" panel on your PR, or run `git diff --name-only main...HEAD`
+  against `CODEOWNERS` yourself before opening the PR if you want to know in
+  advance.
+- A PR that touches an owned path is expected to get sign-off from the
+  mapped owner(s) before it merges, in addition to any other review the
+  branch protection rules require. This keeps ADRs, shared constants, and
+  process/CI files from drifting without someone accountable looking at the
+  change.
+- If you believe a path should be owned (or the current owner is stale),
+  open a PR against `CODEOWNERS` itself — that file is self-owned, so it
+  goes through the same review it enforces on everything else.
+
+**Keeping CODEOWNERS honest:** every pattern in `CODEOWNERS` is expected to
+resolve to a real file or directory in the repo, and every entry must name
+at least one `@`-prefixed owner. Run this locally before pushing:
+
+```bash
+bash scripts/check_codeowners.sh
+# or, via the Makefile target used by CI:
+make check_codeowners
+```
+
+This also runs as part of `make all` (the same gate CI runs on every PR), so
+a stale or malformed `CODEOWNERS` fails CI rather than rotting silently.
+
 ## Pull Request Checklist
 
 Before requesting review, confirm:
@@ -259,10 +318,12 @@ Before requesting review, confirm:
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
 - [ ] `bash scripts/tests/tooling_smoke_test.sh` passes
+- [ ] `bash scripts/check_codeowners.sh` passes (if you touched `CODEOWNERS` or an owned path)
 - [ ] `make wasm_size` succeeds
 - [ ] New behavior has corresponding unit tests
 - [ ] Snapshot changes (if any) are intentional and documented
 - [ ] PR description references the related issue (e.g. `Closes #125`)
+- [ ] If your change touches a path listed in [`CODEOWNERS`](CODEOWNERS), you've flagged it for the mapped owner(s)
 
 ## Commit Message Conventions
 

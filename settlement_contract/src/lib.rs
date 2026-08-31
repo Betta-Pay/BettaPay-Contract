@@ -31,6 +31,21 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
+//! ## Settlement Boundary (Off-Chain Execution)
+//!
+//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a 
+//! `payment_stored` event. It does **not** transfer tokens, hold funds, or expose an in-contract `settle` function.
+//!
+//! Settlement execution is intentionally designed to be **off-chain**:
+//! 1. **Indexers** listen to `payment_stored` events and read the `PaymentRecord` state.
+//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay: 
+//!    `current_ledger >= record.ledger + record.settlement_delay_ledger`.
+//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where 
+//!    appropriate based on `auto_settle` preferences) and tracks settlement state externally.
+//!
+//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives 
+//! enforcing standardized agreement parameters for off-chain consumers; they do not trigger on-chain state transitions.
+//!
 //! ## Event Conventions
 //!
 //! Events are emitted via [`soroban_sdk::Env::events`]. To give off-chain
@@ -59,8 +74,9 @@
 //! payload shapes defined in [`bettapay_common::events`] so an indexer can
 //! decode them identically no matter which contract published them.
 //! - Each entry point emits exactly the events tied to the state change it
-//!   performs; no two events emitted by the same call describe the same
-//!   logical change.
+//!   performs. Usually, no two events emitted by the same call describe the
+//!   same logical change, though exceptions exist (e.g., `_set_settlement_rule`
+//!   emits both `bootstrap_fallback` and `settlement_rule_updated` when falling back).
 //!
 //! ## Upgrade Process
 //!
@@ -81,10 +97,11 @@
 //!    struct — the old type is what keeps those entries readable.
 //! 4. Order is: upgrade the Wasm, then call `migrate`, then verify the
 //!    post-upgrade state, then remove the migration code in a later upgrade.
-//! 5. `Payment(BytesN<32>)`, `Merchant(Address)` and `Rule(Address)` are keyed
-//!    by value and Soroban cannot enumerate storage keys — which is why
-//!    [`SettlementContract::get_payments`] takes the references from the
-//!    caller. Convert these lazily on read, or pass the keys in explicitly.
+//! 5. `Payment(Address, BytesN<32>)`, `Merchant(Address)` and `Rule(Address)`
+//!    are keyed by value and Soroban cannot enumerate storage keys — which is
+//!    why [`SettlementContract::get_payments`] takes the merchant and the
+//!    references from the caller. Convert these lazily on read, or pass the
+//!    keys in explicitly.
 //! 6. Call `extend_ttl` on anything the migration rewrites: `set` alone does
 //!    not extend an entry's life, so a migrated record would otherwise expire
 //!    sooner than an untouched one.
@@ -105,6 +122,7 @@
 //! - `transfer_admin` — rotate compromised keys
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
+//! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
 //!
 //! ## Event Convention
 //!
@@ -162,10 +180,11 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+use bettapay_common::constants::MIN_FEE_BPS;
 use soroban_sdk::contract;
 
 pub use errors::SettlementError;
-pub use types::{Bps, FeeConfig, FeeSplit, Operation, PaymentRecord, SettlementRule};
+pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
@@ -185,6 +204,13 @@ pub use types::{Bps, FeeConfig, FeeSplit, Operation, PaymentRecord, SettlementRu
 /// rounded-up legs exceed the gross; see `calculate_split` for that edge case.
 pub(crate) const MIN_PAYMENT_AMOUNT: i128 = 100;
 pub(crate) const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
+
+/// Default settlement delay period applied as a fallback (1 day equivalent in ledgers)
+pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
+
+/// Maximum number of payments that can be retrieved in a single batch lookup
+pub const MAX_PAYMENTS_BATCH: u32 = 100;
+
 /// Approximate ledgers per day on Stellar (~5s per ledger).
 pub(crate) const LEDGERS_PER_DAY: u32 = 17280;
 
@@ -208,7 +234,7 @@ pub(crate) const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 // Used until the admin sets a global default settlement rule.
 pub(crate) const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
     platform_fee_bps: 100,
-    network_fee_bps: 0,
+    network_fee_bps: MIN_FEE_BPS,
     settlement_delay_ledger: 0,
     auto_settle: false,
 };
