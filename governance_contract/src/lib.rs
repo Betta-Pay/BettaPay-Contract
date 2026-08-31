@@ -341,7 +341,13 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
-    pub fn init(env: Env, deployer: Address, admins: Vec<Address>, threshold: u32, recovery_address: Address) {
+    pub fn init(
+        env: Env,
+        deployer: Address,
+        admins: Vec<Address>,
+        threshold: u32,
+        recovery_address: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, GovernanceError::AlreadyInitialized);
         }
@@ -394,11 +400,7 @@ impl GovernanceContract {
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
-        assert_not_zero(
-            &env,
-            &new_recovery,
-            GovernanceError::InvalidRecoveryAddress,
-        );
+        assert_not_zero(&env, &new_recovery, GovernanceError::InvalidRecoveryAddress);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
@@ -514,7 +516,9 @@ impl GovernanceContract {
 
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
-        env.storage().instance().set(&CommonDataKey::Threshold, &1u32);
+        env.storage()
+            .instance()
+            .set(&CommonDataKey::Threshold, &1u32);
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
@@ -723,7 +727,9 @@ impl GovernanceContract {
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
-        env.storage().persistent().extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         env.events().publish(
             (Symbol::new(&env, events::ANCHOR_UPSERTED_EVENT), asset),
             (old_anchor, anchor),
@@ -925,8 +931,8 @@ mod real_auth_tests;
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -1195,7 +1201,7 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn set_fee_config_rejects_fees_exceeding_ceiling() {
         let (_env, client, admins, _recovery) = setup();
-        
+
         // Sum exceeds BPS_DENOMINATOR
         let cfg = FeeConfig {
             platform_fee_bps: 5_000,
@@ -1209,7 +1215,7 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn set_fee_config_rejects_individual_fee_exceeding_max() {
         let (_env, client, admins, _recovery) = setup();
-        
+
         // Individual fee exceeds MAX_FEE_BPS (governance trust root)
         let cfg = FeeConfig {
             platform_fee_bps: 5_001,
