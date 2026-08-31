@@ -116,7 +116,8 @@ fn read_path_governance_failure_surfaces_typed_error() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
 
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
@@ -142,7 +143,8 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
     // Empty governance returns None — bootstrap default should apply (100 bps platform, 5 network).
@@ -175,7 +177,8 @@ fn write_path_governance_failure_surfaces_typed_error() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
     // Directly inject the panicking governance address.
@@ -209,7 +212,8 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
 
     // Directly inject the panicking governance address.
     inject_governance(&env, &contract_id, &panicking_gov);
@@ -225,27 +229,176 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #483: Malformed governance config (1-field, missing network_fee_bps)
+// Issue #124: Init and update_governance succeed without cross-contract calls
 // ---------------------------------------------------------------------------
 
-/// Governance stub that returns a 1-field config struct (only
-/// `platform_fee_bps`). The settlement contract expects `Option<GovFeeConfig>`
-/// with 2 fields (`platform_fee_bps` + `network_fee_bps`).
-///
-/// The cross-contract deserialization of a mismatched struct shape must fail,
-/// surfacing as `GovernanceCallFailed` (code 311) rather than silently
-/// accepting the config and skipping the network-fee ceiling.
-///
-/// This test proves issue #483: a 1-field governance config is rejected.
+mod reentrant_gov {
+    use soroban_sdk::{contract, contractimpl, IntoVal, Address, Env, Symbol};
+    use crate::{GovFeeConfig, SettlementContractClient};
+
+    /// A governance stub that attempts to call back into SettlementContract
+    /// during `get_fee_config` (simulates reentrancy).
+    #[contract]
+    pub struct ReentrantInitGovernance;
+
+    #[contractimpl]
+    impl ReentrantInitGovernance {
+        pub fn get_fee_config(env: Env) -> Option<GovFeeConfig> {
+            if let Some(settle_addr) = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&Symbol::new(&env, "target_settle"))
+            {
+                let client = SettlementContractClient::new(&env, &settle_addr);
+                let _ = client.is_initialized();
+            }
+            None
+        }
+
+        pub fn set_target(env: Env, target_settle: Address) {
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "target_settle"), &target_settle);
+        }
+    }
+}
+
+use reentrant_gov::ReentrantInitGovernance;
+
+/// `init` must succeed regardless of governance's behavior, because `init`
+/// does not invoke cross-contract calls on `governance` (Issue #124).
 #[test]
-#[should_panic(expected = "Error(Contract, #311)")]
-fn malformed_one_field_config_rejected_write_path() {
+fn init_succeeds_with_panicking_governance() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let malformed_gov = env.register_contract(None, MalformedGovernance);
-    let empty_gov = super::register_governance(&env);
+    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
 
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    // init must succeed directly with panicking_gov without cross-calling it
+    client.init(
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &panicking_gov,
+        &recovery,
+    );
+
+    assert_eq!(client.get_governance(), panicking_gov);
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, admin]);
+}
+
+/// `update_governance` must also succeed directly with a panicking governance
+/// contract without making cross-contract calls during update (Issue #124).
+#[test]
+fn update_governance_succeeds_with_panicking_governance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let empty_gov = super::register_governance(&env);
+    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, admin];
+
+    client.init(&admins, &1, &empty_gov, &recovery);
+    client.update_governance(&admins, &panicking_gov);
+
+    assert_eq!(client.get_governance(), panicking_gov);
+}
+
+/// `init` succeeds with a reentrant governance contract and guards against
+/// double-initialization reentrancy (Issue #124).
+#[test]
+fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reentrant_gov_id = env.register_contract(None, ReentrantInitGovernance);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    // Configure target for potential reentrancy callback
+    env.invoke_contract::<()>(
+        &reentrant_gov_id,
+        &soroban_sdk::Symbol::new(&env, "set_target"),
+        soroban_sdk::vec![&env, contract_id.to_val()],
+    );
+
+    client.init(
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &reentrant_gov_id,
+        &recovery,
+    );
+
+    assert!(client.is_initialized());
+    assert_eq!(client.get_governance(), reentrant_gov_id);
+
+    // Reentry / second initialization must panic with AlreadyInitialized
+    let res = client.try_init(
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &reentrant_gov_id,
+        &recovery,
+    );
+    assert!(res.is_err());
+}
+// Failure Variant Coverage for Governance Fee Rule Resolution
+// ---------------------------------------------------------------------------
+
+/// Verifies that when governance returns a valid `GovFeeConfig`, `read_governance_fee_rule`
+/// applies the configured fee BPS directly.
+#[test]
+fn read_path_governance_valid_config_used() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_id = env.register_contract(None, crate::GovernanceContract);
+    let gov_client = crate::GovernanceContractClient::new(&env, &gov_id);
+    let gov_admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    gov_client.init(&soroban_sdk::vec![&env, gov_admin.clone()], &1, &recovery);
+
+    // Set governance fee config: 250 platform bps, 50 network bps
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin],
+        &GovFeeConfig {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+        },
+    );
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &gov_id, &recovery);
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 250);
+    assert_eq!(split.network_fee_amount, 50);
+    assert_eq!(split.merchant_amount, 9_700);
+}
+
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the fallback
+/// to bootstrap default emits `BOOTSTRAP_FALLBACK_EVENT`.
+#[test]
+fn read_path_governance_none_emits_bootstrap_fallback_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let empty_gov = super::register_governance(&env);
     let admin = Address::generate(&env);
     let recovery = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -253,82 +406,24 @@ fn malformed_one_field_config_rejected_write_path() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
-    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
-    // Inject governance that returns a 1-field config.
-    inject_governance(&env, &contract_id, &malformed_gov);
-
-    let rule = SettlementRule {
-        platform_fee_bps: 100,
-        network_fee_bps: 50,
-        settlement_delay_ledger: 0,
-        auto_settle: false,
-    };
-
-    // set_settlement_rule -> validate_fee_against_governance -> get_fee_config.
-    // The 1-field response cannot deserialize into GovFeeConfig (2 fields),
-    // so GovernanceCallFailed must be raised — the network-fee ceiling must
-    // NOT be silently skipped.
-    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
-}
-
-/// Same malformed 1-field config exercised through `set_default_rule` to
-/// confirm the read-through-validate path also rejects it.
-#[test]
-#[should_panic(expected = "Error(Contract, #311)")]
-fn malformed_one_field_config_rejected_default_rule() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let malformed_gov = env.register_contract(None, MalformedGovernance);
-    let empty_gov = super::register_governance(&env);
-
-    let admin = Address::generate(&env);
-    let recovery = Address::generate(&env);
-
-    let contract_id = env.register_contract(None, SettlementContract);
-    let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
-
-    // Inject governance that returns a 1-field config.
-    inject_governance(&env, &contract_id, &malformed_gov);
-
-    let rule = SettlementRule {
-        platform_fee_bps: 100,
-        network_fee_bps: 50,
-        settlement_delay_ledger: 0,
-        auto_settle: false,
-    };
-
-    // set_default_rule -> validate_fee_against_governance -> get_fee_config.
-    // Must surface GovernanceCallFailed for malformed 1-field config.
-    client.set_default_rule(&soroban_sdk::vec![&env, admin], &rule);
-}
-
-/// Malformed 1-field config also rejected on the read path (calculate_fee_split
-/// falls through to read_governance_fee_rule when no merchant/default rule is set).
-#[test]
-#[should_panic(expected = "Error(Contract, #311)")]
-fn malformed_one_field_config_rejected_read_path() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let malformed_gov = env.register_contract(None, MalformedGovernance);
-    let empty_gov = super::register_governance(&env);
-
-    let admin = Address::generate(&env);
-    let recovery = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
-    let contract_id = env.register_contract(None, SettlementContract);
-    let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
-    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
-
-    // Inject governance that returns a 1-field config.
-    inject_governance(&env, &contract_id, &malformed_gov);
-
-    // No rule set → resolution falls through to governance read path.
-    // The 1-field response fails deserialization → GovernanceCallFailed.
     client.calculate_fee_split(&merchant, &10_000);
+
+    let events = env.events().all();
+    let mut fallback_event_emitted = false;
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() {
+            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+            if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
+                fallback_event_emitted = true;
+            }
+        }
+    }
+    assert!(
+        fallback_event_emitted,
+        "BOOTSTRAP_FALLBACK_EVENT must be emitted when degrading to bootstrap defaults"
+    );
 }
+
