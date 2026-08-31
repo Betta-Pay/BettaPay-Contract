@@ -22,10 +22,10 @@ We chose a **bootstrap fallback approach**:
   };
   ```
 - The `init()` function does **not** require or store a default rule.
-- When resolving the effective rule for a merchant, the contract checks:
-  1. Merchant-specific rule → stored globally via `set_default_rule`
+- When resolving the effective rule for a merchant, the contract checks, in order:
+  1. Merchant-specific rule → stored per-merchant via `set_settlement_rule`
   2. Global default rule → stored globally via `set_default_rule`
-  3. Bootstrap fallback → hardcoded in contract code
+  3. Bootstrap fallback → hardcoded in contract code as `BOOTSTRAP_DEFAULT_RULE`
 - A `bootstrap_fallback` event is emitted whenever the bootstrap rule is used, so indexers can detect unconfigured deployments.
 
 ## Consequences
