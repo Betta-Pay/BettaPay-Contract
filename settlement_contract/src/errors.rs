@@ -86,6 +86,11 @@ pub enum SettlementError {
     /// by `execute()`/`cancel()` if the operation supplied does not
     /// byte-for-byte match the operation stored under that hash.
     OperationHashCollision = 316,
+    /// The stored admin list was empty when resolving the primary admin
+    /// (index `0`). Unreachable in practice — `write_admins` rejects an
+    /// empty admin list at write time — but `read_admin` surfaces this
+    /// instead of an untyped panic if that invariant is ever violated.
+    AdminSetEmpty = 317,
 }
 
 const _: () = {
@@ -130,4 +135,5 @@ const _: () = {
     assert!(SettlementError::BatchTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::OperationHashCollision as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::AdminSetEmpty as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };
