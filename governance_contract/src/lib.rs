@@ -1640,7 +1640,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
@@ -1661,7 +1661,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
 
         client.change_threshold(&admins, &0);
