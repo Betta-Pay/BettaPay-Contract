@@ -27,7 +27,7 @@ fn emits_event_on_initialization() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -249,7 +249,7 @@ fn pause_rejected_for_non_admin() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn pause_rejected_when_already_paused() {
     let (_env, client, admins, _merchant) = setup();
     client.pause(&admins);
@@ -266,7 +266,7 @@ fn unpause_rejected_when_already_unpaused() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn double_pause_emits_no_extra_event() {
     let (env, client, admins, _merchant) = setup();
     client.pause(&admins);
@@ -357,10 +357,13 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert!(
+        client.is_paused(),
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -466,7 +469,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -531,7 +537,7 @@ fn recovery_executes_after_delay() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -547,6 +553,33 @@ fn recovery_executes_after_delay() {
     client.execute_recovery();
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn initiate_recovery_rejects_overwrite_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let first_target = Address::generate(&env);
+    let second_target = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&first_target);
+
+    // Second initiation must be rejected — a recovery is already pending.
+    client.initiate_recovery(&second_target);
 }
 
 // ---------------------------------------------------------------------------
