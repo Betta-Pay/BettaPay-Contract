@@ -17,7 +17,9 @@ fn fee_anchor_and_system_param_writes_require_real_authorization() {
     let key = Symbol::new(&env, "real_auth");
     env.mock_auths(&[]);
 
-    assert!(client.try_set_fee_config(&admins, &valid_fee_config()).is_err());
+    assert!(client
+        .try_set_fee_config(&admins, &valid_fee_config())
+        .is_err());
     assert!(client.try_upsert_anchor(&admins, &asset, &anchor).is_err());
     assert!(client.try_update_system_param(&admins, &key, &1).is_err());
 }
@@ -52,7 +54,8 @@ fn admin_transfer_and_threshold_change_require_real_authorization() {
     let recovery = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &recovery);
     env.mock_auths(&[]);
 
     assert!(client.try_change_threshold(&admins, &2).is_err());
@@ -94,7 +97,8 @@ fn initialization_and_upgrade_require_real_authorization() {
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
     env.mock_auths(&[]);
-    assert!(client.try_init(&admins, &1, &recovery).is_err());
+    let deployer = Address::generate(&env);
+    assert!(client.try_init(&deployer, &admins, &1, &recovery).is_err());
 
     let (env, client, admins) = super::setup();
     let wasm_hash = env

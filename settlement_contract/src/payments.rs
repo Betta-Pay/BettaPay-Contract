@@ -8,9 +8,10 @@ use crate::storage::{
     is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
+use crate::BOOTSTRAP_DEFAULT_RULE;
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
