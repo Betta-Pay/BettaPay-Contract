@@ -1,8 +1,6 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{
-    Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS,
-};
+use crate::{Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS};
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env};
 
@@ -16,7 +14,9 @@ fn scheduled_operation_executes_only_after_delay() {
     let operation = Operation::TransferAdmin(new_admins.clone(), 1);
 
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert_eq!(client.get_admin(), admins);
 
     env.ledger()
@@ -25,7 +25,9 @@ fn scheduled_operation_executes_only_after_delay() {
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
     assert_eq!(client.get_threshold(), 1);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
 }
 
 #[test]
@@ -71,7 +73,9 @@ fn admin_can_cancel_but_non_admin_cannot() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert!(client
         .try_cancel(&soroban_sdk::vec![&env, admins.get(0).unwrap()], &operation)
         .is_err());
@@ -90,7 +94,9 @@ fn multisig_schedule_and_cancel_require_two_of_three_signers() {
     client.schedule(&two_signers, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client.try_cancel(&one_signer, &operation).is_err());
     client.cancel(&two_signers, &operation);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
 }
 
 #[test]
@@ -104,7 +110,9 @@ fn multisig_schedule_and_execute_apply_operation_after_delay() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS - 1);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert!(!client.is_merchant_registered(&merchant));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 1);
