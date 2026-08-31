@@ -233,7 +233,7 @@ fn stored_payment_record_uses_propagated_governance_fees_when_no_explicit_rule()
     assert_eq!(split.merchant_amount, 9_700);
 
     let record = settle_client
-        .get_payment_reference(&merchant, &payment_ref)
+        .get_payment_reference(&merchant, &payment_ref, &soroban_sdk::vec![&env])
         .expect("payment record must exist");
     assert_eq!(record.amount, amount);
     assert_eq!(record.platform_fee_amount, 200);
@@ -614,7 +614,9 @@ fn full_lifecycle_configure_governance_then_process_payments() {
 
     // 5. Verify each payment locked in the custom rule BPS & correct ceil-rounding splits.
     let check = |idx: u32, r: BytesN<32>, a: i128| {
-        let rec = settle_client.get_payment_reference(&merchant, &r).unwrap();
+        let rec = settle_client
+            .get_payment_reference(&merchant, &r, &soroban_sdk::vec![&env])
+            .unwrap();
         assert_eq!(
             rec.platform_fee_bps, 150,
             "payment {idx} uses merchant rule BPS"
@@ -650,7 +652,7 @@ fn full_lifecycle_configure_governance_then_process_payments() {
     assert_eq!(stored_fees.network_fee_bps, 50);
 
     // 7. Batch-read returns consistent ordering & length.
-    let records = settle_client.get_payments(&merchant, &refs);
+    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
     assert_eq!(records.len(), 4);
     for i in 0..amounts.len() as u32 {
         assert_eq!(records.get(i).unwrap().amount, amounts[i as usize]);
@@ -787,10 +789,10 @@ fn cross_merchant_reference_reuse_is_allowed() {
 
     // Reads are scoped to the merchant namespace and records carry ownership.
     let rec_a = settle_client
-        .get_payment_reference(&merchant, &reference)
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
         .unwrap();
     let rec_b = settle_client
-        .get_payment_reference(&merchant2, &reference)
+        .get_payment_reference(&merchant2, &reference, &soroban_sdk::vec![&env])
         .unwrap();
 
     assert_eq!(
@@ -806,7 +808,7 @@ fn cross_merchant_reference_reuse_is_allowed() {
 
     // Batch reads are scoped identically: merchant A only sees its own record.
     let refs = soroban_sdk::vec![&env, reference.clone()];
-    let batch_a = settle_client.get_payments(&merchant, &refs);
+    let batch_a = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
     assert_eq!(batch_a.len(), 1);
     assert_eq!(batch_a.get(0).unwrap().merchant, merchant);
     assert_eq!(batch_a.get(0).unwrap().amount, 1_000);
@@ -870,7 +872,7 @@ fn get_payment_reference_owner_read_works() {
 
     // The merchant's own read succeeds and returns the stored economics.
     let record = settle_client
-        .get_payment_reference(&merchant, &reference)
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
         .expect("owner read must succeed");
     assert_eq!(record.merchant, merchant);
     assert_eq!(record.amount, 10_000);
@@ -878,9 +880,83 @@ fn get_payment_reference_owner_read_works() {
 
     // Batch read for the owner works too.
     let refs = soroban_sdk::vec![&env, reference];
-    let records = settle_client.get_payments(&merchant, &refs);
+    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
     assert_eq!(records.len(), 1);
     assert_eq!(records.get(0).unwrap().amount, 10_000);
+}
+
+// ---------------------------------------------------------------------------
+// Issue 559: Payment-record reads enforce owner-or-admin auth
+// ---------------------------------------------------------------------------
+
+/// An admin can read any merchant's payment records through the same entry
+/// points the merchant uses, by passing the admin signer set. This is the
+/// admin half of the owner-or-admin read policy (issue #559).
+#[test]
+fn admin_reads_any_merchants_payment_records() {
+    let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    let merchant2 = Address::generate(&env);
+    settle_client.register_merchant(&settle_admins, &merchant);
+    settle_client.register_merchant(&settle_admins, &merchant2);
+
+    let reference = BytesN::<32>::from_array(&env, &[41u8; 32]);
+    settle_client.store_payment_reference(&merchant, &reference, &7_000);
+    settle_client.store_payment_reference(&merchant2, &reference, &9_000);
+
+    // Admin reads merchant A's single record with the admin signer set.
+    let rec_a = settle_client
+        .get_payment_reference(&merchant, &reference, &settle_admins)
+        .unwrap();
+    assert_eq!(rec_a.merchant, merchant);
+    assert_eq!(rec_a.amount, 7_000);
+
+    // And merchant B's record with the same signer set.
+    let rec_b = settle_client
+        .get_payment_reference(&merchant2, &reference, &settle_admins)
+        .unwrap();
+    assert_eq!(rec_b.merchant, merchant2);
+    assert_eq!(rec_b.amount, 9_000);
+
+    // The batch read works for the admin too.
+    let refs = soroban_sdk::vec![&env, reference];
+    let records = settle_client.get_payments(&merchant, &refs, &settle_admins);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records.get(0).unwrap().merchant, merchant);
+    assert_eq!(records.get(0).unwrap().amount, 7_000);
+}
+
+/// A caller that is neither the owning merchant nor an admin is denied on
+/// both read entry points. This is the negative half of the owner-or-admin
+/// read policy (issue #559).
+#[test]
+fn non_owner_non_admin_cannot_read_payments() {
+    let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let reference = BytesN::<32>::from_array(&env, &[42u8; 32]);
+    settle_client.store_payment_reference(&merchant, &reference, &5_000);
+
+    // Owner path (empty signers): `merchant.require_auth()` must reject a
+    // caller that is not the merchant. Auth mocking is disabled so the
+    // ownership check is actually enforced rather than mocked away.
+    env.set_auths(&[]);
+    let single =
+        settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
+    assert!(single.is_err());
+    let refs = soroban_sdk::vec![&env, reference.clone()];
+    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    assert!(batch.is_err());
+
+    // Admin path (bogus signers): the signer is not an admin, so the read is
+    // rejected with Unauthorized even though auth mocking is enabled.
+    env.mock_all_auths();
+    let unauthorized =
+        soroban_sdk::Error::from_contract_error(SettlementError::Unauthorized as u32);
+    let bogus = soroban_sdk::vec![&env, Address::generate(&env)];
+    let single = settle_client.try_get_payment_reference(&merchant, &reference, &bogus);
+    assert!(matches!(single, Err(Ok(ref err)) if *err == unauthorized));
+    let batch = settle_client.try_get_payments(&merchant, &refs, &bogus);
+    assert!(matches!(batch, Err(Ok(ref err)) if *err == unauthorized));
 }
 
 // ---------------------------------------------------------------------------
@@ -901,7 +977,7 @@ fn payments_of_unregistered_merchant_are_orphaned() {
     // While registered, the merchant can read its own record.
     assert!(
         settle_client
-            .get_payment_reference(&merchant, &reference)
+            .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
             .is_some(),
         "registered merchant must be able to read its own payment"
     );
@@ -911,14 +987,15 @@ fn payments_of_unregistered_merchant_are_orphaned() {
 
     // Post-unregister reads are rejected with PaymentOrphaned (#315).
     let orphaned = soroban_sdk::Error::from_contract_error(SettlementError::PaymentOrphaned as u32);
-    let single = settle_client.try_get_payment_reference(&merchant, &reference);
+    let single =
+        settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
     assert!(
         matches!(single, Err(Ok(ref err)) if *err == orphaned),
         "post-unregister single read must be rejected as orphaned"
     );
 
     let refs = soroban_sdk::vec![&env, reference];
-    let batch = settle_client.try_get_payments(&merchant, &refs);
+    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
     assert!(
         matches!(batch, Err(Ok(ref err)) if *err == orphaned),
         "post-unregister batch read must be rejected as orphaned"
@@ -940,7 +1017,8 @@ fn reregistered_merchant_cannot_resurrect_orphaned_payments() {
     assert!(settle_client.is_merchant_registered(&merchant));
 
     // The tombstone outlives the registration cycle.
-    let result = settle_client.try_get_payment_reference(&merchant, &reference);
+    let result =
+        settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
     assert!(
         matches!(
             result,
@@ -977,7 +1055,8 @@ fn timelocked_unregister_also_orphans_payments() {
     settle_client.execute(&settle_admins.get(0).unwrap(), &operation);
 
     assert!(!settle_client.is_merchant_registered(&merchant));
-    let result = settle_client.try_get_payment_reference(&merchant, &reference);
+    let result =
+        settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
     assert!(
         matches!(
             result,
@@ -1086,7 +1165,7 @@ fn get_payments_rejects_batch_too_large() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    settle_client.get_payments(&merchant, &refs);
+    settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
 }
 
 #[test]
@@ -1099,7 +1178,7 @@ fn get_payments_accepts_max_batch_size() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    let payments = settle_client.get_payments(&merchant, &refs);
+    let payments = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
     assert_eq!(payments.len(), 0); // No payments stored, but succeeds
 }
 
@@ -1126,7 +1205,7 @@ fn off_chain_settlement_readiness_logic() {
     settle_client.store_payment_reference(&merchant, &reference, &10_000);
 
     let record = settle_client
-        .get_payment_reference(&merchant, &reference)
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
         .unwrap();
     assert_eq!(record.ledger, 1000);
     assert_eq!(record.settlement_delay_ledger, 10);
