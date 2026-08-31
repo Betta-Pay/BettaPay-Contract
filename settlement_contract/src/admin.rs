@@ -531,6 +531,11 @@ impl SettlementContract {
             }
         }
 
+        // Same consent requirement as the direct `register_merchant` path: the
+        // merchant must authorize its own registration, even when scheduled
+        // and executed through the timelocked admin-operation flow.
+        merchant.require_auth();
+
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(env, SettlementError::MerchantExists);

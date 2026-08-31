@@ -46,6 +46,12 @@ impl SettlementContract {
             }
         }
 
+        // The merchant must consent to its own registration — admin auth alone
+        // is not proof the merchant address is controlled by the party being
+        // registered, and would otherwise let an admin register arbitrary or
+        // squatted addresses as merchants.
+        merchant.require_auth();
+
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, SettlementError::MerchantExists);

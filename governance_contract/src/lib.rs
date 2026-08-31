@@ -703,6 +703,12 @@ impl GovernanceContract {
         if asset == anchor {
             panic_with_error!(&env, GovernanceError::InvalidAdmin);
         }
+
+        // The anchor must consent to being registered for this asset — admin
+        // auth alone is not proof the anchor address is controlled by the
+        // party being designated, and would otherwise let an admin register
+        // arbitrary or uncontrolled addresses as an asset's anchor.
+        anchor.require_auth();
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
