@@ -110,7 +110,8 @@ fn calculate_fee_split_uses_correctly_ordered_governance_fees() {
     let contract_id = env.register_contract(None, crate::SettlementContract);
     let client = crate::SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     client.register_merchant(&admins, &merchant);
 
     let amount: i128 = 1_000_000;

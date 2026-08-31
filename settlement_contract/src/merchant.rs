@@ -54,6 +54,12 @@ impl SettlementContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+
+        // Remove any ArchivedMerchant tombstone from a prior registration so
+        // the re-registered merchant can read new payment records (issue #685).
+        let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+        env.storage().persistent().remove(&archived_key);
+
         env.events().publish(
             (
                 Symbol::new(&env, events::MERCHANT_REGISTERED_EVENT),
