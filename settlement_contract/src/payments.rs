@@ -8,9 +8,10 @@ use crate::storage::{
     is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
+use crate::BOOTSTRAP_DEFAULT_RULE;
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -223,9 +224,9 @@ impl SettlementContract {
         }
 
         // ISSUE 495: Reentrancy guard.
-        // We write a dummy record to storage immediately so that if the external 
-        // read_governance_fee_rule call results in a reentrant call back to this 
-        // contract, the `has` check above will catch it. This dummy record is 
+        // We write a dummy record to storage immediately so that if the external
+        // read_governance_fee_rule call results in a reentrant call back to this
+        // contract, the `has` check above will catch it. This dummy record is
         // overwritten by the actual record at the end of this function.
         let dummy_record = PaymentRecord {
             merchant: merchant.clone(),
@@ -242,6 +243,16 @@ impl SettlementContract {
         env.storage().persistent().set(&payment_key, &dummy_record);
 
         let rule = read_rule_or_default(&env, merchant.clone());
+        if rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+            && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
+            && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
+            && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
+        {
+            env.events().publish(
+                (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
+                BOOTSTRAP_DEFAULT_RULE,
+            );
+        }
         let split = calculate_split(&env, amount, &rule);
         let record = PaymentRecord {
             merchant: merchant.clone(),
