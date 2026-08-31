@@ -1,4 +1,4 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
 
 use bettapay_common::{
     events::{self, PendingRecovery},
@@ -226,6 +226,21 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, and finally using the bootstrap fallback.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
+    read_rule_or_default_with_effects(env, merchant, true)
+}
+
+/// Resolves a settlement rule without changing persistent TTLs or emitting
+/// bootstrap telemetry. This is used by public quote/read paths, where any
+/// caller can otherwise keep entries alive and generate unbounded events.
+pub(crate) fn read_rule_or_default_readonly(env: &Env, merchant: Address) -> SettlementRule {
+    read_rule_or_default_with_effects(env, merchant, false)
+}
+
+fn read_rule_or_default_with_effects(
+    env: &Env,
+    merchant: Address,
+    apply_effects: bool,
+) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
@@ -233,9 +248,11 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         .persistent()
         .get::<_, SettlementRule>(&merchant_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        if apply_effects {
+            env.storage()
+                .persistent()
+                .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        }
         return rule;
     }
     // Fall back to the admin-controlled global default when present.
@@ -245,6 +262,11 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         .instance()
         .get::<_, SettlementRule>(&default_key)
     {
+        if apply_effects {
+            env.storage()
+                .persistent()
+                .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
+        }
         return rule;
     }
     // Protocol fee source: governance's GovFeeConfig, when available.
@@ -252,6 +274,12 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
+    if apply_effects {
+        env.events().publish(
+            (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
+            BOOTSTRAP_DEFAULT_RULE,
+        );
+    }
     // No event emitted here — the hot path runs this on every payment and
     // event spam would burn unnecessary compute (issue #691).
     BOOTSTRAP_DEFAULT_RULE
@@ -323,7 +351,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
-    args.push_back(Symbol::new(env, "min_payment").into());
+    args.push_back(Symbol::new(env, "min_payment").into_val(env));
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),

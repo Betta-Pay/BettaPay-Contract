@@ -1,5 +1,8 @@
 //! Regression coverage for the settlement administrative timelock.
 
+use crate::{Operation, SettlementContractClient, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
+use soroban_sdk::testutils::{storage::Persistent, Address as _, Events, Ledger};
 use crate::{
     Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS,
 };
@@ -29,20 +32,65 @@ fn scheduled_operation_executes_only_after_delay() {
 }
 
 #[test]
+fn calculate_fee_split_read_is_ttl_and_event_neutral() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let merchant_key = crate::types::DataKey::Merchant(merchant.clone());
+    let before_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&merchant_key)
+    });
+    let before_events = env.events().all().len();
+
+    client.calculate_fee_split(&merchant, &1_000);
+
+    let after_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&merchant_key)
+    });
+    assert_eq!(after_ttl, before_ttl);
+    assert_eq!(env.events().all().len(), before_events);
+}
+
+#[test]
+fn recovery_vetoes_scheduled_operation_before_timelock_expiry() {
+    let (env, client, admins, recovery) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RECOVERY_DELAY_SECONDS;
+    });
+    let recovery_target = Address::generate(&env);
+    client.initiate_recovery(&recovery_target);
+
+    // Recovery begins at the same boundary as the timelock and must win the
+    // transaction race: a scheduled operation cannot execute while recovery
+    // is pending, even when its nominal delay has elapsed.
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+    });
+    assert!(client.try_execute(&operation).is_err());
+    assert_eq!(client.get_admin(), admins);
+    // The client address is the contract address; the recovery address is
+    // intentionally not exposed by this helper's return tuple.
+    assert_ne!(client.address, recovery);
+}
+
+#[test]
 fn schedule_rejects_non_admin_and_insufficient_delay() {
     let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
     let non_admin = Address::generate(&env);
 
     assert!(client
-        .try_schedule(&soroban_sdk::vec![&env, non_admin], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .try_schedule(
+            &soroban_sdk::vec![&env, non_admin],
+            &operation,
+            &DEFAULT_TIMELOCK_DELAY_SECONDS
+        )
         .is_err());
     assert!(client
-        .try_schedule(
-            &admins,
-            &operation,
-            &(DEFAULT_TIMELOCK_DELAY_SECONDS - 1),
-        )
+        .try_schedule(&admins, &operation, &(DEFAULT_TIMELOCK_DELAY_SECONDS - 1),)
         .is_err());
 }
 
@@ -62,7 +110,10 @@ fn admin_can_cancel_but_non_admin_cannot() {
     let operation = Operation::RegisterMerchant(merchant);
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client
-        .try_cancel(&soroban_sdk::vec![&env, Address::generate(&env)], &operation)
+        .try_cancel(
+            &soroban_sdk::vec![&env, Address::generate(&env)],
+            &operation
+        )
         .is_err());
     client.cancel(&admins, &operation);
 
@@ -115,11 +166,7 @@ fn expired_schedule_cannot_execute() {
     let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
 
-    client.schedule(
-        &admins,
-        &operation,
-        &DEFAULT_TIMELOCK_DELAY_SECONDS,
-    );
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     // `schedule` bumps the persistent entry to 30 days (518,400 ledgers).
     // Keep the contract instance alive while advancing past only the
@@ -140,7 +187,12 @@ fn expired_schedule_cannot_execute() {
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
-fn setup_multisig() -> (Env, SettlementContractClient<'static>, soroban_sdk::Vec<Address>, Address) {
+fn setup_multisig() -> (
+    Env,
+    SettlementContractClient<'static>,
+    soroban_sdk::Vec<Address>,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let a1 = Address::generate(&env);
@@ -195,8 +247,16 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Direct path ---
     client.transfer_admin(&initial_admins, &new_admins, &new_threshold);
-    assert_eq!(client.get_admin(), new_admins, "direct path stores full admin set");
-    assert_eq!(client.get_threshold(), new_threshold, "direct path stores threshold");
+    assert_eq!(
+        client.get_admin(),
+        new_admins,
+        "direct path stores full admin set"
+    );
+    assert_eq!(
+        client.get_threshold(),
+        new_threshold,
+        "direct path stores threshold"
+    );
 
     // Reset back to single-admin so the timelock path starts from a clean state.
     let reset_admins = soroban_sdk::vec![&env, a1.clone()];
@@ -204,7 +264,11 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Timelocked path ---
     let operation = Operation::TransferAdmin(new_admins.clone(), new_threshold);
-    client.schedule(&soroban_sdk::vec![&env, a1.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &soroban_sdk::vec![&env, a1.clone()],
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);

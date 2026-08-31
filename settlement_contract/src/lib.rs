@@ -33,17 +33,17 @@
 //!
 //! ## Settlement Boundary (Off-Chain Execution)
 //!
-//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a 
+//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a
 //! `payment_stored` event. It does **not** transfer tokens, hold funds, or expose an in-contract `settle` function.
 //!
 //! Settlement execution is intentionally designed to be **off-chain**:
 //! 1. **Indexers** listen to `payment_stored` events and read the `PaymentRecord` state.
-//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay: 
+//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay:
 //!    `current_ledger >= record.ledger + record.settlement_delay_ledger`.
-//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where 
+//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where
 //!    appropriate based on `auto_settle` preferences) and tracks settlement state externally.
 //!
-//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives 
+//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives
 //! enforcing standardized agreement parameters for off-chain consumers; they do not trigger on-chain state transitions.
 //!
 //! ## Event Conventions
@@ -184,7 +184,9 @@ use bettapay_common::constants::MIN_FEE_BPS;
 use soroban_sdk::contract;
 
 pub use errors::SettlementError;
-pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule};
+pub use types::{
+    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule,
+};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
@@ -222,7 +224,13 @@ pub(crate) const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 pub(crate) const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 
-pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 2 * 24 * 60 * 60; // 48 hours
+/// Minimum delay for scheduled administrative operations.
+///
+/// This matches the seven-day recovery window so the recovery address has
+/// time to replace compromised admins before a scheduled upgrade or admin
+/// transfer can execute. The recovery path is the veto authority for pending
+/// schedules; ordinary admin cancellation remains available as well.
+pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// The single interface version advertised by `supports_interface`.
 ///

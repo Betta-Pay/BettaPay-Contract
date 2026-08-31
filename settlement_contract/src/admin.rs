@@ -11,9 +11,8 @@ use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_threshold,
-    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    read_recovery_address, read_rule_or_default, read_threshold, validate_admins_and_threshold,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -101,6 +100,11 @@ impl SettlementContract {
         );
     }
 
+    /// Initiates recovery and vetoes every pending scheduled operation.
+    ///
+    /// Recovery is intentionally the emergency veto path: once the recovery
+    /// address authenticates, no operation scheduled under the compromised
+    /// admin can execute, including an upgrade or admin transfer.
     pub fn initiate_recovery(env: Env, new_admin: Address) {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
@@ -118,6 +122,7 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::PendingRecovery, &pending);
+        // `PendingRecovery` itself is the veto marker checked by `execute`.
         events::emit_recovery_initiated(&env, &recovery_address, &new_admin, pending.execute_after);
     }
 
@@ -339,6 +344,17 @@ impl SettlementContract {
     }
 
     /// Executes a previously scheduled administrative operation.
+    pub fn execute(env: Env, operation: Operation) {
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            // A pending recovery is an emergency veto over all scheduled ops.
+            // The recovery record remains until recovery execution/cancellation,
+            // so this also closes the race between the two transactions.
+            panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
     ///
     /// # Execution auth policy (uniform)
     ///
@@ -522,6 +538,8 @@ impl SettlementContract {
             SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
+        let admin = read_admin(env);
+
         
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);

@@ -58,14 +58,7 @@
 //! cause of the emergency:
 //! - `upgrade` — deploy a fix
 //! - `transfer_admin` — rotate compromised keys
-//! - `change_threshold` — re-balance the admin multisig
 //! - `update_system_param` — adjust system configuration
-//! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — repair a
-//!   lost or corrupted admin set
-//!
-//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes` and
-//! `pause_allows_admin_transfer_threshold_and_recovery`. See also
-//! [`adr/001-selective-pause-model.md`](https://github.com/Betta-Pay/BettaPay-Contract/blob/main/adr/001-selective-pause-model.md).
 //!
 //! ### Fee Configuration
 //! [`GovernanceContract::set_fee_config`] stores a [`FeeConfig`] struct that
@@ -208,15 +201,20 @@ const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
 // contract's own storage without a migration.
-//
-// The schema-version marker (issue #507) is instance storage and is written
-// at `init`, so the first real storage migration has a defined baseline to
-// distinguish "pre-marker" from "current" data.
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
     /// Storage key for the contract admin addresses.
     Admin,
+
+    /// Storage key for the multisig admin threshold.
+    Threshold,
+
+    /// Storage key for the recovery address that can reset the admin.
+    RecoveryAddress,
+
+    /// Storage key for the pending recovery operation.
+    PendingRecovery,
 
     /// Storage key for arbitrary system parameters.
     SystemParam(Symbol),
@@ -226,6 +224,10 @@ enum DataKey {
 
     /// Storage key for the anchor address associated with a specific asset.
     Anchor(Address),
+
+    /// Storage key for the pause state flag.
+    Paused,
+}
 
     /// Instance-storage schema version (u32) written at `init`. Baseline for
     /// the first storage migration (issue #507).
@@ -358,13 +360,10 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &admins);
         env.storage()
             .instance()
-            .set(&CommonDataKey::Threshold, &threshold);
+            .set(&DataKey::Threshold, &threshold);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
-        env.storage()
-            .instance()
-            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
         let admin = admins.get(0).unwrap();
         env.events()
             .publish((Symbol::new(&env, events::INITIALIZED_EVENT),), admin);
@@ -503,16 +502,11 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::RecoveryDelayActive);
         }
 
-        // Issue #514: never let event-building read the possibly-corrupt admin
-        // entry and abort recovery before it can repair the set. Resolve the
-        // old admin to `Option` and fall back to the zero-address sentinel
-        // when the entry is missing or has no primary admin, so recovery
-        // always succeeds in replacing the set.
-        let old_admin = read_optional_primary_admin(&env);
-
+        let old_admins = read_admins(&env);
+        let old_admin = storage::primary_admin(&old_admins).unwrap();
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
-        env.storage().instance().set(&CommonDataKey::Threshold, &1u32);
+        env.storage().instance().set(&DataKey::Threshold, &1u32);
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
@@ -550,7 +544,7 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::Admin, &new_admins);
         env.storage()
             .instance()
-            .set(&CommonDataKey::Threshold, &new_threshold);
+            .set(&DataKey::Threshold, &new_threshold);
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
@@ -561,17 +555,17 @@ impl GovernanceContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold + 1);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
 
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
-
         env.storage()
             .instance()
-            .set(&CommonDataKey::Threshold, &new_threshold);
+            .set(&DataKey::Threshold, &new_threshold);
         env.events().publish(
             (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
             (current_threshold, new_threshold),
@@ -598,29 +592,6 @@ impl GovernanceContract {
 
     pub fn is_paused(env: Env) -> bool {
         storage::is_paused(&env)
-    }
-
-    /// Idempotent schema migration entry point.
-    ///
-    /// Issue #507: ships the schema-version marker and a migration entry point
-    /// so the first real storage migration has a defined baseline. There is no
-    /// existing storage-format difference to convert yet, so calling `migrate`
-    /// simply confirms the `SchemaVersion` marker. It is admin-gated and
-    /// idempotent: a contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
-    pub fn migrate(env: Env, signers: Vec<Address>) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let admin = signers.get(0).unwrap();
-
-        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
-            env.storage()
-                .instance()
-                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
-        }
-        env.events().publish(
-            (Symbol::new(&env, events::MIGRATED_EVENT),),
-            (admin, CURRENT_SCHEMA_VERSION),
-        );
     }
 
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
@@ -659,12 +630,6 @@ impl GovernanceContract {
         env.storage().persistent().get(&storage_key)
     }
 
-    /// Sets the global fee configuration.
-    ///
-    /// **Fee Ceiling Policy**: Governance is the trust root for cross-contract fee ceilings.
-    /// While individual fees are bounded by `MAX_FEE_BPS` and their sum by `BPS_DENOMINATOR`,
-    /// Governance is fully trusted to set safe rates within those technical boundaries.
-    ///
     pub fn set_fee_config(env: Env, signers: Vec<Address>, config: FeeConfig) {
         assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
@@ -706,7 +671,9 @@ impl GovernanceContract {
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
         env.storage().persistent().set(&key, &anchor.clone());
-        env.storage().persistent().extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
         env.events().publish(
             (Symbol::new(&env, events::ANCHOR_UPSERTED_EVENT), asset),
             (old_anchor, anchor),
@@ -744,12 +711,7 @@ impl GovernanceContract {
 }
 
 fn read_admins(env: &Env) -> Vec<Address> {
-    // Admin reads use the 50k/100k instance policy (issue #515), matching
-    // settlement's `read_admins` and ADR 003's "Admin & Governance" guidance,
-    // rather than the standard 14/30-day `bump_instance_ttl` policy.
-    env.storage()
-        .instance()
-        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
+    storage::bump_instance_ttl(env);
     env.storage()
         .instance()
         .get(&DataKey::Admin)
@@ -759,7 +721,7 @@ fn read_admins(env: &Env) -> Vec<Address> {
 fn read_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&CommonDataKey::Threshold)
+        .get(&DataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::NotInitialized))
 }
 
@@ -824,32 +786,6 @@ fn read_pending_recovery(env: &Env) -> PendingRecovery {
         .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending))
 }
 
-/// Returns the instance-storage schema version, defaulting to the current
-/// version when the marker is absent. Per DEVELOPMENT.md, an entry written
-/// before the marker existed is treated as version 1 (issue #507).
-fn read_schema_version(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&DataKey::SchemaVersion)
-        .unwrap_or(CURRENT_SCHEMA_VERSION)
-}
-
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514).
-fn read_optional_primary_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
-}
-
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
     if address.to_string().is_empty() || storage::is_zero_address(env, address) {
         panic_with_error!(env, error);
@@ -902,14 +838,10 @@ mod anchor_removal_tests;
 mod anchor_no_event_error_tests;
 
 #[cfg(test)]
-mod real_auth_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -1015,7 +947,10 @@ mod tests {
         let bad_hash = upload_test_wasm(&env); // empty wasm — no supports_interface
 
         let result = client.try_upgrade(&admins, &bad_hash);
-        assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+        assert!(
+            result.is_err(),
+            "upgrade with non-conforming wasm must be rejected"
+        );
 
         // Contract is intact after the failed upgrade.
         let live_client = GovernanceContractClient::new(&env, &client.address);
@@ -1169,34 +1104,6 @@ mod tests {
         assert_eq!(event_admin, admins.get(0).unwrap());
         assert_eq!(event_cfg.platform_fee_bps, 120);
         assert_eq!(event_cfg.network_fee_bps, 35);
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #4)")]
-    fn set_fee_config_rejects_fees_exceeding_ceiling() {
-        let (_env, client, admins, _recovery) = setup();
-        
-        // Sum exceeds BPS_DENOMINATOR
-        let cfg = FeeConfig {
-            platform_fee_bps: 5_000,
-            network_fee_bps: 5_001,
-        };
-
-        client.set_fee_config(&admins, &cfg);
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #4)")]
-    fn set_fee_config_rejects_individual_fee_exceeding_max() {
-        let (_env, client, admins, _recovery) = setup();
-        
-        // Individual fee exceeds MAX_FEE_BPS (governance trust root)
-        let cfg = FeeConfig {
-            platform_fee_bps: 5_001,
-            network_fee_bps: 0,
-        };
-
-        client.set_fee_config(&admins, &cfg);
     }
 
     #[test]

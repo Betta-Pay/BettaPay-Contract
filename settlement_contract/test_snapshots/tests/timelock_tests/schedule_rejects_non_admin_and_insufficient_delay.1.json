@@ -353,7 +353,11 @@
             "data": {
               "vec": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                    }
+                  ]
                 },
                 {
                   "vec": [
@@ -366,7 +370,7 @@
                   ]
                 },
                 {
-                  "u64": 172800
+                  "u64": 604800
                 }
               ]
             }
@@ -485,7 +489,11 @@
                 {
                   "vec": [
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                        }
+                      ]
                     },
                     {
                       "vec": [
@@ -498,7 +506,7 @@
                       ]
                     },
                     {
-                      "u64": 172800
+                      "u64": 604800
                     }
                   ]
                 }
@@ -530,7 +538,11 @@
             "data": {
               "vec": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
                 },
                 {
                   "vec": [
@@ -543,7 +555,7 @@
                   ]
                 },
                 {
-                  "u64": 172799
+                  "u64": 604799
                 }
               ]
             }
@@ -662,7 +674,11 @@
                 {
                   "vec": [
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                        }
+                      ]
                     },
                     {
                       "vec": [
@@ -675,7 +691,7 @@
                       ]
                     },
                     {
-                      "u64": 172799
+                      "u64": 604799
                     }
                   ]
                 }
