@@ -38,7 +38,8 @@ pub fn setup_governance() -> (
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &recovery_address);
     (env, client, admins, recovery_address)
 }
 
@@ -62,7 +63,8 @@ pub fn setup_both() -> (
     let gov_admins = soroban_sdk::vec![&env, gov_admin.clone()];
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    gov_client.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    gov_client.init(&deployer, &gov_admins, &1, &gov_recovery);
 
     let settle_admin = Address::generate(&env);
     let settle_recovery = Address::generate(&env);
@@ -70,7 +72,8 @@ pub fn setup_both() -> (
     let merchant = Address::generate(&env);
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &gov_id, &settle_recovery);
 
     (
         env,
@@ -255,7 +258,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
 
     let old_gov_id = env.register_contract(None, GovernanceContract);
     let old_gov = GovernanceContractClient::new(&env, &old_gov_id);
-    old_gov.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    old_gov.init(&deployer, &gov_admins, &1, &gov_recovery);
     old_gov.set_fee_config(
         &gov_admins,
         &GovFeeConfig {
@@ -266,7 +270,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
 
     let new_gov_id = env.register_contract(None, GovernanceContract);
     let new_gov = GovernanceContractClient::new(&env, &new_gov_id);
-    new_gov.init(&gov_admins, &1, &gov_recovery);
+    let deployer = Address::generate(&env);
+    new_gov.init(&deployer, &gov_admins, &1, &gov_recovery);
     new_gov.set_fee_config(
         &gov_admins,
         &GovFeeConfig {
@@ -281,7 +286,8 @@ fn update_governance_switches_fee_source_to_new_instance() {
     let merchant = Address::generate(&env);
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &old_gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &old_gov_id, &settle_recovery);
     settle_client.register_merchant(&settle_admins, &merchant);
 
     let before = settle_client.calculate_fee_split(&merchant, &10_000);
@@ -518,12 +524,14 @@ fn multisig_threshold_works_independently_on_both_contracts() {
     let gov_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    gov_client.init(&gov_admins, &2, &gov_recovery);
+    let deployer = Address::generate(&env);
+    gov_client.init(&deployer, &gov_admins, &2, &gov_recovery);
 
     let settle_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let settle_id = env.register_contract(None, SettlementContract);
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &2, &gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &2, &gov_id, &settle_recovery);
 
     let one_signer = soroban_sdk::vec![&env, a1.clone()];
     let three_signers = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
@@ -819,7 +827,7 @@ fn same_merchant_duplicate_reference_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue 492: Payment-record reads are gated behind merchant auth
+// Issue 699: Payment-record reads are public for indexer and contract access
 // ---------------------------------------------------------------------------
 
 /// A caller that is not the merchant must not be able to read the merchant's
@@ -827,28 +835,27 @@ fn same_merchant_duplicate_reference_is_rejected() {
 /// `require_auth()` ownership check is actually enforced rather than mocked
 /// away.
 #[test]
-fn get_payment_reference_rejects_unauthenticated_caller() {
+fn get_payment_reference_allows_unauthenticated_indexer_reads() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
     let reference = BytesN::<32>::from_array(&env, &[21u8; 32]);
     settle_client.store_payment_reference(&merchant, &reference, &1_000);
 
-    // Turn off auth mocking: no authorization entries exist, so the merchant
-    // ownership check must reject the read.
+    // Turn off auth mocking: public reads must not need the merchant's key.
     env.set_auths(&[]);
-    let result = settle_client.try_get_payment_reference(&merchant, &reference);
+    let result = settle_client.get_payment_reference(&merchant, &reference);
     assert!(
-        result.is_err(),
-        "unauthenticated payment read must be rejected"
+        result.is_some(),
+        "unauthenticated indexer read must return the stored payment"
     );
 
-    // The batch read is gated identically.
+    // Batch reads are public as well.
     let refs = soroban_sdk::vec![&env, reference];
-    let batch_result = settle_client.try_get_payments(&merchant, &refs);
+    let batch_result = settle_client.get_payments(&merchant, &refs);
     assert!(
-        batch_result.is_err(),
-        "unauthenticated batch read must be rejected"
+        batch_result.len() == 1,
+        "unauthenticated indexer batch read must return the stored payment"
     );
 }
 
@@ -967,7 +974,7 @@ fn timelocked_unregister_also_orphans_payments() {
     );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    settle_client.execute(&operation);
+    settle_client.execute(&settle_admins.get(0).unwrap(), &operation);
 
     assert!(!settle_client.is_merchant_registered(&merchant));
     let result = settle_client.try_get_payment_reference(&merchant, &reference);
@@ -1053,7 +1060,8 @@ fn store_payment_reference_prevents_reentrancy() {
     let settle_id = env.register_contract(None, SettlementContract);
 
     let settle_client = SettlementContractClient::new(&env, &settle_id);
-    settle_client.init(&settle_admins, &1, &mock_gov_id, &settle_recovery);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &mock_gov_id, &settle_recovery);
 
     let merchant = Address::generate(&env);
     settle_client.register_merchant(&settle_admins, &merchant);

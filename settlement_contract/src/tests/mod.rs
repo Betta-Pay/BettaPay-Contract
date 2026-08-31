@@ -10,6 +10,7 @@ pub mod event_topic_conformity_tests;
 pub mod fee_config_ordering_tests;
 pub mod governance_error_tests;
 pub mod integration_tests;
+pub mod interface_tests;
 pub mod recovery_admin_set_tests;
 pub mod schedule_collision_tests;
 pub mod timelock_tests;
@@ -61,6 +62,7 @@ pub fn setup() -> (
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     (env, client, admins, merchant)
 }

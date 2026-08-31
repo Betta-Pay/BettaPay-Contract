@@ -7,8 +7,8 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, read_rule_or_default, read_threshold,
-    validate_fee_against_governance, verify_admin_auth,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule, read_rule_or_default,
+    read_threshold, validate_fee_against_governance, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
@@ -99,14 +99,10 @@ impl SettlementContract {
 
         env.storage().persistent().remove(&key);
 
-        // We intentionally read the default rule directly from storage rather
-        // than using `read_rule_or_default` to avoid mistakenly emitting a
-        // `bootstrap_fallback` event during the clearing process.
-        let fallback = env
-            .storage()
-            .persistent()
-            .get::<_, SettlementRule>(&DataKey::DefaultRule)
-            .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
+        // Use the shared fallback chain (default → governance → bootstrap)
+        // without emitting a bootstrap_fallback event, so the event payload
+        // matches the rule that will actually govern the next payment (issue #689).
+        let fallback = read_fallback_rule(&env);
 
         // Canonical event shape shared with the unregister path (issue #491).
         events::emit_settlement_rule_cleared(&env, &merchant, &admin, &removed, &fallback);
@@ -135,18 +131,13 @@ impl SettlementContract {
 
         let prev = env
             .storage()
-            .persistent()
+            .instance()
             .get::<_, SettlementRule>(&DataKey::DefaultRule)
             .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::DefaultRule, &new_rule);
-        env.storage().persistent().extend_ttl(
-            &DataKey::DefaultRule,
-            RULE_TTL_THRESHOLD,
-            RULE_TTL_BUMP,
-        );
 
         env.events().publish(
             (Symbol::new(&env, events::DEFAULT_RULE_UPDATED_EVENT),),
@@ -155,19 +146,11 @@ impl SettlementContract {
     }
 
     /// Returns the global default settlement rule, if one has been set.
-    /// Automatically extends the persistent storage TTL to prevent archival
-    /// during public read queries (clausal to TTL eviction).
+    /// Stored in instance storage so it cannot expire independently of the
+    /// contract instance.
     pub fn get_default_rule(env: Env) -> Option<SettlementRule> {
         let key = DataKey::DefaultRule;
-        match env.storage().persistent().get::<_, SettlementRule>(&key) {
-            Some(rule) => {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
-                Some(rule)
-            }
-            None => None,
-        }
+        env.storage().instance().get::<_, SettlementRule>(&key)
     }
 
     /// Returns the merchant-specific settlement rule, if one has been set.
