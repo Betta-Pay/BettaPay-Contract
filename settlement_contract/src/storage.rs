@@ -136,6 +136,15 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending))
 }
 
+/// Validates that the provided governance address is a non-zero, non-empty address.
+///
+/// Note (Issue #124): This function intentionally avoids making a cross-contract call
+/// to `governance` during `init` or `update_governance`. Making a cross-contract call
+/// during initialization creates a reentrancy / DoS vector where a self-recursive or
+/// broken governance contract can call back into the uninitialized settlement contract
+/// (causing `NotInitialized` panics) or trap. Governance fee config validity is
+/// verified at first use via `try_invoke_contract` in [`read_governance_fee_rule`]
+/// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(
         env,
@@ -143,9 +152,6 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
         SettlementError::InvalidGovernance,
         SettlementError::InvalidGovernance,
     );
-    let args: Vec<Val> = Vec::new(env);
-    let _: Option<GovFeeConfig> =
-        env.invoke_contract(governance, &Symbol::new(env, "get_fee_config"), args);
 }
 
 pub(crate) fn validate_nonzero_address(
@@ -236,12 +242,9 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
     let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
-        .persistent()
+        .instance()
         .get::<_, SettlementRule>(&default_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Protocol fee source: governance's GovFeeConfig, when available.
@@ -264,12 +267,9 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
     let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
-        .persistent()
+        .instance()
         .get::<_, SettlementRule>(&default_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     if let Some(rule) = read_governance_fee_rule(env) {

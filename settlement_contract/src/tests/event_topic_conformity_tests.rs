@@ -245,7 +245,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(
         last_topic(&env),
         Symbol::new(&env, events::OP_EXECUTED_EVENT)
@@ -258,6 +258,31 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
         last_topic(&env),
         Symbol::new(&env, events::OP_CANCELLED_EVENT)
     );
+}
+
+#[test]
+fn scheduled_operation_events_identify_the_executor() {
+    let (env, client, admins, merchant) = setup();
+    let executor = Address::generate(&env);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&executor, &operation);
+
+    let events = env.events().all();
+    let mut actor = None;
+    for i in 0..events.len() {
+        let (_contract, topics, data) = events.get(i).unwrap();
+        if Symbol::from_val(&env, &topics.get(0).unwrap())
+            == Symbol::new(&env, events::MERCHANT_REGISTERED_EVENT)
+        {
+            actor = Some(Address::from_val(&env, &data));
+        }
+    }
+
+    assert_eq!(actor, Some(executor));
 }
 
 #[test]
