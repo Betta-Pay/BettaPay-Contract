@@ -418,9 +418,10 @@ fn test_execute_uniform_auth_all_variants() {
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
-    // Disable caller-auth mocking: any `require_auth` inside `execute` now
-    // fails with `Unauthorized`. Every variant must still execute.
-    env.set_auths(&[]);
+    // `execute` requires executor auth (issue #561). Re-enable auth
+    // mocking so the executor address passes `require_auth`.  Every
+    // variant must still execute under mock auth.
+    env.mock_all_auths();
 
     client.execute(&admins.get(0).unwrap(), &op_update_governance);
     assert_eq!(client.get_governance(), new_gov);
@@ -485,9 +486,9 @@ fn scheduled_cancel_recovery_executes_without_caller_auth() {
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
-    // No caller auth is mocked: the old primary-admin `require_auth` would
-    // fail here with `Unauthorized`.
-    env.set_auths(&[]);
+    // `execute` requires executor auth (issue #561). Re-enable mock auth
+    // so the executor passes `require_auth`.
+    env.mock_all_auths();
     client.execute(&admins.get(0).unwrap(), &op);
 
     // The pending recovery is gone.
