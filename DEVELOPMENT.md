@@ -66,6 +66,7 @@ What is on the ledger today, and which storage kind holds it.
 | `RecoveryAddress` | instance | `Address` |
 | `PendingRecovery` | instance | `PendingRecovery` |
 | `Paused` | instance | `bool` |
+| `SchemaVersion` | instance | `u32` (written at `init`, issue #507) |
 | `FeeConfig` | persistent | fee configuration |
 | `Anchor(Address)` | persistent | anchor address per asset |
 | `SystemParam(Symbol)` | persistent | numeric system parameter |
@@ -125,7 +126,7 @@ contract of its own.
 
 ## The Migration Pattern
 
-*Note: Neither `migrate` nor `SchemaVersion` is currently implemented in the contracts. This section serves as a theoretical template for contributors when the first breaking change arises.*
+*Note: The governance contract now ships a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issue #507). The settlement contract has not adopted the marker yet; this section remains the template for when it does.*
 
 Ordering is the point: the code that can read both formats has to be deployed
 before anything is rewritten.

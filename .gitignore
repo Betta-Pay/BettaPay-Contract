@@ -29,3 +29,7 @@ Thumbs.db
 .soroban/
 identity/
 *.secret
+
+# MiMoCode
+.mimocode/
+.mimocode
