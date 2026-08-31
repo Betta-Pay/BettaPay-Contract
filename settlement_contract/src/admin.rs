@@ -10,6 +10,9 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
+    read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
     read_recovery_address, read_rule_or_default, read_threshold,
     validate_admins_and_threshold, validate_governance, validate_nonzero_address,
@@ -340,6 +343,14 @@ impl SettlementContract {
 
     /// Executes a previously scheduled administrative operation.
     ///
+    /// # Authorization
+    ///
+    /// Requires authentication from the configured admin set. The caller must
+    /// pass enough valid signers to meet the current multisig threshold.
+    /// This prevents any external actor from front-running the timelock expiry
+    /// and executing an operation the admins intended to cancel (Issue #462).
+    pub fn execute(env: Env, signers: Vec<Address>, operation: Operation) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
     /// # Execution auth policy (uniform)
     ///
     /// `execute` deliberately performs **no caller authentication** for any
@@ -522,6 +533,8 @@ impl SettlementContract {
             SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
+        let admin = read_admin(env);
+
         
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
@@ -605,6 +618,8 @@ impl SettlementContract {
     fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
         assert_not_paused(env);
 
+        validate_fee_against_governance(env, &rule);
+
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
@@ -670,6 +685,8 @@ impl SettlementContract {
 
     fn _set_default_rule(env: &Env, executor: &Address, new_rule: SettlementRule) {
         assert_not_paused(env);
+
+        validate_fee_against_governance(env, &new_rule);
 
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
