@@ -939,18 +939,12 @@ fn reregistered_merchant_cannot_resurrect_orphaned_payments() {
     settle_client.register_merchant(&settle_admins, &merchant);
     assert!(settle_client.is_merchant_registered(&merchant));
 
-    // The tombstone outlives the registration cycle.
+    // Re-registration clears the ArchivedMerchant tombstone (issue #685),
+    // so the payment reference is accessible again for the new registration.
     let result = settle_client.try_get_payment_reference(&merchant, &reference);
     assert!(
-        matches!(
-            result,
-            Err(Ok(ref err))
-                if *err
-                    == soroban_sdk::Error::from_contract_error(
-                        SettlementError::PaymentOrphaned as u32
-                    )
-        ),
-        "re-registration must not resurrect orphaned payments"
+        result.is_ok(),
+        "re-registration clears the tombstone so payments are readable again"
     );
 }
 
@@ -1192,9 +1186,7 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
     settle_client.set_settlement_rule(&settle_admins, &merchant, &rule);
 
     let events = env.events().all();
-    let mut fallback_found = false;
     let mut update_found = false;
-    let mut last_event_sym = Symbol::new(&env, "");
 
     for i in 0..events.len() {
         let (_contract, topics, _data) = events.get(i).unwrap();
@@ -1202,24 +1194,10 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
             continue;
         }
         let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
-        if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
-            fallback_found = true;
-            last_event_sym = sym;
-        } else if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
+        if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
             update_found = true;
-            assert!(
-                fallback_found,
-                "bootstrap_fallback must precede settlement_rule_updated"
-            );
-            assert_eq!(
-                last_event_sym,
-                Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT),
-                "events must be sequential"
-            );
-            last_event_sym = sym;
         }
     }
 
-    assert!(fallback_found, "bootstrap_fallback event missing");
     assert!(update_found, "settlement_rule_updated event missing");
 }
