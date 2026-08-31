@@ -9,8 +9,8 @@ use crate::storage::{
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -113,13 +113,21 @@ mod tests {
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
             let expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
-            let expected_merchant =
+            let _expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 
             prop_assert_eq!(split.gross_amount, amount);
+            // Clamp network leg so total fees never exceed gross (issue #683).
+            let clamped_network = if expected_platform + expected_network > amount {
+                (amount - expected_platform).max(0)
+            } else {
+                expected_network
+            };
+            let clamped_merchant = (amount - expected_platform - clamped_network).max(0);
+
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
-            prop_assert_eq!(split.network_fee_amount, expected_network);
-            prop_assert_eq!(split.merchant_amount, expected_merchant);
+            prop_assert_eq!(split.network_fee_amount, clamped_network);
+            prop_assert_eq!(split.merchant_amount, clamped_merchant);
             prop_assert!(split.merchant_amount >= 0);
         }
 
@@ -161,7 +169,9 @@ mod tests {
             let split = calculate_split(&env, amount, &rule);
 
             prop_assert!(split.platform_fee_amount > 0);
-            prop_assert!(split.network_fee_amount > 0);
+            // network_fee may be clamped to 0 when total fees exceed gross
+            // (issue #683), but merchant must always be non-negative.
+            prop_assert!(split.network_fee_amount >= 0);
             prop_assert_eq!(split.merchant_amount, 0);
         }
     }
@@ -223,9 +233,9 @@ impl SettlementContract {
         }
 
         // ISSUE 495: Reentrancy guard.
-        // We write a dummy record to storage immediately so that if the external 
-        // read_governance_fee_rule call results in a reentrant call back to this 
-        // contract, the `has` check above will catch it. This dummy record is 
+        // We write a dummy record to storage immediately so that if the external
+        // read_governance_fee_rule call results in a reentrant call back to this
+        // contract, the `has` check above will catch it. This dummy record is
         // overwritten by the actual record at the end of this function.
         let dummy_record = PaymentRecord {
             merchant: merchant.clone(),
