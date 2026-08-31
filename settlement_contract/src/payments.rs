@@ -9,8 +9,8 @@ use crate::storage::{
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -67,7 +67,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::{proptest, prop_assert, prop_assert_eq};
+    use proptest::{prop_assert, prop_assert_eq, proptest};
 
     #[test]
     fn zero_fee_split_handles_maximum_amount() {
@@ -223,9 +223,9 @@ impl SettlementContract {
         }
 
         // ISSUE 495: Reentrancy guard.
-        // We write a dummy record to storage immediately so that if the external 
-        // read_governance_fee_rule call results in a reentrant call back to this 
-        // contract, the `has` check above will catch it. This dummy record is 
+        // We write a dummy record to storage immediately so that if the external
+        // read_governance_fee_rule call results in a reentrant call back to this
+        // contract, the `has` check above will catch it. This dummy record is
         // overwritten by the actual record at the end of this function.
         let dummy_record = PaymentRecord {
             merchant: merchant.clone(),
