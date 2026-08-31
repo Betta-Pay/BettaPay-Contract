@@ -13,8 +13,6 @@ use crate::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env};
 
-use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
-
 // ---------------------------------------------------------------------------
 // Failing governance stub — lives in its own module to avoid symbol collisions
 // with the `MockGovernance` stub in tests::mod, which also exposes
@@ -22,9 +20,8 @@ use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClien
 // ---------------------------------------------------------------------------
 
 mod panicking_gov {
-    use soroban_sdk::{contract, contractimpl, Env};
-
     use crate::GovFeeConfig;
+    use soroban_sdk::{contract, contractimpl, Env};
 
     /// A governance stub whose `get_fee_config` always traps (simulates a
     /// broken or mis-deployed governance contract).
@@ -219,8 +216,8 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
 // ---------------------------------------------------------------------------
 
 mod reentrant_gov {
-    use soroban_sdk::{contract, contractimpl, IntoVal, Address, Env, Symbol};
     use crate::{GovFeeConfig, SettlementContractClient};
+    use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
 
     /// A governance stub that attempts to call back into SettlementContract
     /// during `get_fee_config` (simulates reentrancy).
@@ -266,7 +263,9 @@ fn init_succeeds_with_panicking_governance() {
     let client = SettlementContractClient::new(&env, &contract_id);
 
     // init must succeed directly with panicking_gov without cross-calling it
+    let deployer = Address::generate(&env);
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &panicking_gov,
@@ -293,7 +292,8 @@ fn update_governance_succeeds_with_panicking_governance() {
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
 
-    client.init(&admins, &1, &empty_gov, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &empty_gov, &recovery);
     client.update_governance(&admins, &panicking_gov);
 
     assert_eq!(client.get_governance(), panicking_gov);
@@ -320,7 +320,9 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
         soroban_sdk::vec![&env, contract_id.to_val()],
     );
 
+    let deployer = Address::generate(&env);
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &reentrant_gov_id,
@@ -332,6 +334,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 
     // Reentry / second initialization must panic with AlreadyInitialized
     let res = client.try_init(
+        &deployer,
         &soroban_sdk::vec![&env, admin],
         &1,
         &reentrant_gov_id,
@@ -339,6 +342,8 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
     );
     assert!(res.is_err());
 }
+
+// ---------------------------------------------------------------------------
 // Failure Variant Coverage for Governance Fee Rule Resolution
 // ---------------------------------------------------------------------------
 
@@ -348,6 +353,8 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 fn read_path_governance_valid_config_used() {
     let env = Env::default();
     env.mock_all_auths();
+
+    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
 
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);

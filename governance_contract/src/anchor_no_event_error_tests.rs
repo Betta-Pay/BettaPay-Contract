@@ -220,14 +220,14 @@ fn change_threshold_emits_no_event_when_insufficient_signatures() {
     let a1 = Address::generate(&env);
     let a2 = Address::generate(&env);
     let a3 = Address::generate(&env);
-    let admins = vec![&env, a1.clone(), a2, a3];
+    let admins = vec![&env, a1.clone(), a2.clone(), a3.clone()];
     let recovery = Address::generate(&env);
-    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &2, &recovery);
 
-    let single_signer = vec![&env, a1];
+    let single_signer = vec![&env, a1.clone()];
     let prev = env.events().all().len();
     client.change_threshold(&single_signer, &2);
     assert_eq!(
@@ -242,7 +242,7 @@ fn change_threshold_emits_no_event_when_insufficient_signatures() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn pause_emits_no_event_when_already_paused() {
     let (env, client, admins) = setup();
     client.pause(&admins);

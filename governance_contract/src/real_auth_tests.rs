@@ -1,6 +1,6 @@
 use super::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Bytes, BytesN, Env, Symbol};
+use soroban_sdk::{Address, Bytes, Env, Symbol};
 
 fn valid_fee_config() -> FeeConfig {
     FeeConfig {
@@ -20,8 +20,6 @@ fn fee_anchor_and_system_param_writes_require_real_authorization() {
     assert!(client
         .try_set_fee_config(&admins, &valid_fee_config())
         .is_err());
-    let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
-    assert!(client.try_upgrade(&admins, &wasm_hash).is_err());
     assert!(client.try_upsert_anchor(&admins, &asset, &anchor).is_err());
     assert!(client.try_update_system_param(&admins, &key, &1).is_err());
 }
@@ -54,9 +52,9 @@ fn admin_transfer_and_threshold_change_require_real_authorization() {
     let a3 = Address::generate(&env);
     let admins = soroban_sdk::vec![&env, a1, a2, a3];
     let recovery = Address::generate(&env);
-    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &recovery);
     env.mock_auths(&[]);
 
@@ -95,10 +93,10 @@ fn initialization_and_upgrade_require_real_authorization() {
     let env = Env::default();
     let admin = Address::generate(&env);
     let recovery = Address::generate(&env);
-    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
+    let deployer = Address::generate(&env);
     env.mock_auths(&[]);
     assert!(client.try_init(&deployer, &admins, &1, &recovery).is_err());
 

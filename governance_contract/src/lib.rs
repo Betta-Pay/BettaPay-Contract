@@ -277,11 +277,13 @@ pub enum GovernanceError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// A recovery is already pending; initiate_recovery cannot overwrite it.
+    RecoveryAlreadyPending = 15,
     /// The anchor for the specified asset was not found.
     AnchorMissing = 200,
     InvalidParamValue = 201,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
@@ -302,6 +304,9 @@ const _: () = {
     assert!(GovernanceError::RecoveryDelayActive as u32 == error_codes::RECOVERY_DELAY_ACTIVE);
     assert!(GovernanceError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(GovernanceError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(
+        GovernanceError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
+    );
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
@@ -405,7 +410,7 @@ impl GovernanceContract {
         env.events().publish(
             (
                 Symbol::new(&env, events::RECOVERY_ADDRESS_UPDATED_EVENT),
-                new_recovery,
+                new_recovery.clone(),
             ),
             admin,
         );
@@ -473,6 +478,14 @@ impl GovernanceContract {
         recovery_address.require_auth();
         assert_not_zero(&env, &new_admin, GovernanceError::InvalidAdmin);
 
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, GovernanceError::RecoveryAlreadyPending);
+        }
+
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
@@ -524,7 +537,7 @@ impl GovernanceContract {
             &env,
             &AdminTransferred {
                 old_admin,
-                new_admin: pending.new_admin,
+                new_admin: pending.new_admin.clone(),
             },
         );
     }
@@ -709,7 +722,7 @@ impl GovernanceContract {
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
-        env.storage().persistent().set(&key, &anchor);
+        env.storage().persistent().set(&key, &anchor.clone());
         env.storage()
             .persistent()
             .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
@@ -929,7 +942,7 @@ mod tests {
 
         let admin1 = Address::generate(&env);
         let admin2 = Address::generate(&env);
-        let admins = vec![&env, admin1, admin2];
+        let admins = vec![&env, admin1.clone(), admin2.clone()];
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
@@ -1216,7 +1229,7 @@ mod tests {
 
         let before_upsert = env.events().all().len();
         client.upsert_anchor(&admins, &asset, &anchor);
-        assert_eq!(client.get_anchor(&asset), Some(anchor));
+        assert_eq!(client.get_anchor(&asset), Some(anchor.clone()));
         assert!(env.events().all().len() > before_upsert);
 
         let before_remove = env.events().all().len();
@@ -1442,10 +1455,10 @@ mod tests {
                 admins.push_back(Address::generate(&env));
             }
             let recovery = Address::generate(&env);
-            let deployer = Address::generate(&env);
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
 
+            let deployer = Address::generate(&env);
             let result = client.try_init(&deployer, &admins, &threshold, &recovery);
             if threshold == 0 || threshold > admin_count {
                 prop_assert!(result.is_err());
@@ -1676,6 +1689,29 @@ mod tests {
             Symbol::from_val(&env, &unpause_topics.get(0).unwrap()),
             Symbol::new(&env, bettapay_common::events::UNPAUSED_EVENT)
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn initiate_recovery_rejects_overwrite_while_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admins = vec![&env, admin1, admin2];
+        let recovery_address = Address::generate(&env);
+        let first_target = Address::generate(&env);
+        let second_target = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery_address);
+
+        client.initiate_recovery(&first_target);
+
+        // Second initiation must be rejected — a recovery is already pending.
+        client.initiate_recovery(&second_target);
     }
 
     // -----------------------------------------------------------------------

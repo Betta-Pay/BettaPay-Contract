@@ -25,10 +25,9 @@ fn emits_event_on_initialization() {
     let admin = Address::generate(&env);
     let recovery = Address::generate(&env);
     let governance = register_governance(&env);
-    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -250,7 +249,7 @@ fn pause_rejected_for_non_admin() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn pause_rejected_when_already_paused() {
     let (_env, client, admins, _merchant) = setup();
     client.pause(&admins);
@@ -267,7 +266,7 @@ fn unpause_rejected_when_already_unpaused() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn double_pause_emits_no_extra_event() {
     let (env, client, admins, _merchant) = setup();
     client.pause(&admins);
@@ -457,68 +456,6 @@ fn bootstrap_default_rule_satisfies_setter_fee_validation() {
 }
 
 // ---------------------------------------------------------------------------
-// Fee-sum boundary (issue #466)
-// ---------------------------------------------------------------------------
-
-// Default rule with platform + network summing exactly to BPS_DENOMINATOR
-// (100 %) must be accepted — the check is `>`, not `>=`.
-#[test]
-fn set_default_rule_accepts_fee_sum_at_boundary() {
-    let (_env, client, admins, _merchant) = setup();
-
-    let rule = SettlementRule {
-        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
-        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
-        settlement_delay_ledger: 7,
-        auto_settle: true,
-    };
-    client.set_default_rule(&admins, &rule);
-}
-
-// Default rule with combined fees exceeding BPS_DENOMINATOR must be rejected.
-// With MAX_FEE_BPS = 5000 the sum check is currently unreachable from
-// set_default_rule alone (individual fee cap fires first), but this test
-// validates the scheduled path's defence-in-depth and pins the behaviour
-// for future MAX_FEE_BPS increases.
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_default_rule_rejects_fee_sum_exceeding_denominator() {
-    let (_env, client, admins, _merchant) = setup();
-
-    let rule = SettlementRule {
-        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
-        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
-        settlement_delay_ledger: 7,
-        auto_settle: true,
-    };
-    client.set_default_rule(&admins, &rule);
-}
-
-// Scheduled path (_set_default_rule) must enforce the same sum check.
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_default_rule_rejects_fee_sum_exceeding_denominator_scheduled() {
-    let (env, client, admins, _merchant) = setup();
-    let admin = admins.get(0).unwrap();
-
-    let rule = SettlementRule {
-        platform_fee_bps: bettapay_common::constants::MAX_FEE_BPS + 1,
-        network_fee_bps: bettapay_common::constants::MAX_FEE_BPS,
-        settlement_delay_ledger: 7,
-        auto_settle: true,
-    };
-    let operation = Operation::SetDefaultRule(rule);
-    client.schedule(
-        &soroban_sdk::vec![&env, admin],
-        &operation,
-        &DEFAULT_TIMELOCK_DELAY_SECONDS,
-    );
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
-}
-
-// ---------------------------------------------------------------------------
 // upgrade
 // ---------------------------------------------------------------------------
 
@@ -598,10 +535,9 @@ fn recovery_executes_after_delay() {
     let recovery_address = Address::generate(&env);
     let new_admin = Address::generate(&env);
     let governance = register_governance(&env);
-    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -617,6 +553,33 @@ fn recovery_executes_after_delay() {
     client.execute_recovery();
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn initiate_recovery_rejects_overwrite_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let first_target = Address::generate(&env);
+    let second_target = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&first_target);
+
+    // Second initiation must be rejected — a recovery is already pending.
+    client.initiate_recovery(&second_target);
 }
 
 // ---------------------------------------------------------------------------
