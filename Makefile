@@ -22,10 +22,6 @@ clean:
 
 fmt:
 	cargo fmt --all -- --check
-.PHONY: fmt test check clippy all
-
-fmt:
-	cargo fmt --all --check
 
 test:
 	cargo test --workspace
@@ -47,5 +43,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test test_scripts wasm_size check_codeowners
-all: fmt check clippy test
+all: fmt check clippy test test_scripts check_codeowners
