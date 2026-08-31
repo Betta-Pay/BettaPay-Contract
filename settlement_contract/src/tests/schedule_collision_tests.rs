@@ -69,7 +69,7 @@ fn schedule_detects_collision_with_unrelated_pending_operation() {
 #[test]
 #[should_panic(expected = "Error(Contract, #11)")]
 fn execute_rejects_operation_that_only_collides_on_hash() {
-    let (env, client, _admins, merchant) = setup();
+    let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
 
     let unrelated_bytes = soroban_sdk::Bytes::from_slice(&env, b"not this operation's xdr");
