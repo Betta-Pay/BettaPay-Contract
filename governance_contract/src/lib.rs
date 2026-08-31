@@ -283,7 +283,7 @@ pub enum GovernanceError {
     AnchorMissing = 200,
     InvalidParamValue = 201,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
@@ -344,7 +344,13 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
-    pub fn init(env: Env, deployer: Address, admins: Vec<Address>, threshold: u32, recovery_address: Address) {
+    pub fn init(
+        env: Env,
+        deployer: Address,
+        admins: Vec<Address>,
+        threshold: u32,
+        recovery_address: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, GovernanceError::AlreadyInitialized);
         }
@@ -397,11 +403,7 @@ impl GovernanceContract {
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
-        assert_not_zero(
-            &env,
-            &new_recovery,
-            GovernanceError::InvalidRecoveryAddress,
-        );
+        assert_not_zero(&env, &new_recovery, GovernanceError::InvalidRecoveryAddress);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
@@ -944,7 +946,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery_address);
         (env, client, admins, recovery_address)
     }
@@ -1045,8 +1047,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
-        let (_env, client, admins, recovery) = setup();
-    let deployer = Address::generate(&env);
+        let (env, client, admins, recovery) = setup();
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
     }
 
@@ -1059,8 +1061,8 @@ mod tests {
         let recovery = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin], &0, &recovery);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &0, &recovery);
     }
 
     #[test]
@@ -1456,7 +1458,8 @@ mod tests {
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
 
-            let result = client.try_init(&admins, &threshold, &recovery);
+            let deployer = Address::generate(&env);
+            let result = client.try_init(&deployer, &admins, &threshold, &recovery);
             if threshold == 0 || threshold > admin_count {
                 prop_assert!(result.is_err());
             } else {
@@ -1484,8 +1487,8 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         assert!(!client.is_initialized());
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin.clone()], &1, &recovery_address);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin.clone()], &1, &recovery_address);
         assert!(client.is_initialized());
     }
 
@@ -1500,7 +1503,7 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         let admins = vec![&env, admin.clone()];
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
         assert!(client.is_initialized());
         assert_eq!(client.get_admin(), admins);
@@ -1565,7 +1568,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
@@ -1589,7 +1592,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
@@ -1612,7 +1615,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
@@ -1633,7 +1636,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
 
         client.change_threshold(&admins, &0);
@@ -1702,7 +1705,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &2, &recovery_address);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery_address);
 
         client.initiate_recovery(&first_target);
 
@@ -1867,7 +1871,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
 
         client.pause(&admins);

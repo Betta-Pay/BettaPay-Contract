@@ -42,7 +42,7 @@ pub enum SettlementError {
     /// A recovery is already pending; initiate_recovery cannot overwrite it.
     RecoveryAlreadyPending = 15,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.

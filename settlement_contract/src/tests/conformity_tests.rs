@@ -44,6 +44,8 @@ fn governance_codes() -> [(&'static str, u32); 17] {
             "RecoveryAlreadyPending",
             GovernanceError::RecoveryAlreadyPending as u32,
         ),
+        ("AlreadyPaused", GovernanceError::AlreadyPaused as u32),
+        ("AlreadyUnpaused", GovernanceError::AlreadyUnpaused as u32),
         ("AnchorMissing", GovernanceError::AnchorMissing as u32),
         (
             "InvalidParamValue",
@@ -53,7 +55,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 28] {
+fn settlement_codes() -> [(&'static str, u32); 29] {
     [
         (
             "AlreadyInitialized",
@@ -93,6 +95,10 @@ fn settlement_codes() -> [(&'static str, u32); 28] {
             SettlementError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", SettlementError::InvalidThreshold as u32),
+        (
+            "RecoveryAlreadyPending",
+            SettlementError::RecoveryAlreadyPending as u32,
+        ),
         ("AlreadyPaused", SettlementError::AlreadyPaused as u32),
         ("AlreadyUnpaused", SettlementError::AlreadyUnpaused as u32),
         ("MerchantExists", SettlementError::MerchantExists as u32),

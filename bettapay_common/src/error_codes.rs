@@ -51,7 +51,7 @@ pub const INVALID_THRESHOLD: u32 = 14;
 /// A recovery operation is already pending; a second one cannot be initiated.
 pub const RECOVERY_ALREADY_PENDING: u32 = 15;
 /// `pause` was called while the contract was already paused.
-pub const ALREADY_PAUSED: u32 = 15;
+pub const ALREADY_PAUSED: u32 = 17;
 /// `unpause` was called while the contract was already unpaused.
 pub const ALREADY_UNPAUSED: u32 = 16;
 
