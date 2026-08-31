@@ -54,7 +54,7 @@ impl SettlementContract {
             SettlementError::InvalidRecoveryAddress,
             SettlementError::InvalidRecoveryAddress,
         );
-        for i in 0..threshold {
+        for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
         }
         env.storage().instance().set(&DataKey::Deployer, &deployer);
