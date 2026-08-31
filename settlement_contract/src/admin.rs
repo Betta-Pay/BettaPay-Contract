@@ -289,6 +289,12 @@ impl SettlementContract {
 
     /// Schedules an administrative operation to be executed after a timelock.
     ///
+    /// # Authorization
+    ///
+    /// Requires authentication from the configured admin set. The caller must
+    /// pass enough valid signers to meet the current multisig threshold, so a
+    /// single (possibly compromised) admin cannot enqueue an operation —
+    /// including `Upgrade` — without the required consensus (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -412,6 +418,11 @@ impl SettlementContract {
 
     /// Cancels a scheduled administrative operation.
     ///
+    /// # Authorization
+    ///
+    /// Requires the same multisig threshold as [`Self::schedule`], so a single
+    /// admin cannot unilaterally remove an operation the full admin set agreed
+    /// to schedule (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
