@@ -5,11 +5,11 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_rule_or_default,
+    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, MIN_PAYMENT_AMOUNT,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
     PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
 };
 
@@ -46,14 +46,16 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     // To prevent fee under-collection, ceiling division is simulated by adding `BPS_DENOMINATOR - 1` to the numerator.
     // Edge case: For small amounts, ceil rounding can force fees to 1 unit even when the basis points represent a tiny fraction.
     let platform_fee_amount = platform_bps.calculate_fee_ceil(amount);
-    let network_fee_amount = network_bps.calculate_fee_ceil(amount);
+    let mut network_fee_amount = network_bps.calculate_fee_ceil(amount);
 
-    // The merchant amount is calculated as the subtraction remainder of the gross amount minus all rounded-up fees.
-    // This ensures the sum of the split amounts (platform fee + network fee + merchant share) always equals the gross amount,
-    // except when the remainder is negative. For very small gross amounts with high/extreme fee percentages,
-    // the sum of rounded-up fees can exceed the gross amount. We explicitly clamp the merchant amount to 0 in this case.
-    let remainder = amount - platform_fee_amount - network_fee_amount;
-    let merchant_amount = remainder.max(0);
+    // Ceil-rounded fees can sum to more than the gross for tiny amounts with
+    // high fee configs. Clamp the network leg so total fees never exceed the
+    // gross, keeping the accounting equation balanced (issue #683).
+    if platform_fee_amount + network_fee_amount > amount {
+        network_fee_amount = amount - platform_fee_amount;
+    }
+
+    let merchant_amount = (amount - platform_fee_amount - network_fee_amount).max(0);
     FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
@@ -206,7 +208,8 @@ impl SettlementContract {
         if reference == BytesN::from_array(&env, &[0; 32]) {
             panic_with_error!(&env, SettlementError::InvalidPaymentReference);
         }
-        if amount < MIN_PAYMENT_AMOUNT {
+        let min_amount = read_min_payment_amount(&env);
+        if amount < min_amount {
             panic_with_error!(&env, SettlementError::AmountTooSmall);
         }
 
@@ -266,7 +269,7 @@ impl SettlementContract {
                 merchant.clone(),
                 reference.clone(),
             ),
-            (),
+            record,
         );
 
         split
@@ -283,7 +286,8 @@ impl SettlementContract {
         if !is_merchant_registered_internal(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
-        if amount < MIN_PAYMENT_AMOUNT {
+        let min_amount = read_min_payment_amount(&env);
+        if amount < min_amount {
             panic_with_error!(env, SettlementError::AmountTooSmall);
         }
         let rule = read_rule_or_default(&env, merchant);
@@ -295,6 +299,8 @@ impl SettlementContract {
     ///
     /// The reference is resolved within the merchant's own namespace, so the
     /// same reference held by a different merchant is not returned.
+    /// This read is public: the 32-byte payment reference is the lookup
+    /// capability used by indexers and composing contracts.
     ///
     /// # Panics
     ///
@@ -310,7 +316,6 @@ impl SettlementContract {
         merchant: Address,
         reference: BytesN<32>,
     ) -> Option<PaymentRecord> {
-        merchant.require_auth();
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
         let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
@@ -330,6 +335,8 @@ impl SettlementContract {
     ///
     /// References are resolved within the merchant's own namespace and the
     /// returned vector contains only records that exist.
+    /// This read is public so indexers and composing contracts can verify
+    /// known payment references without a merchant signature.
     ///
     /// # Panics
     ///
@@ -341,7 +348,6 @@ impl SettlementContract {
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
     pub fn get_payments(env: Env, merchant: Address, refs: Vec<BytesN<32>>) -> Vec<PaymentRecord> {
-        merchant.require_auth();
         assert_payments_readable(&env, &merchant);
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(env, SettlementError::BatchTooLarge);
