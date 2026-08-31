@@ -918,7 +918,6 @@ mod real_auth_tests;
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use soroban_sdk::testutils::storage::Persistent;
     use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
