@@ -563,6 +563,21 @@ fn update_governance_stores_validated_address() {
     assert_eq!(client.get_governance(), new_governance);
 }
 
+/// The direct `update_governance` path must reject an address that fails
+/// `validate_governance`. A zero address is rejected with
+/// `InvalidGovernance` (#309) before any storage is written.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn update_governance_rejects_zero_address() {
+    let (env, client, admins, _merchant) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+
+    client.update_governance(&admins, &zero_address);
+}
+
 #[test]
 fn bps_newtype_conversions_and_arithmetic_helpers_work() {
     let bps = Bps::new(250);

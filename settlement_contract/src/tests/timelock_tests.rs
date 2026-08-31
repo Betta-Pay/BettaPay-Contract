@@ -290,6 +290,53 @@ fn execute_rejects_when_contract_is_paused_and_preserves_scheduled_op() {
 }
 
 // ---------------------------------------------------------------------------
+// Governance update validation on the scheduled path (issue #562)
+// ---------------------------------------------------------------------------
+
+/// The scheduled path (`Operation::UpdateGovernance` executed through the
+/// timelock) must enforce the exact same `validate_governance` check as the
+/// direct `update_governance` entry point. `schedule` is admin-gated but does
+/// not inspect the operation payload, so a zero governance address must be
+/// rejected with `InvalidGovernance` (#309) at execution time instead of
+/// being stored.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_zero_address() {
+    let (env, client, admins, _) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let operation = Operation::UpdateGovernance(zero_address);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // The scheduled path must fail the same validation the direct path does.
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+/// The scheduled path accepts a governance address that passes
+/// `validate_governance`, mirroring the direct path.
+#[test]
+fn scheduled_update_governance_accepts_valid_address() {
+    let (env, client, admins, _) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+
+    assert_eq!(client.get_governance(), new_governance);
+}
+
+// ---------------------------------------------------------------------------
 // Uniform execution auth policy (issue #561)
 // ---------------------------------------------------------------------------
 

@@ -87,6 +87,17 @@ impl SettlementContract {
         read_recovery_address(&env)
     }
 
+    /// Updates the governance address after validating it.
+    ///
+    /// # Validation policy (issue #562)
+    ///
+    /// `new_governance` is validated by [`validate_governance`] before it is
+    /// stored. The timelocked path (`_update_governance`, reached through
+    /// [`Operation::UpdateGovernance`]) routes through the **same** function,
+    /// so a governance address cannot bypass validation by taking the
+    /// scheduled route instead of the direct one. Any change to governance
+    /// validation must be made inside `validate_governance` — never inlined in
+    /// just one path, or the two paths will drift apart again.
     pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         assert_not_paused(&env);
@@ -448,6 +459,15 @@ impl SettlementContract {
 
     // --- Internal Admin Functions ---
 
+    /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
+    /// from [`execute`](Self::execute).
+    ///
+    /// # Validation policy (issue #562)
+    ///
+    /// Mirrors the direct `update_governance` entry point exactly: the new
+    /// address must pass [`validate_governance`] before it is stored. Both
+    /// paths intentionally share this single function so the scheduled path
+    /// can never enforce a weaker (or different) check than the direct path.
     fn _update_governance(env: &Env, executor: &Address, new_governance: Address) {
         assert_not_paused(env);
         validate_governance(env, &new_governance);
