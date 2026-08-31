@@ -7,8 +7,8 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule, read_rule_or_default,
-    read_threshold, validate_fee_against_governance, verify_admin_auth,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule,
+    read_rule_or_default, read_threshold, validate_fee_against_governance, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
