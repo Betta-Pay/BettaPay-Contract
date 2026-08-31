@@ -176,6 +176,7 @@ use bettapay_common::{
     error_codes,
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
+    upgrade::probe_supports_interface,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
@@ -425,7 +426,11 @@ impl GovernanceContract {
     /// ### Events
     /// - Emits `contract_upgraded` with topic
     ///   `(Symbol("contract_upgraded"), caller)` and data
-    ///   `(new_wasm_hash)`.
+    ///   `(new_wasm_hash)`. The event is published at the same logical point
+    ///   as the settlement upgrade paths — after auth and interface
+    ///   validation, immediately before the executable is swapped — so the
+    ///   ordering is consistent regardless of which contract or path
+    ///   performs the upgrade (issue #473).
     ///
     /// ### Panics
     /// - Panics with [`Unauthorized`](GovernanceError::Unauthorized) if the caller is not the current admin.
@@ -433,30 +438,19 @@ impl GovernanceContract {
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
-        // Deploy a probe instance of the new Wasm so we can call
-        // `supports_interface` on it.  We use the wasm hash itself as the
-        // salt so the probe address is deterministic and collision-free.
-        let probe = env
-            .deployer()
-            .with_current_contract(new_wasm_hash.clone())
-            .deploy(new_wasm_hash.clone());
-
-        let version_args: Vec<u32> = soroban_sdk::vec![&env, 1u32];
-        let supports: bool = match env.try_invoke_contract::<bool, GovernanceError>(
-            &probe,
-            &Symbol::new(&env, "supports_interface"),
-            version_args.into_val(&env),
-        ) {
-            Ok(Ok(v)) => v,
-            _ => panic_with_error!(&env, GovernanceError::InvalidWasmInterface),
-        };
-        if !supports {
+        // Verify the new Wasm supports the required BettaPay interface
+        // (version 1) before overwriting the running code. See
+        // `bettapay_common::upgrade::probe_supports_interface`.
+        if !probe_supports_interface(&env, &new_wasm_hash, 1) {
             panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
         }
 
+        // Emit `contract_upgraded` before swapping the executable so every
+        // BettaPay upgrade path publishes it at the same point: after auth
+        // and interface validation, immediately before the code swap (issue
+        // #473).
         let event_wasm_hash = new_wasm_hash.clone();
         let caller = signers.get(0).unwrap();
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
         env.events().publish(
             (
                 Symbol::new(&env, events::CONTRACT_UPGRADED_EVENT),
@@ -464,6 +458,7 @@ impl GovernanceContract {
             ),
             caller,
         );
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     pub fn initiate_recovery(env: Env, new_admin: Address) {
@@ -1698,6 +1693,40 @@ mod tests {
         client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
     }
 
+    /// A Wasm hash that was never uploaded (`upload_contract_wasm` was never
+    /// called for it) cannot be probed: protocol 21 exposes no wasm-presence
+    /// check to contract code, so the probe deployment traps with a
+    /// host-level `Storage`/`MissingValue` error ("Wasm does not exist")
+    /// rather than the typed `InvalidWasmInterface`. Documented here so the
+    /// boundary of the typed-error guarantee is explicit — see
+    /// `bettapay_common::upgrade::probe_supports_interface`.
+    #[test]
+    #[should_panic(expected = "Error(Storage, MissingValue)")]
+    fn upgrade_rejects_never_uploaded_wasm_hash() {
+        let (env, client, admins, _recovery) = setup();
+        let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
+        client.upgrade(&admins, &garbage);
+    }
+
+    /// Issue #473: `contract_upgraded` is published at the canonical point —
+    /// after auth and interface validation, immediately before the code
+    /// swap. A rejected upgrade must therefore emit no event at all,
+    /// pinning the event's position relative to the validation step.
+    #[test]
+    fn upgrade_emits_no_event_on_failed_upgrade() {
+        let (env, client, admins, _recovery) = setup();
+        let bad_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+
+        let before = env.events().all().len();
+        let result = client.try_upgrade(&admins, &bad_hash);
+        assert!(result.is_err(), "non-conforming wasm must be rejected");
+        assert_eq!(
+            env.events().all().len(),
+            before,
+            "no contract_upgraded event on failed upgrade"
+        );
     // -----------------------------------------------------------------------
     // Issue #507: schema-version marker + migrate skeleton
     // -----------------------------------------------------------------------
