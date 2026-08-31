@@ -242,7 +242,7 @@ fn change_threshold_emits_no_event_when_insufficient_signatures() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "Error(Contract, #202)")]
+#[should_panic(expected = "Error(Contract, #15)")]
 fn pause_emits_no_event_when_already_paused() {
     let (env, client, admins) = setup();
     client.pause(&admins);
@@ -257,7 +257,7 @@ fn pause_emits_no_event_when_already_paused() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #203)")]
+#[should_panic(expected = "Error(Contract, #16)")]
 fn unpause_emits_no_event_when_already_unpaused() {
     let (env, client, admins) = setup();
 

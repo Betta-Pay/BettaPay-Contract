@@ -312,6 +312,8 @@ impl SettlementContract {
     ///
     /// The reference is resolved within the merchant's own namespace, so the
     /// same reference held by a different merchant is not returned.
+    /// This read is public: the 32-byte payment reference is the lookup
+    /// capability used by indexers and composing contracts.
     ///
     /// # Panics
     ///
@@ -327,7 +329,6 @@ impl SettlementContract {
         merchant: Address,
         reference: BytesN<32>,
     ) -> Option<PaymentRecord> {
-        merchant.require_auth();
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
         let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
@@ -347,6 +348,8 @@ impl SettlementContract {
     ///
     /// References are resolved within the merchant's own namespace and the
     /// returned vector contains only records that exist.
+    /// This read is public so indexers and composing contracts can verify
+    /// known payment references without a merchant signature.
     ///
     /// # Panics
     ///
@@ -358,7 +361,6 @@ impl SettlementContract {
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
     pub fn get_payments(env: Env, merchant: Address, refs: Vec<BytesN<32>>) -> Vec<PaymentRecord> {
-        merchant.require_auth();
         assert_payments_readable(&env, &merchant);
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(env, SettlementError::BatchTooLarge);

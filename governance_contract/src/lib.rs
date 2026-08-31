@@ -107,21 +107,6 @@
 //! | 2 | `NotInitialized` | Admin not yet set |
 //! | 3 | `Unauthorized` | Caller is not the admin |
 //! | 4 | `InvalidFeeBps` | Fee value out of range or combined sum > 10 000 bps |
-//! | 5 | `AnchorMissing` | Tried to remove an unregistered anchor |
-//! | 6 | `Paused` | Contract is paused |
-//! | 7 | `InvalidAdmin` | Transfer target is zero-address or current admin |
-//! | 8 | `InvalidParamValue` | Supplied system parameter value is negative |
-//! | 9 | `InvalidRecoveryAddress` | Recovery address is zero-address or otherwise invalid |
-//! | 10 | `RecoveryNotPending` | No recovery operation is currently pending |
-//! | 11 | `RecoveryDelayActive` | Recovery delay period has not yet elapsed |
-//! | 12 | `AlreadyPaused` | `pause` called while the contract was already paused |
-//! | 13 | `AlreadyUnpaused` | `unpause` called while the contract was already unpaused |
-//! | 14 | `ExecutionNotReady` | The scheduled operation is not yet ready for execution |
-//! | 15 | `OperationNotScheduled` | The operation has not been scheduled |
-//! | 16 | `OperationAlreadyScheduled` | The operation has already been scheduled |
-//! | 17 | `InvalidWasmInterface` | The deployed WASM does not implement the required interface |
-//! | 18 | `InvalidThreshold` | The provided multisig threshold is invalid |
-//! | 19 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //! | 5 | `Paused` | Contract is paused |
 //! | 6 | `InvalidAdmin` | Transfer target is zero-address or current admin |
 //! | 7 | `InvalidRecoveryAddress` | Recovery address is zero-address or otherwise invalid |
@@ -129,10 +114,10 @@
 //! | 9 | `RecoveryDelayActive` | Recovery delay period has not yet elapsed |
 //! | 13 | `InvalidWasmInterface` | The deployed WASM does not implement the required interface |
 //! | 14 | `InvalidThreshold` | The provided multisig threshold is invalid |
+//! | 15 | `AlreadyPaused` | `pause` called while the contract was already paused |
+//! | 16 | `AlreadyUnpaused` | `unpause` called while the contract was already unpaused |
 //! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
-//! | 202 | `AlreadyPaused` | `pause` called while the contract was already paused |
-//! | 203 | `AlreadyUnpaused` | `unpause` called while the contract was already unpaused |
 //! | 204 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //!
 //! ## Event Conventions
@@ -207,8 +192,6 @@ pub struct FeeConfig {
 // TTL constants are kept locally aliased to `TTL_THRESHOLD_LEDGERS` /
 // `TTL_BUMP_LEDGERS` so existing call sites and tests can keep referring to
 // the named per-key constants.
-const FEE_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
-const FEE_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const ANCHOR_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
 const ANCHOR_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const SYSTEM_PARAM_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
@@ -298,9 +281,9 @@ pub enum GovernanceError {
     AnchorMissing = 200,
     InvalidParamValue = 201,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 202,
+    AlreadyPaused = 15,
     /// `unpause` was called while the contract was already unpaused.
-    AlreadyUnpaused = 203,
+    AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
     SameAdmin = 204,
 }
@@ -321,8 +304,8 @@ const _: () = {
     assert!(GovernanceError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
-    assert!(GovernanceError::AlreadyPaused as u32 >= error_codes::GOVERNANCE_RANGE_START);
-    assert!(GovernanceError::AlreadyUnpaused as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
+    assert!(GovernanceError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
     assert!(GovernanceError::SameAdmin as u32 >= error_codes::GOVERNANCE_RANGE_START);
 };
 
@@ -605,8 +588,7 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::AlreadyPaused);
         }
         let admin = signers.get(0).unwrap();
-        storage::set_paused(&env, true);
-        events::emit_paused(&env, &admin);
+        storage::apply_pause(&env, &admin);
     }
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
@@ -615,8 +597,7 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::AlreadyUnpaused);
         }
         let admin = signers.get(0).unwrap();
-        storage::set_paused(&env, false);
-        events::emit_unpaused(&env, &admin);
+        storage::apply_unpause(&env, &admin);
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -706,10 +687,7 @@ impl GovernanceContract {
 
         let admin = signers.get(0).unwrap();
         let key = DataKey::FeeConfig;
-        env.storage().persistent().set(&key, &config);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, FEE_TTL_THRESHOLD, FEE_TTL_BUMP);
+        env.storage().instance().set(&key, &config);
         env.events().publish(
             (Symbol::new(&env, events::FEE_CONFIG_UPDATED_EVENT),),
             (admin, config),
@@ -718,15 +696,7 @@ impl GovernanceContract {
 
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         let key = DataKey::FeeConfig;
-        match env.storage().persistent().get(&key) {
-            Some(config) => {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, FEE_TTL_THRESHOLD, FEE_TTL_BUMP);
-                Some(config)
-            }
-            None => None,
-        }
+        env.storage().instance().get(&key)
     }
 
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {

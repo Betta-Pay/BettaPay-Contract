@@ -827,7 +827,7 @@ fn same_merchant_duplicate_reference_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue 492: Payment-record reads are gated behind merchant auth
+// Issue 699: Payment-record reads are public for indexer and contract access
 // ---------------------------------------------------------------------------
 
 /// A caller that is not the merchant must not be able to read the merchant's
@@ -835,28 +835,27 @@ fn same_merchant_duplicate_reference_is_rejected() {
 /// `require_auth()` ownership check is actually enforced rather than mocked
 /// away.
 #[test]
-fn get_payment_reference_rejects_unauthenticated_caller() {
+fn get_payment_reference_allows_unauthenticated_indexer_reads() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
     let reference = BytesN::<32>::from_array(&env, &[21u8; 32]);
     settle_client.store_payment_reference(&merchant, &reference, &1_000);
 
-    // Turn off auth mocking: no authorization entries exist, so the merchant
-    // ownership check must reject the read.
+    // Turn off auth mocking: public reads must not need the merchant's key.
     env.set_auths(&[]);
-    let result = settle_client.try_get_payment_reference(&merchant, &reference);
+    let result = settle_client.get_payment_reference(&merchant, &reference);
     assert!(
-        result.is_err(),
-        "unauthenticated payment read must be rejected"
+        result.is_some(),
+        "unauthenticated indexer read must return the stored payment"
     );
 
-    // The batch read is gated identically.
+    // Batch reads are public as well.
     let refs = soroban_sdk::vec![&env, reference];
-    let batch_result = settle_client.try_get_payments(&merchant, &refs);
+    let batch_result = settle_client.get_payments(&merchant, &refs);
     assert!(
-        batch_result.is_err(),
-        "unauthenticated batch read must be rejected"
+        batch_result.len() == 1,
+        "unauthenticated indexer batch read must return the stored payment"
     );
 }
 
@@ -970,7 +969,7 @@ fn timelocked_unregister_also_orphans_payments() {
     );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    settle_client.execute(&operation);
+    settle_client.execute(&settle_admins.get(0).unwrap(), &operation);
 
     assert!(!settle_client.is_merchant_registered(&merchant));
     let result = settle_client.try_get_payment_reference(&merchant, &reference);

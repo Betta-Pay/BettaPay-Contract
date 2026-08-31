@@ -101,7 +101,7 @@ fn every_admin_writer_preserves_the_vector_shape() {
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, scheduled_admin]);
 }
 
@@ -243,6 +243,54 @@ fn pause_rejected_for_non_admin() {
     let (env, client, _admins, _merchant) = setup();
     let non_admin = Address::generate(&env);
     client.pause(&soroban_sdk::vec![&env, non_admin]);
+}
+
+// ---------------------------------------------------------------------------
+// Pause idempotency (mirrors governance — both contracts must behave the same)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn pause_rejected_when_already_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    // Second pause must reject with AlreadyPaused (#15) and emit no extra event.
+    client.pause(&admins);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_rejected_when_already_unpaused() {
+    let (_env, client, admins, _merchant) = setup();
+    // Contract starts unpaused; calling unpause immediately must reject with AlreadyUnpaused (#16).
+    client.unpause(&admins);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn double_pause_emits_no_extra_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    let prev = env.events().all().len();
+    client.pause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "double pause must not emit events"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_when_not_paused_emits_no_event() {
+    let (env, client, admins, _merchant) = setup();
+    let prev = env.events().all().len();
+    client.unpause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "unpause when not paused must not emit events"
+    );
 }
 
 #[test]
