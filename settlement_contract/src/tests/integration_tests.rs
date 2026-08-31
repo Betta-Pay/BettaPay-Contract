@@ -1061,7 +1061,13 @@ fn store_payment_reference_prevents_reentrancy() {
 
     let settle_client = SettlementContractClient::new(&env, &settle_id);
     let deployer = Address::generate(&env);
-    settle_client.init(&deployer, &settle_admins, &1, &mock_gov_id, &settle_recovery);
+    settle_client.init(
+        &deployer,
+        &settle_admins,
+        &1,
+        &mock_gov_id,
+        &settle_recovery,
+    );
 
     let merchant = Address::generate(&env);
     settle_client.register_merchant(&settle_admins, &merchant);

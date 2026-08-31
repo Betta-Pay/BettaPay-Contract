@@ -1,8 +1,6 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{
-    Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS,
-};
+use crate::{Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS};
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env};
 
@@ -16,7 +14,9 @@ fn scheduled_operation_executes_only_after_delay() {
     let operation = Operation::TransferAdmin(new_admins.clone(), 1);
 
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert_eq!(client.get_admin(), admins);
 
     env.ledger()
@@ -25,7 +25,9 @@ fn scheduled_operation_executes_only_after_delay() {
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
     assert_eq!(client.get_threshold(), 1);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
 }
 
 #[test]
@@ -71,7 +73,9 @@ fn admin_can_cancel_but_non_admin_cannot() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert!(client
         .try_cancel(&soroban_sdk::vec![&env, admins.get(0).unwrap()], &operation)
         .is_err());
@@ -90,7 +94,9 @@ fn multisig_schedule_and_cancel_require_two_of_three_signers() {
     client.schedule(&two_signers, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client.try_cancel(&one_signer, &operation).is_err());
     client.cancel(&two_signers, &operation);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
 }
 
 #[test]
@@ -104,7 +110,9 @@ fn multisig_schedule_and_execute_apply_operation_after_delay() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS - 1);
-    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
     assert!(!client.is_merchant_registered(&merchant));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 1);
@@ -224,7 +232,7 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&admins.get(0).unwrap(), &operation);
+    client.execute(&a1.clone(), &operation);
 
     assert_eq!(
         client.get_admin(),
@@ -414,23 +422,23 @@ fn test_execute_uniform_auth_all_variants() {
     // fails with `Unauthorized`. Every variant must still execute.
     env.set_auths(&[]);
 
-    client.execute(&op_update_governance);
+    client.execute(&admins.get(0).unwrap(), &op_update_governance);
     assert_eq!(client.get_governance(), new_gov);
 
-    client.execute(&op_cancel_recovery);
+    client.execute(&admins.get(0).unwrap(), &op_cancel_recovery);
     assert!(client.try_execute_recovery().is_err());
 
-    client.execute(&op_transfer_admin);
+    client.execute(&admins.get(0).unwrap(), &op_transfer_admin);
     assert_eq!(client.get_admin(), new_admins);
     assert_eq!(client.get_threshold(), 1);
 
-    client.execute(&op_register_merchant);
+    client.execute(&admins.get(0).unwrap(), &op_register_merchant);
     assert!(client.is_merchant_registered(&merchant));
 
-    client.execute(&op_unregister_merchant);
+    client.execute(&admins.get(0).unwrap(), &op_unregister_merchant);
     assert!(!client.is_merchant_registered(&merchant2));
 
-    client.execute(&op_set_settlement_rule);
+    client.execute(&admins.get(0).unwrap(), &op_set_settlement_rule);
     let stored_rule = client.get_settlement_rule(&merchant3).unwrap();
     assert_eq!(stored_rule.platform_fee_bps, rule.platform_fee_bps);
     assert_eq!(stored_rule.network_fee_bps, rule.network_fee_bps);
@@ -440,10 +448,10 @@ fn test_execute_uniform_auth_all_variants() {
     );
     assert_eq!(stored_rule.auto_settle, rule.auto_settle);
 
-    client.execute(&op_clear_settlement_rule);
+    client.execute(&admins.get(0).unwrap(), &op_clear_settlement_rule);
     assert!(client.get_settlement_rule(&merchant4).is_none());
 
-    client.execute(&op_set_default_rule);
+    client.execute(&admins.get(0).unwrap(), &op_set_default_rule);
     let stored_default = client.get_default_rule().unwrap();
     assert_eq!(stored_default.platform_fee_bps, rule.platform_fee_bps);
     assert_eq!(stored_default.network_fee_bps, rule.network_fee_bps);
@@ -458,7 +466,7 @@ fn test_execute_uniform_auth_all_variants() {
     // `upgrade` path) does not probe `supports_interface`. So this arm
     // succeeds — and succeeding with caller-auth mocking disabled is the
     // proof that it has no auth gate either.
-    client.execute(&op_upgrade);
+    client.execute(&admins.get(0).unwrap(), &op_upgrade);
 }
 
 /// Focused regression for the variant named in issue #561: a scheduled
@@ -480,7 +488,7 @@ fn scheduled_cancel_recovery_executes_without_caller_auth() {
     // No caller auth is mocked: the old primary-admin `require_auth` would
     // fail here with `Unauthorized`.
     env.set_auths(&[]);
-    client.execute(&op);
+    client.execute(&admins.get(0).unwrap(), &op);
 
     // The pending recovery is gone.
     assert!(client.try_execute_recovery().is_err());
