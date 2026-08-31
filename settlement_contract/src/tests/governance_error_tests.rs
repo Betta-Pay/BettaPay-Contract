@@ -9,9 +9,9 @@
 //!   `set_settlement_rule` / `set_default_rule`).
 
 use crate::types::DataKey;
-use crate::*;
+use crate::{GovFeeConfig, SettlementContract, SettlementContractClient, SettlementRule};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Symbol};
 
 // ---------------------------------------------------------------------------
 // Failing governance stub — lives in its own module to avoid symbol collisions
