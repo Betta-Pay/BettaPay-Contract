@@ -208,12 +208,20 @@ mod compatibility_tests {
     fn common_data_key_encoding_matches_legacy() {
         let env = Env::default();
         let mut map: soroban_sdk::Map<Val, u32> = soroban_sdk::Map::new(&env);
-        
+
         map.set(LegacyDataKey::RecoveryAddress.into_val(&env), 1u32);
-        assert_eq!(map.get(CommonDataKey::RecoveryAddress.into_val(&env)), Some(1u32), "RecoveryAddress encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::RecoveryAddress.into_val(&env)),
+            Some(1u32),
+            "RecoveryAddress encoding mismatch"
+        );
 
         map.set(LegacyDataKey::PendingRecovery.into_val(&env), 2u32);
-        assert_eq!(map.get(CommonDataKey::PendingRecovery.into_val(&env)), Some(2u32), "PendingRecovery encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::PendingRecovery.into_val(&env)),
+            Some(2u32),
+            "PendingRecovery encoding mismatch"
+        );
 
         // Note: Paused was also a unit variant in the legacy DataKey.
         // We'll just define another legacy enum for it or reuse the same.
@@ -223,11 +231,19 @@ mod compatibility_tests {
             Paused,
             SystemParam(soroban_sdk::Symbol),
         }
-        
+
         map.set(LegacyDataKey2::Paused.into_val(&env), 3u32);
-        assert_eq!(map.get(CommonDataKey::Paused.into_val(&env)), Some(3u32), "Paused encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Paused.into_val(&env)),
+            Some(3u32),
+            "Paused encoding mismatch"
+        );
 
         map.set(LegacyDataKey::Threshold.into_val(&env), 4u32);
-        assert_eq!(map.get(CommonDataKey::Threshold.into_val(&env)), Some(4u32), "Threshold encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Threshold.into_val(&env)),
+            Some(4u32),
+            "Threshold encoding mismatch"
+        );
     }
 }
