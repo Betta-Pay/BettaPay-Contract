@@ -13,10 +13,10 @@
 //!   (contract trap, host error, or contract-returned error) surfaces as
 //!   `GovernanceCallFailed`, so a broken or mis-deployed governance contract
 //!   cannot abort the transaction with a raw panic.
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
 
 use bettapay_common::{
-    events::{self, PendingRecovery},
+    events::PendingRecovery,
     storage::{self, CommonDataKey},
 };
 
@@ -338,7 +338,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
-    args.push_back(Symbol::new(env, "min_payment").into());
+    args.push_back(Symbol::new(env, "min_payment").into_val(env));
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),
