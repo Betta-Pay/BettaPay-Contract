@@ -1,4 +1,4 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::{self, PendingRecovery},
@@ -130,10 +130,18 @@ pub(crate) fn read_recovery_address(env: &Env) -> Address {
 }
 
 pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
-    env.storage()
+    // Decode by hand so a pending recovery written before `initiated_by`
+    // existed (pre-issue #560) is refused with `RecoveryNotPending` instead
+    // of surfacing a host-level conversion panic. Refusing is deliberate:
+    // an old-format record must never be treated as a valid pending
+    // recovery (default-deny, never default-allow).
+    let val = env
+        .storage()
         .instance()
-        .get::<_, PendingRecovery>(&CommonDataKey::PendingRecovery)
-        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending))
+        .get::<_, Val>(&CommonDataKey::PendingRecovery)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending));
+    PendingRecovery::try_from_val(env, &val)
+        .unwrap_or_else(|_| panic_with_error!(env, SettlementError::RecoveryNotPending))
 }
 
 /// Validates that the provided governance address is a non-zero, non-empty address.

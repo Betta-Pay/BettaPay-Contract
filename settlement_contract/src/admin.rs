@@ -114,6 +114,7 @@ impl SettlementContract {
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            initiated_by: recovery_address.clone(),
         };
         env.storage()
             .instance()
@@ -122,19 +123,25 @@ impl SettlementContract {
     }
 
     pub fn cancel_recovery(env: Env, signers: Vec<Address>) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let admin = signers.get(0).unwrap();
-        if !env
-            .storage()
-            .instance()
-            .has(&CommonDataKey::PendingRecovery)
-        {
-            panic_with_error!(&env, SettlementError::RecoveryNotPending);
+        // Cancellation policy (issue #560): the pending recovery may be
+        // cancelled by the address recorded as `initiated_by` (the recovery
+        // address that started it) or by the current admin set meeting the
+        // multisig threshold. The admin path is unchanged; the initiator
+        // path lets an initiation be undone by the address that made it.
+        // Any other caller is refused with `Unauthorized`.
+        let pending = read_pending_recovery(&env);
+        let cancelled_by_initiator =
+            signers.len() == 1 && signers.get(0).unwrap() == pending.initiated_by;
+        if cancelled_by_initiator {
+            pending.initiated_by.require_auth();
+        } else {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
         }
+        let canceller = signers.get(0).unwrap();
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
-        events::emit_recovery_cancelled(&env, &admin);
+        events::emit_recovery_cancelled(&env, &canceller);
     }
 
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {

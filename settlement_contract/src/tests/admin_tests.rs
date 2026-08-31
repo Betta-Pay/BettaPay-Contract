@@ -114,6 +114,7 @@ fn failed_recovery_keeps_pending_target() {
     let pending = PendingRecovery {
         new_admin: zero_admin.clone(),
         execute_after: env.ledger().timestamp(),
+        initiated_by: Address::generate(&env),
     };
 
     env.as_contract(&client.address, || {
