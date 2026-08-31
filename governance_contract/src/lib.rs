@@ -176,6 +176,7 @@ use bettapay_common::{
     error_codes,
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
+    upgrade::probe_supports_interface,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
@@ -433,24 +434,10 @@ impl GovernanceContract {
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
-        // Deploy a probe instance of the new Wasm so we can call
-        // `supports_interface` on it.  We use the wasm hash itself as the
-        // salt so the probe address is deterministic and collision-free.
-        let probe = env
-            .deployer()
-            .with_current_contract(new_wasm_hash.clone())
-            .deploy(new_wasm_hash.clone());
-
-        let version_args: Vec<u32> = soroban_sdk::vec![&env, 1u32];
-        let supports: bool = match env.try_invoke_contract::<bool, GovernanceError>(
-            &probe,
-            &Symbol::new(&env, "supports_interface"),
-            version_args.into_val(&env),
-        ) {
-            Ok(Ok(v)) => v,
-            _ => panic_with_error!(&env, GovernanceError::InvalidWasmInterface),
-        };
-        if !supports {
+        // Verify the new Wasm supports the required BettaPay interface
+        // (version 1) before overwriting the running code. See
+        // `bettapay_common::upgrade::probe_supports_interface`.
+        if !probe_supports_interface(&env, &new_wasm_hash, 1) {
             panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
         }
 
@@ -1698,6 +1685,19 @@ mod tests {
         client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
     }
 
+    /// A Wasm hash that was never uploaded (`upload_contract_wasm` was never
+    /// called for it) cannot be probed: protocol 21 exposes no wasm-presence
+    /// check to contract code, so the probe deployment traps with a
+    /// host-level `Storage`/`MissingValue` error ("Wasm does not exist")
+    /// rather than the typed `InvalidWasmInterface`. Documented here so the
+    /// boundary of the typed-error guarantee is explicit — see
+    /// `bettapay_common::upgrade::probe_supports_interface`.
+    #[test]
+    #[should_panic(expected = "Error(Storage, MissingValue)")]
+    fn upgrade_rejects_never_uploaded_wasm_hash() {
+        let (env, client, admins, _recovery) = setup();
+        let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
+        client.upgrade(&admins, &garbage);
     // -----------------------------------------------------------------------
     // Issue #507: schema-version marker + migrate skeleton
     // -----------------------------------------------------------------------
