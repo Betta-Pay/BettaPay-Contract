@@ -117,18 +117,13 @@ impl SettlementContract {
 
         let prev = env
             .storage()
-            .persistent()
+            .instance()
             .get::<_, SettlementRule>(&DataKey::DefaultRule)
             .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::DefaultRule, &new_rule);
-        env.storage().persistent().extend_ttl(
-            &DataKey::DefaultRule,
-            RULE_TTL_THRESHOLD,
-            RULE_TTL_BUMP,
-        );
 
         env.events().publish(
             (Symbol::new(&env, events::DEFAULT_RULE_UPDATED_EVENT),),
@@ -137,19 +132,11 @@ impl SettlementContract {
     }
 
     /// Returns the global default settlement rule, if one has been set.
-    /// Automatically extends the persistent storage TTL to prevent archival
-    /// during public read queries (clausal to TTL eviction).
+    /// Stored in instance storage so it cannot expire independently of the
+    /// contract instance.
     pub fn get_default_rule(env: Env) -> Option<SettlementRule> {
         let key = DataKey::DefaultRule;
-        match env.storage().persistent().get::<_, SettlementRule>(&key) {
-            Some(rule) => {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
-                Some(rule)
-            }
-            None => None,
-        }
+        env.storage().instance().get::<_, SettlementRule>(&key)
     }
 
     /// Returns the merchant-specific settlement rule, if one has been set.

@@ -192,8 +192,6 @@ pub struct FeeConfig {
 // TTL constants are kept locally aliased to `TTL_THRESHOLD_LEDGERS` /
 // `TTL_BUMP_LEDGERS` so existing call sites and tests can keep referring to
 // the named per-key constants.
-const FEE_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
-const FEE_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const ANCHOR_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
 const ANCHOR_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const SYSTEM_PARAM_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
@@ -688,10 +686,7 @@ impl GovernanceContract {
 
         let admin = signers.get(0).unwrap();
         let key = DataKey::FeeConfig;
-        env.storage().persistent().set(&key, &config);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, FEE_TTL_THRESHOLD, FEE_TTL_BUMP);
+        env.storage().instance().set(&key, &config);
         env.events().publish(
             (Symbol::new(&env, events::FEE_CONFIG_UPDATED_EVENT),),
             (admin, config),
@@ -700,15 +695,7 @@ impl GovernanceContract {
 
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         let key = DataKey::FeeConfig;
-        match env.storage().persistent().get(&key) {
-            Some(config) => {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, FEE_TTL_THRESHOLD, FEE_TTL_BUMP);
-                Some(config)
-            }
-            None => None,
-        }
+        env.storage().instance().get(&key)
     }
 
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {
