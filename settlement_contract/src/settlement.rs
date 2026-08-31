@@ -28,11 +28,8 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        // Standard validation order (shared with the scheduled path in admin.rs):
-        // 1. Merchant existence
-        // 2. Fee range (hardcoded protocol bounds)
-        // 3. Governance ceiling
-        // 4. Settlement delay
+        validate_fee_against_governance(&env, &rule);
+
         if !is_merchant_registered_and_bump_ttl(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
@@ -48,7 +45,6 @@ impl SettlementContract {
         if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
-        validate_fee_against_governance(&env, &rule);
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
         }
@@ -103,10 +99,8 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        // Standard validation order:
-        // 1. Fee range (hardcoded protocol bounds)
-        // 2. Governance ceiling
-        // 3. Settlement delay
+        validate_fee_against_governance(&env, &new_rule);
+
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
@@ -117,7 +111,6 @@ impl SettlementContract {
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
-        validate_fee_against_governance(&env, &new_rule);
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
         }

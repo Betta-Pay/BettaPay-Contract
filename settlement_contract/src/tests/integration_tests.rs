@@ -925,11 +925,10 @@ fn payments_of_unregistered_merchant_are_orphaned() {
     );
 }
 
-/// Re-registration removes the ArchivedMerchant tombstone (issue #685), so a
-/// re-registered merchant can read the payment records of its earlier
-/// registration.
+/// The orphaning must survive re-registration: a re-registered merchant must
+/// not be able to resurrect the payment history of its earlier registration.
 #[test]
-fn reregistered_merchant_can_read_old_payment_records() {
+fn reregistered_merchant_cannot_resurrect_orphaned_payments() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
@@ -940,11 +939,19 @@ fn reregistered_merchant_can_read_old_payment_records() {
     settle_client.register_merchant(&settle_admins, &merchant);
     assert!(settle_client.is_merchant_registered(&merchant));
 
-    // Tombstone was removed on re-register, so old records are readable again.
-    let record = settle_client
-        .get_payment_reference(&merchant, &reference)
-        .expect("re-registered merchant must be able to read old records");
-    assert_eq!(record.amount, 1_000);
+    // The tombstone outlives the registration cycle.
+    let result = settle_client.try_get_payment_reference(&merchant, &reference);
+    assert!(
+        matches!(
+            result,
+            Err(Ok(ref err))
+                if *err
+                    == soroban_sdk::Error::from_contract_error(
+                        SettlementError::PaymentOrphaned as u32
+                    )
+        ),
+        "re-registration must not resurrect orphaned payments"
+    );
 }
 
 /// The timelocked unregister path (Operation::UnregisterMerchant executed
@@ -1184,10 +1191,10 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
     };
     settle_client.set_settlement_rule(&settle_admins, &merchant, &rule);
 
-    // set_settlement_rule only emits SETTLEMENT_RULE_UPDATED_EVENT
-    // (issue #691 removed bootstrap_fallback from the read path).
     let events = env.events().all();
+    let mut fallback_found = false;
     let mut update_found = false;
+    let mut last_event_sym = Symbol::new(&env, "");
 
     for i in 0..events.len() {
         let (_contract, topics, _data) = events.get(i).unwrap();
@@ -1195,10 +1202,24 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
             continue;
         }
         let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
-        if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
+        if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
+            fallback_found = true;
+            last_event_sym = sym;
+        } else if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
             update_found = true;
+            assert!(
+                fallback_found,
+                "bootstrap_fallback must precede settlement_rule_updated"
+            );
+            assert_eq!(
+                last_event_sym,
+                Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT),
+                "events must be sequential"
+            );
+            last_event_sym = sym;
         }
     }
 
+    assert!(fallback_found, "bootstrap_fallback event missing");
     assert!(update_found, "settlement_rule_updated event missing");
 }

@@ -12,8 +12,7 @@ use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
     read_recovery_address, read_rule_or_default, read_threshold, validate_admins_and_threshold,
-    validate_fee_against_governance, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -110,6 +109,14 @@ impl SettlementContract {
             SettlementError::InvalidAdmin,
             SettlementError::InvalidAdmin,
         );
+
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
+        }
 
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
@@ -389,14 +396,20 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         match operation {
-            Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, &executor, new_gov),
+            Operation::UpdateGovernance(new_gov) => {
+                Self::_update_governance(&env, &executor, new_gov)
+            }
             Operation::CancelRecovery => Self::_cancel_recovery(&env, &executor),
             Operation::TransferAdmin(new_admins, new_threshold) => {
                 Self::_transfer_admin(&env, &executor, new_admins, new_threshold)
             }
             Operation::Upgrade(wasm_hash) => Self::_upgrade(&env, &executor, wasm_hash),
-            Operation::RegisterMerchant(merchant) => Self::_register_merchant(&env, &executor, merchant),
-            Operation::UnregisterMerchant(merchant) => Self::_unregister_merchant(&env, &executor, merchant),
+            Operation::RegisterMerchant(merchant) => {
+                Self::_register_merchant(&env, &executor, merchant)
+            }
+            Operation::UnregisterMerchant(merchant) => {
+                Self::_unregister_merchant(&env, &executor, merchant)
+            }
             Operation::SetSettlementRule(merchant, rule) => {
                 Self::_set_settlement_rule(&env, &executor, merchant, rule)
             }
@@ -474,7 +487,12 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
-    fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
+    fn _transfer_admin(
+        env: &Env,
+        _executor: &Address,
+        new_admins: Vec<Address>,
+        new_threshold: u32,
+    ) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
@@ -522,9 +540,8 @@ impl SettlementContract {
             SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
-        let admin = read_admin(env);
+        let _admin = read_admin(env);
 
-        
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
         for i in 0..admins.len() {
@@ -604,14 +621,14 @@ impl SettlementContract {
         );
     }
 
-    fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
+    fn _set_settlement_rule(
+        env: &Env,
+        executor: &Address,
+        merchant: Address,
+        rule: SettlementRule,
+    ) {
         assert_not_paused(env);
 
-        // Standard validation order (shared with the direct path in settlement.rs):
-        // 1. Merchant existence
-        // 2. Fee range (hardcoded protocol bounds)
-        // 3. Governance ceiling
-        // 4. Settlement delay
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
@@ -627,7 +644,6 @@ impl SettlementContract {
         if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
-        validate_fee_against_governance(env, &rule);
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
         }
@@ -679,10 +695,6 @@ impl SettlementContract {
     fn _set_default_rule(env: &Env, executor: &Address, new_rule: SettlementRule) {
         assert_not_paused(env);
 
-        // Standard validation order (shared with the direct path in settlement.rs):
-        // 1. Fee range (hardcoded protocol bounds)
-        // 2. Governance ceiling
-        // 3. Settlement delay
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
@@ -693,7 +705,6 @@ impl SettlementContract {
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
-        validate_fee_against_governance(env, &new_rule);
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
         }

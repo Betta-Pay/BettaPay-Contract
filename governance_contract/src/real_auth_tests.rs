@@ -96,8 +96,8 @@ fn initialization_and_upgrade_require_real_authorization() {
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    env.mock_auths(&[]);
     let deployer = Address::generate(&env);
+    env.mock_auths(&[]);
     assert!(client.try_init(&deployer, &admins, &1, &recovery).is_err());
 
     let (env, client, admins) = super::setup();

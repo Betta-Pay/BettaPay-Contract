@@ -173,9 +173,8 @@ pub(crate) fn validate_nonzero_address(
 ///
 /// Policy (issue #490): unregistering a merchant orphans its payment
 /// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone that
-/// blocks reads until the merchant is re-registered, at which point the
-/// tombstone is removed (issue #685); a merchant that was never registered has
-/// no readable history either. A payment read therefore requires both a live
+/// survives re-registration, and a merchant that was never registered has no
+/// readable history either. A payment read therefore requires both a live
 /// merchant marker and no tombstone.
 pub(crate) fn assert_payments_readable(env: &Env, merchant: &Address) {
     let registered = is_merchant_registered_internal(env, merchant.clone());
