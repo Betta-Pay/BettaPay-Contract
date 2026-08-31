@@ -1015,7 +1015,10 @@ mod tests {
         let bad_hash = upload_test_wasm(&env); // empty wasm — no supports_interface
 
         let result = client.try_upgrade(&admins, &bad_hash);
-        assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+        assert!(
+            result.is_err(),
+            "upgrade with non-conforming wasm must be rejected"
+        );
 
         // Contract is intact after the failed upgrade.
         let live_client = GovernanceContractClient::new(&env, &client.address);
