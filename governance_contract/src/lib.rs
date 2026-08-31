@@ -944,7 +944,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery_address);
         (env, client, admins, recovery_address)
     }
@@ -1045,8 +1045,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
-        let (_env, client, admins, recovery) = setup();
-    let deployer = Address::generate(&env);
+        let (env, client, admins, recovery) = setup();
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
     }
 
@@ -1059,8 +1059,8 @@ mod tests {
         let recovery = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin], &0, &recovery);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &0, &recovery);
     }
 
     #[test]
@@ -1393,7 +1393,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+            let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             let config = FeeConfig {
@@ -1435,7 +1435,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+            let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
@@ -1455,8 +1455,9 @@ mod tests {
             let recovery = Address::generate(&env);
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
+            let deployer = Address::generate(&env);
 
-            let result = client.try_init(&admins, &threshold, &recovery);
+            let result = client.try_init(&deployer, &admins, &threshold, &recovery);
             if threshold == 0 || threshold > admin_count {
                 prop_assert!(result.is_err());
             } else {
@@ -1484,8 +1485,8 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         assert!(!client.is_initialized());
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin.clone()], &1, &recovery_address);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin.clone()], &1, &recovery_address);
         assert!(client.is_initialized());
     }
 
@@ -1500,7 +1501,7 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         let admins = vec![&env, admin.clone()];
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
         assert!(client.is_initialized());
         assert_eq!(client.get_admin(), admins);
@@ -1565,7 +1566,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
@@ -1873,7 +1874,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
 
         client.pause(&admins);
