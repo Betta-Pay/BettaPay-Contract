@@ -29,6 +29,7 @@ fn emits_event_on_initialization() {
     let client = SettlementContractClient::new(&env, &contract_id);
 
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,
@@ -46,7 +47,8 @@ fn rejects_double_initialization() {
     let (env, client, admins, _) = setup();
     let governance = register_governance(&env);
     let recovery_address = Address::generate(&env);
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     let _ = env;
 }
 
@@ -98,7 +100,7 @@ fn every_admin_writer_preserves_the_vector_shape() {
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, scheduled_admin]);
 }
 
@@ -252,6 +254,16 @@ fn double_pause_is_rejected() {
     client.pause(&admins);
     assert!(client.is_paused());
     // Second pause while already paused must be rejected with AlreadyPaused.
+// ---------------------------------------------------------------------------
+// Pause idempotency (mirrors governance — both contracts must behave the same)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn pause_rejected_when_already_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    // Second pause must reject with AlreadyPaused (#15) and emit no extra event.
     client.pause(&admins);
 }
 
@@ -310,6 +322,38 @@ fn pause_unpause_emit_exactly_one_event_per_transition() {
     let before = env.events().all().len();
     client.unpause(&admins);
     assert_eq!(env.events().all().len(), before + 1);
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_rejected_when_already_unpaused() {
+    let (_env, client, admins, _merchant) = setup();
+    // Contract starts unpaused; calling unpause immediately must reject with AlreadyUnpaused (#16).
+    client.unpause(&admins);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn double_pause_emits_no_extra_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    let prev = env.events().all().len();
+    client.pause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "double pause must not emit events"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_when_not_paused_emits_no_event() {
+    let (env, client, admins, _merchant) = setup();
+    let prev = env.events().all().len();
+    client.unpause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "unpause when not paused must not emit events"
+    );
 }
 
 #[test]
@@ -511,7 +555,8 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
 
     // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
     client.change_threshold(&admins, &3);
@@ -530,7 +575,8 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &2, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
 
     client.change_threshold(&admins, &0);
 }
@@ -551,6 +597,7 @@ fn recovery_executes_after_delay() {
     let client = SettlementContractClient::new(&env, &contract_id);
 
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,
