@@ -534,6 +534,7 @@ fn recovery_executes_after_delay() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     client.init(
         &deployer,
@@ -640,7 +641,8 @@ fn change_threshold_allows_n_of_n_reduction() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &3, &governance, &recovery); // 3-of-3
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &3, &governance, &recovery); // 3-of-3
 
     // All N members sign to lower the threshold.
     client.change_threshold(&admins, &2);
@@ -667,7 +669,8 @@ fn change_threshold_fails_with_insufficient_signatures() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &2, &governance, &recovery); // 2-of-3
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery); // 2-of-3
 
     // Current threshold is 2, only 1 signature provided — rejected.
     let single_signer = soroban_sdk::vec![&env, a1];

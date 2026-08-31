@@ -1613,7 +1613,8 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-        client.init(&admins, &3, &recovery); // 3-of-3
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &3, &recovery); // 3-of-3
 
         // All N members sign to lower the threshold.
         client.change_threshold(&admins, &2);
