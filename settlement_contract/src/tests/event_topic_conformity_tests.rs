@@ -288,19 +288,18 @@ fn scheduled_operation_events_identify_the_executor() {
 
 #[test]
 fn bootstrap_fallback_uses_canonical_topic() {
-    let (env, client, admins, merchant) = setup();
+    let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so this call falls all the way through to the
-    // bootstrap fallback rule.
-    let before = env.events().all().len();
-    client.calculate_fee_split(&merchant, &1_000);
-    assert!(env.events().all().len() > before);
-    assert_eq!(
-        last_topic(&env),
-        Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT)
-    );
+    // always returns None, so calculate_fee_split falls through to the
+    // bootstrap fallback rule. calculate_fee_split is a read-only path and
+    // does not emit events (issue #691), so we verify the fee values
+    // instead.
+    let split = client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(split.platform_fee_amount, 10);
+    assert_eq!(split.network_fee_amount, 1);
+    assert_eq!(split.merchant_amount, 989);
 }
 
 #[test]
