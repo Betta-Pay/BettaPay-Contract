@@ -4,13 +4,12 @@ use bettapay_common::events;
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_fallback_rule, read_threshold,
+    assert_not_paused, is_merchant_registered_read, read_fallback_rule, read_threshold,
     validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -89,10 +88,10 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         // Orphan the merchant's payment history: an ArchivedMerchant tombstone
-        // makes every existing payment record unreadable for the rest of its
-        // TTL (issue #490). The tombstone survives re-registration, so a
-        // re-registered merchant cannot resurrect records from an earlier
-        // registration either.
+        // makes every existing payment record unreadable for as long as the
+        // merchant stays unregistered (issue #490). Re-registration clears the
+        // tombstone (issue #685) so a re-registered merchant can read its new
+        // records again.
         let archived_key = DataKey::ArchivedMerchant(merchant.clone());
         env.storage().persistent().set(&archived_key, &());
         env.storage().persistent().extend_ttl(
@@ -132,6 +131,6 @@ impl SettlementContract {
         if !env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, SettlementError::NotInitialized);
         }
-        is_merchant_registered_internal(&env, merchant)
+        is_merchant_registered_read(&env, merchant)
     }
 }

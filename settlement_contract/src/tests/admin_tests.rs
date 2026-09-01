@@ -1,7 +1,9 @@
 //! Tests for administrative entry points:
 //! `init`, `transfer_admin`, `pause`, `unpause`, `upgrade`, `recovery`.
 
+use crate::types::DataKey;
 use crate::*;
+use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, Env, FromVal, Symbol, TryFromVal};
 
@@ -27,6 +29,7 @@ fn emits_event_on_initialization() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     client.init(
         &deployer,
@@ -357,10 +360,13 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert!(
+        client.is_paused(),
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -466,7 +472,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -531,6 +540,7 @@ fn recovery_executes_after_delay() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     client.init(
         &deployer,
@@ -614,4 +624,35 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+}
+
+// Issue #563: is_merchant_registered (public) must not bump the merchant entry's TTL.
+#[test]
+fn is_merchant_registered_is_ttl_neutral() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Advance the ledger so that any TTL bump would be observable.
+    env.ledger().with_mut(|l| l.sequence_number += 100);
+
+    // Record the TTL immediately before the public read.
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+
+    // The public query must succeed and return true.
+    assert!(client.is_merchant_registered(&merchant));
+
+    // The merchant entry TTL must NOT have increased.
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+    assert!(
+        ttl_after <= ttl_before,
+        "is_merchant_registered must be TTL-neutral (before={ttl_before}, after={ttl_after})"
+    );
 }
