@@ -2,6 +2,16 @@
 
 Soroban smart contracts for the BettaPay payment infrastructure on Stellar.
 
+## Payment reference read access
+
+`get_payment_reference` and `get_payments` are intentionally public so
+off-chain settlement indexers and composing contracts can verify a payment
+without a merchant signature. A payment reference is a 32-byte value supplied
+by the merchant and must be generated with cryptographically secure randomness;
+it functions as a bearer capability for lookup. Indexers may consume
+`payment_stored` events for discovery and use these endpoints for targeted
+verification; raw Soroban state reads remain an equivalent alternative.
+
 ## Structure
 
 ```
