@@ -357,6 +357,13 @@ impl SettlementContract {
         for reference in refs.iter() {
             let key = DataKey::Payment(merchant.clone(), reference);
             if let Some(payment) = env.storage().persistent().get::<_, PaymentRecord>(&key) {
+                // Match `get_payment_reference`'s TTL maintenance so indexers
+                // that exclusively use the batch API don't have their
+                // payments silently expire (issue #703). `extend_ttl` only
+                // writes when the current TTL is below `threshold`.
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, PAYMENT_TTL_THRESHOLD, PAYMENT_TTL_BUMP);
                 payments.push_back(payment);
             }
         }

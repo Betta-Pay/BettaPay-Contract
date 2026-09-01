@@ -233,6 +233,11 @@ pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 2 * 24 * 60 * 60; // 48 h
 /// new contract from this one (issue #48).
 pub(crate) const SUPPORTED_INTERFACE_VERSION: u32 = 1;
 
+/// The schema version this build expects. `init` writes this value and
+/// `migrate` advances any stored value below it. Mirrors
+/// governance_contract's `CURRENT_SCHEMA_VERSION` (issue #507, issue #704).
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 // Settlement-specific TTL policy for short-lived reads of admin / governance /
 // recovery addresses. Deliberately shorter than the protocol defaults so that
 // an inactive instance-side entry can still be evicted in days rather than

@@ -10,6 +10,7 @@ use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 use crate::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
     READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    CURRENT_SCHEMA_VERSION,
 };
 
 pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
@@ -58,6 +59,17 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .instance()
         .get(&CommonDataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
+}
+
+/// Returns the instance-storage schema version, defaulting to the current
+/// version when the marker is absent. Per governance_contract's convention,
+/// an entry written before the marker existed is treated as version 1
+/// (issue #507, issue #704).
+pub(crate) fn read_schema_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SchemaVersion)
+        .unwrap_or(CURRENT_SCHEMA_VERSION)
 }
 
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {

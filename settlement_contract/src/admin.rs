@@ -11,13 +11,13 @@ use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_threshold,
+    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE,
+    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
     MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
@@ -65,6 +65,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
     }
 
     pub fn is_initialized(env: Env) -> bool {
@@ -285,6 +288,36 @@ impl SettlementContract {
 
     pub fn is_paused(env: Env) -> bool {
         storage::is_paused(&env)
+    }
+
+    /// Idempotent schema migration entry point.
+    ///
+    /// Issue #704: ships the schema-version marker (written at `init`) and a
+    /// migration entry point so the first real storage migration has a
+    /// defined baseline, mirroring governance_contract's `migrate` (issue
+    /// #507). There is no existing storage-format difference to convert yet,
+    /// so calling `migrate` simply confirms the `SchemaVersion` marker is at
+    /// `CURRENT_SCHEMA_VERSION`. It is admin-gated and idempotent: a
+    /// contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
+    /// * Auth failure — if the signers do not satisfy the admin threshold.
+    pub fn migrate(env: Env, signers: Vec<Address>) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
+        let admin = signers.get(0).unwrap();
+
+        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
+            env.storage()
+                .instance()
+                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+        }
+        env.events().publish(
+            (Symbol::new(&env, events::MIGRATED_EVENT),),
+            (admin, CURRENT_SCHEMA_VERSION),
+        );
     }
 
     /// Schedules an administrative operation to be executed after a timelock.

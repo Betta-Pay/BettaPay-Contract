@@ -615,3 +615,61 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #704: SchemaVersion baseline + migrate skeleton
+// ---------------------------------------------------------------------------
+
+/// `init` must write the `SchemaVersion` marker, and calling `migrate`
+/// repeatedly must be a no-op once the contract is already at
+/// `CURRENT_SCHEMA_VERSION` — mirroring governance_contract's equivalent
+/// test for issue #507.
+#[test]
+fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
+    use crate::types::DataKey;
+
+    let (env, client, admins, _merchant) = setup();
+
+    let version = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+    });
+    assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+
+    client.migrate(&admins);
+    client.migrate(&admins);
+
+    let version_after = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+    });
+    assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
+
+    let (_, topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
+    );
+}
+
+/// `migrate` is admin-gated like every other administrative entry point.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn migrate_rejected_for_non_admin() {
+    let (env, client, _admins, _merchant) = setup();
+    let non_admin = Address::generate(&env);
+    client.migrate(&soroban_sdk::vec![&env, non_admin]);
+}
+
+/// `migrate` must respect the same pause gate as the rest of the admin
+/// surface — a paused contract can't be migrated out from under an
+/// in-progress incident response.
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn migrate_rejected_while_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    client.migrate(&admins);
+}

@@ -1104,6 +1104,115 @@ fn get_payments_accepts_max_batch_size() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue 703: Batch get_payments must extend payment TTLs like the singular
+// get_payment_reference path does — otherwise indexers that exclusively use
+// the batch API have their records silently expire.
+// ---------------------------------------------------------------------------
+
+/// Reproduces the bug directly: before the fix, `get_payments` never called
+/// `extend_ttl`, so a record's live-until ledger sat frozen at whatever the
+/// last write/single-read left it at. This drives the ledger far enough past
+/// the store to make the record's TTL fall below `PAYMENT_TTL_THRESHOLD`,
+/// then confirms a batch read still restores it to the full
+/// `PAYMENT_TTL_BUMP` policy, exactly like `get_payment_reference` does.
+#[test]
+fn get_payments_extends_ttl_for_every_retrieved_record() {
+    use crate::types::DataKey;
+
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let ref_a = BytesN::<32>::from_array(&env, &[41u8; 32]);
+    let ref_b = BytesN::<32>::from_array(&env, &[42u8; 32]);
+    settle_client.store_payment_reference(&merchant, &ref_a, &1_000);
+    settle_client.store_payment_reference(&merchant, &ref_b, &2_000);
+
+    let key_a = DataKey::Payment(merchant.clone(), ref_a.clone());
+    let key_b = DataKey::Payment(merchant.clone(), ref_b.clone());
+
+    // Let enough ledgers pass that the records' remaining TTL drops below
+    // PAYMENT_TTL_THRESHOLD, so a subsequent extend_ttl call is guaranteed
+    // to actually write (extend_ttl is a no-op above the threshold).
+    env.ledger().with_mut(|l| {
+        l.sequence_number += PAYMENT_TTL_BUMP - PAYMENT_TTL_THRESHOLD + 1;
+    });
+    let seq_before_batch = env.ledger().sequence();
+
+    let live_until_a_before = env.as_contract(&settle_client.address, || {
+        env.storage().persistent().get_ttl(&key_a)
+    });
+    assert!(
+        live_until_a_before < seq_before_batch + PAYMENT_TTL_THRESHOLD,
+        "test setup must have decayed the TTL below the threshold first"
+    );
+
+    // The batch read is the only touch point — this is the call under test.
+    let refs = soroban_sdk::vec![&env, ref_a.clone(), ref_b.clone()];
+    let batch = settle_client.get_payments(&merchant, &refs);
+    assert_eq!(batch.len(), 2);
+
+    let live_until_a_after = env.as_contract(&settle_client.address, || {
+        env.storage().persistent().get_ttl(&key_a)
+    });
+    let live_until_b_after = env.as_contract(&settle_client.address, || {
+        env.storage().persistent().get_ttl(&key_b)
+    });
+
+    assert!(
+        live_until_a_after - seq_before_batch >= PAYMENT_TTL_BUMP,
+        "get_payments must extend_ttl every resolved record: ref_a remaining TTL {} < PAYMENT_TTL_BUMP ({PAYMENT_TTL_BUMP})",
+        live_until_a_after - seq_before_batch
+    );
+    assert!(
+        live_until_b_after - seq_before_batch >= PAYMENT_TTL_BUMP,
+        "get_payments must extend_ttl every resolved record: ref_b remaining TTL {} < PAYMENT_TTL_BUMP ({PAYMENT_TTL_BUMP})",
+        live_until_b_after - seq_before_batch
+    );
+}
+
+/// The issue's acceptance criteria explicitly calls for parity: fetching a
+/// record via the batch API vs the singular API must leave it with the same
+/// TTL outcome. This stores two identical-aged records, reads one back
+/// through each API after the same decay, and checks both land on the same
+/// live-until ledger.
+#[test]
+fn batch_and_singular_reads_yield_identical_ttl_outcomes() {
+    use crate::types::DataKey;
+
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let ref_single = BytesN::<32>::from_array(&env, &[51u8; 32]);
+    let ref_batch = BytesN::<32>::from_array(&env, &[52u8; 32]);
+    settle_client.store_payment_reference(&merchant, &ref_single, &1_000);
+    settle_client.store_payment_reference(&merchant, &ref_batch, &1_000);
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += PAYMENT_TTL_BUMP - PAYMENT_TTL_THRESHOLD + 1;
+    });
+
+    // One record goes through get_payment_reference, the other through
+    // get_payments, from the same starting TTL and the same ledger sequence.
+    settle_client.get_payment_reference(&merchant, &ref_single);
+    let refs = soroban_sdk::vec![&env, ref_batch.clone()];
+    settle_client.get_payments(&merchant, &refs);
+
+    let key_single = DataKey::Payment(merchant.clone(), ref_single);
+    let key_batch = DataKey::Payment(merchant.clone(), ref_batch);
+    let live_until_single = env.as_contract(&settle_client.address, || {
+        env.storage().persistent().get_ttl(&key_single)
+    });
+    let live_until_batch = env.as_contract(&settle_client.address, || {
+        env.storage().persistent().get_ttl(&key_batch)
+    });
+
+    assert_eq!(
+        live_until_single, live_until_batch,
+        "batch and singular reads must leave the record with an identical live-until ledger"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Issue 497: Off-chain Settlement Readiness
 // ---------------------------------------------------------------------------
 
