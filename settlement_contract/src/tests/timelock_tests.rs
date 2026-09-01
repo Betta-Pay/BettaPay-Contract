@@ -223,6 +223,79 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #475: timelocked TransferAdmin to the identical admin set must be
+// rejected with SameAdmin, matching the direct path's guard.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn timelocked_transfer_admin_rejects_same_admin() {
+    use crate::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::Env;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let a1 = Address::generate(&env);
+    let recovery = Address::generate(&env);
+
+    let governance = super::register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    let initial_admins = soroban_sdk::vec![&env, a1.clone()];
+    client.init(&initial_admins, &1, &governance, &recovery);
+
+    // Schedule a transfer to the same admin set — must be rejected on execute.
+    let operation = Operation::TransferAdmin(initial_admins.clone(), 1);
+    client.schedule(&a1, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled-operation TTL must match the named policy constants.
+// ---------------------------------------------------------------------------
+
+/// Asserts that the persistent TTL applied by `schedule` to the
+/// `ScheduledOperation` key equals `SCHEDULED_OP_TTL_BUMP`. This prevents the
+/// schedule path from drifting from the policy constants (see ADR 003 and
+/// issue #474).
+#[test]
+fn scheduled_operation_ttl_matches_policy_constants() {
+    use crate::types::DataKey;
+    use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::xdr::ToXdr;
+
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(
+        &admins.get(0).unwrap(),
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+
+    let op_hash: soroban_sdk::BytesN<32> =
+        env.crypto().sha256(&operation.to_xdr(&env)).into();
+    let key = DataKey::ScheduledOperation(op_hash);
+
+    let contract_id = client.address.clone();
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+
+    // Soroban `extend_ttl(key, threshold, bump)` sets the TTL to `bump` when
+    // the current TTL is below `threshold`.
+    assert_eq!(
+        ttl,
+        SCHEDULED_OP_TTL_BUMP,
+        "scheduled-operation TTL must equal SCHEDULED_OP_TTL_BUMP"
+    );
 // Timelock Pause-Gating Tests
 // ---------------------------------------------------------------------------
 
