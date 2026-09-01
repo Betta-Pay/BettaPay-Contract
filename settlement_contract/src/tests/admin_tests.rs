@@ -156,6 +156,15 @@ fn transfer_admin_rejected_for_non_admin() {
     );
 }
 
+// Issue #475: transfer_admin to the identical admin set must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn rejects_same_admin_transfer() {
+    let (_env, client, admins, _merchant) = setup();
+    let threshold = client.get_threshold();
+    client.transfer_admin(&admins, &admins, &threshold);
+}
+
 #[test]
 fn emits_event_on_admin_transfer() {
     let (env, client, admins, _merchant) = setup();
@@ -370,6 +379,173 @@ fn set_default_rule_rejected_when_paused() {
         auto_settle: true,
     };
     client.set_default_rule(&admins, &rule);
+}
+
+// ---------------------------------------------------------------------------
+// paused-state consistency (issue #476)
+// ---------------------------------------------------------------------------
+
+// All privileged entry points must return `Paused` (#5) — never `Unauthorized`
+// (#3) — when the contract is paused, regardless of whether the caller is an
+// admin. This pins the "pause-before-auth" ordering documented in the ADR.
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.update_governance(&soroban_sdk::vec![&env, non_admin], &new_governance);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn update_governance_rejected_when_paused_for_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = register_governance(&env);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    client.update_governance(&admins, &new_governance);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn register_merchant_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.register_merchant(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn set_settlement_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&soroban_sdk::vec![&env, non_admin], &merchant, &rule);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn clear_settlement_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&admins, &merchant, &rule);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.clear_settlement_rule(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn set_default_rule_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&soroban_sdk::vec![&env, non_admin], &rule);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn unregister_merchant_rejected_when_paused_for_non_admin() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    client.unregister_merchant(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+// ---------------------------------------------------------------------------
+// merchant marker consistency (issue #477)
+// ---------------------------------------------------------------------------
+
+/// Both the direct `register_merchant` and the timelocked `_register_merchant`
+/// must write the same marker type for `DataKey::Merchant`. This test reads
+/// the raw storage value after each path and asserts they are identical.
+#[test]
+fn merchant_marker_is_identical_across_direct_and_timelocked_paths() {
+    use crate::types::DataKey;
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, client, admins, _merchant) = setup();
+    let merchant_a = Address::generate(&env);
+    let merchant_b = Address::generate(&env);
+
+    // --- Direct path ---
+    client.register_merchant(&admins, &merchant_a);
+
+    // Both writers must store a value that is readable as `()`.
+    let marker_a: () = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Merchant(merchant_a.clone()))
+            .unwrap()
+    });
+
+    // --- Timelocked path ---
+    let operation = Operation::RegisterMerchant(merchant_b.clone());
+    client.schedule(
+        &admins.get(0).unwrap(),
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+
+    let marker_b: () = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Merchant(merchant_b.clone()))
+            .unwrap()
+    });
+
+    // Both writers must produce the same stored value type.
+    assert_eq!(
+        marker_a, marker_b,
+        "direct and timelocked register_merchant must store identical marker values"
+    );
 }
 
 // ---------------------------------------------------------------------------
