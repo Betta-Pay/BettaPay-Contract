@@ -536,7 +536,6 @@ impl SettlementContract {
             SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
-        let admin = read_admin(env);
 
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);

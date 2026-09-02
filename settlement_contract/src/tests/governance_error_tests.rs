@@ -217,7 +217,7 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
 
 mod reentrant_gov {
     use crate::{GovFeeConfig, SettlementContractClient};
-    use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, Symbol};
+    use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
 
     /// A governance stub that attempts to call back into SettlementContract
     /// during `get_fee_config` (simulates reentrancy).
@@ -261,9 +261,11 @@ fn init_succeeds_with_panicking_governance() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // init must succeed directly with panicking_gov without cross-calling it
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &panicking_gov,
@@ -289,8 +291,9 @@ fn update_governance_succeeds_with_panicking_governance() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
+    let deployer = Address::generate(&env);
 
-    client.init(&admins, &1, &empty_gov, &recovery);
+    client.init(&deployer, &admins, &1, &empty_gov, &recovery);
     client.update_governance(&admins, &panicking_gov);
 
     assert_eq!(client.get_governance(), panicking_gov);
@@ -309,6 +312,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // Configure target for potential reentrancy callback
     env.invoke_contract::<()>(
@@ -318,6 +322,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
     );
 
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &reentrant_gov_id,
@@ -329,6 +334,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 
     // Reentry / second initialization must panic with AlreadyInitialized
     let res = client.try_init(
+        &deployer,
         &soroban_sdk::vec![&env, admin],
         &1,
         &reentrant_gov_id,
