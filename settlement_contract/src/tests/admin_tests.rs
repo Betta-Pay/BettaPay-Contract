@@ -27,6 +27,7 @@ fn emits_event_on_initialization() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     client.init(
         &deployer,
@@ -357,10 +358,14 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert_eq!(
+        client.is_paused(),
+        true,
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -466,7 +471,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -531,6 +539,7 @@ fn recovery_executes_after_delay() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     client.init(
         &deployer,
@@ -614,4 +623,61 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+}
+
+// ---------------------------------------------------------------------------
+// change_threshold (Issue #464)
+// ---------------------------------------------------------------------------
+
+/// With an N-of-N admin set (threshold == admin count), the threshold must
+/// still be changeable: auth requires the current threshold (N), not N+1,
+/// which no distinct set of signers could ever satisfy. Before the fix this
+/// call panicked with `Unauthorized`, permanently locking the contract.
+#[test]
+fn change_threshold_allows_n_of_n_reduction() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let a3 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &3, &governance, &recovery); // 3-of-3
+
+    // All N members sign to lower the threshold.
+    client.change_threshold(&admins, &2);
+    assert_eq!(client.get_threshold(), 2);
+
+    // Range check: the new threshold must be within [1, admin count].
+    assert!(client.try_change_threshold(&admins, &0).is_err());
+    assert!(client.try_change_threshold(&admins, &4).is_err());
+}
+
+/// A sub-threshold signer set is still rejected with `Unauthorized` (code 3)
+/// when changing the threshold.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn change_threshold_fails_with_insufficient_signatures() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let a3 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone(), a3.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery); // 2-of-3
+
+    // Current threshold is 2, only 1 signature provided — rejected.
+    let single_signer = soroban_sdk::vec![&env, a1];
+    client.change_threshold(&single_signer, &1);
 }

@@ -114,9 +114,8 @@ fn settlement_rule_cleared_data_is_identical_across_both_paths() {
 
 #[test]
 fn threshold_changed_uses_canonical_topic() {
-    // change_threshold requires `current_threshold + 1` signers, so a
-    // single-admin setup() contract can never call it; register a
-    // two-admin contract directly instead.
+    // Register a two-admin contract (threshold 1) so change_threshold can
+    // actually be invoked and emit its event.
     let env = Env::default();
     env.mock_all_auths();
     let admin1 = Address::generate(&env);
@@ -151,7 +150,11 @@ fn upgrade_uses_canonical_topic() {
     let result = client.try_upgrade(&admins, &bad_hash);
     assert!(result.is_err(), "non-conforming wasm must be rejected");
     // No event emitted on failure.
-    assert_eq!(env.events().all().len(), before, "no event on failed upgrade");
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no event on failed upgrade"
+    );
 }
 
 #[test]
