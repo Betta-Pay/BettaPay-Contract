@@ -9,8 +9,8 @@ use crate::storage::{
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -111,8 +111,14 @@ mod tests {
             let denom = BPS_DENOMINATOR as i128;
             let expected_platform =
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
-            let expected_network =
+            let mut expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
+            // Mirror the implementation's clamp (issue #683): when the two
+            // ceil-rounded fee legs would exceed the gross, the network leg is
+            // clamped so total fees never exceed the amount.
+            if expected_platform + expected_network > amount {
+                expected_network = amount - expected_platform;
+            }
             let expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 
@@ -161,7 +167,11 @@ mod tests {
             let split = calculate_split(&env, amount, &rule);
 
             prop_assert!(split.platform_fee_amount > 0);
-            prop_assert!(split.network_fee_amount > 0);
+            prop_assert_eq!(
+                split.platform_fee_amount + split.network_fee_amount,
+                amount,
+                "extreme fees must collect the full gross (issue #683)"
+            );
             prop_assert_eq!(split.merchant_amount, 0);
         }
     }
@@ -223,9 +233,9 @@ impl SettlementContract {
         }
 
         // ISSUE 495: Reentrancy guard.
-        // We write a dummy record to storage immediately so that if the external 
-        // read_governance_fee_rule call results in a reentrant call back to this 
-        // contract, the `has` check above will catch it. This dummy record is 
+        // We write a dummy record to storage immediately so that if the external
+        // read_governance_fee_rule call results in a reentrant call back to this
+        // contract, the `has` check above will catch it. This dummy record is
         // overwritten by the actual record at the end of this function.
         let dummy_record = PaymentRecord {
             merchant: merchant.clone(),

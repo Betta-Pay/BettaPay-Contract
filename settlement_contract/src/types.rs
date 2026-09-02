@@ -118,6 +118,10 @@ pub enum Operation {
 pub(crate) enum DataKey {
     /// Instance — singleton, read on every mutating call.
     Admin,
+    /// Instance — set during `init` before any external call to prevent
+    /// reentrant re-initialisation through a self-recursive governance contract.
+    /// Removed once init completes.
+    Initializing,
     /// Instance — singleton address, rarely changes.
     Governance,
     /// Persistent — one per merchant, many entries.
