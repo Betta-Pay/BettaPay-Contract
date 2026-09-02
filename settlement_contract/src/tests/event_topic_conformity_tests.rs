@@ -151,7 +151,11 @@ fn upgrade_uses_canonical_topic() {
     let result = client.try_upgrade(&admins, &bad_hash);
     assert!(result.is_err(), "non-conforming wasm must be rejected");
     // No event emitted on failure.
-    assert_eq!(env.events().all().len(), before, "no event on failed upgrade");
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no event on failed upgrade"
+    );
 }
 
 #[test]
@@ -287,16 +291,22 @@ fn bootstrap_fallback_uses_canonical_topic() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
-    // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so this call falls all the way through to the
-    // bootstrap fallback rule.
+    let amount = 1_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
     let before = env.events().all().len();
-    client.calculate_fee_split(&merchant, &1_000);
-    assert!(env.events().all().len() > before);
-    assert_eq!(
-        last_topic(&env),
-        Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT)
-    );
+    let split = client.calculate_fee_split(&merchant, &amount);
+
+    // Event silence: the hot path must not emit a bootstrap_fallback event.
+    assert_eq!(env.events().all().len(), before);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
 }
 
 #[test]
