@@ -1179,3 +1179,59 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
     assert!(fallback_found, "bootstrap_fallback event missing");
     assert!(update_found, "settlement_rule_updated event missing");
 }
+
+// ---------------------------------------------------------------------------
+// get_effective_rule (issue #524)
+// ---------------------------------------------------------------------------
+
+/// When no default rule is stored but governance provides a fee config,
+/// `get_default_rule` returns `None` while `get_effective_rule` resolves
+/// the governance-derived rule — demonstrating the divergence the issue
+/// describes.
+#[test]
+fn get_effective_rule_resolves_governance_fees_when_no_default_stored() {
+    let (env, gov_client, gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let cfg = GovFeeConfig {
+        platform_fee_bps: 300,
+        network_fee_bps: 100,
+    };
+    gov_client.set_fee_config(&gov_admins, &cfg);
+
+    // get_default_rule returns None — no global default stored.
+    assert_eq!(settle_client.get_default_rule(), None);
+
+    // get_effective_rule resolves through the governance fee config.
+    let effective = settle_client.get_effective_rule(&merchant);
+    assert_eq!(effective.platform_fee_bps, 300);
+    assert_eq!(effective.network_fee_bps, 100);
+    assert_eq!(effective.settlement_delay_ledger, 0);
+    assert_eq!(effective.auto_settle, false);
+
+    let _ = env;
+}
+
+/// When a merchant-specific rule is stored, `get_effective_rule` returns
+/// the merchant rule (not the governance or bootstrap fallback).
+#[test]
+fn get_effective_rule_returns_merchant_rule_when_set() {
+    let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 500,
+        network_fee_bps: 200,
+        settlement_delay_ledger: 10,
+        auto_settle: true,
+    };
+    settle_client.set_settlement_rule(&settle_admins, &merchant, &merchant_rule);
+
+    let effective = settle_client.get_effective_rule(&merchant);
+    assert_eq!(effective.platform_fee_bps, 500);
+    assert_eq!(effective.network_fee_bps, 200);
+    assert_eq!(effective.settlement_delay_ledger, 10);
+    assert_eq!(effective.auto_settle, true);
+
+    let _ = env;
+}
