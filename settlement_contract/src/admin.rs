@@ -52,7 +52,6 @@ impl SettlementContract {
             &env,
             &recovery_address,
             SettlementError::InvalidRecoveryAddress,
-            SettlementError::InvalidRecoveryAddress,
         );
         for i in 0..threshold {
             admins.get(i).unwrap().require_auth();
@@ -107,7 +106,6 @@ impl SettlementContract {
         validate_nonzero_address(
             &env,
             &new_admin,
-            SettlementError::InvalidAdmin,
             SettlementError::InvalidAdmin,
         );
 
@@ -474,7 +472,7 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
-    fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
+    fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
@@ -510,7 +508,6 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
-    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
     /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
@@ -519,8 +516,6 @@ impl SettlementContract {
         validate_nonzero_address(
             env,
             &merchant,
-            SettlementError::EmptyAddress,
-            SettlementError::ZeroAddress,
         );
         
         // Prevent an admin from being registered as a merchant

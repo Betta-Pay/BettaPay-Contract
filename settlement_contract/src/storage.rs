@@ -72,7 +72,6 @@ pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, th
         validate_nonzero_address(
             env,
             &admin,
-            SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
         for j in (i + 1)..admins.len() {
@@ -150,19 +149,14 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
         env,
         governance,
         SettlementError::InvalidGovernance,
-        SettlementError::InvalidGovernance,
     );
 }
 
 pub(crate) fn validate_nonzero_address(
     env: &Env,
     address: &Address,
-    empty_error: SettlementError,
     zero_error: SettlementError,
 ) {
-    if address.to_string().is_empty() {
-        panic_with_error!(env, empty_error);
-    }
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, zero_error);
     }

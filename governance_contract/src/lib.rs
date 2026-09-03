@@ -851,7 +851,7 @@ fn read_optional_primary_admin(env: &Env) -> Address {
 }
 
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
-    if address.to_string().is_empty() || storage::is_zero_address(env, address) {
+    if storage::is_zero_address(env, address) {
         panic_with_error!(env, error);
     }
 }
