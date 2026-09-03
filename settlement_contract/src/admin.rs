@@ -12,8 +12,8 @@ use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
     read_recovery_address, read_rule_or_default, read_threshold,
-    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
+    validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -474,7 +474,7 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
-    fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
+    fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
@@ -605,9 +605,7 @@ impl SettlementContract {
     fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
         assert_not_paused(env);
 
-        if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
-            panic_with_error!(env, SettlementError::MerchantMissing);
-        }
+        validate_fee_against_governance(env, &rule);
         if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
@@ -622,6 +620,9 @@ impl SettlementContract {
         }
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
+        }
+        if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
+            panic_with_error!(env, SettlementError::MerchantMissing);
         }
 
         let prev = env

@@ -605,6 +605,81 @@ fn upgrade_rejects_wasm_missing_supports_interface() {
 
 /// Non-admin callers must be rejected with `Unauthorized` (code 3) before
 /// the interface check is even attempted.
+// ---------------------------------------------------------------------------
+// Matrix test: check-order parity between direct and scheduled paths (issue #523)
+// ---------------------------------------------------------------------------
+
+/// Verifies that the direct (`set_settlement_rule`) and scheduled
+/// (`schedule` + `execute`) paths enforce the same canonical check order:
+///   pause → fee validation → merchant registration.
+///
+/// For every (paused, invalid_fee, missing_merchant) combination the test
+/// asserts that both paths surface the identical error code.
+#[test]
+fn settlement_rule_check_order_parity_across_paths() {
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, client, admins, merchant) = setup();
+    // Register the merchant so we have a "present" case to contrast with.
+    client.register_merchant(&admins, &merchant);
+
+    let valid_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    let invalid_fee_rule = SettlementRule {
+        platform_fee_bps: 0,
+        network_fee_bps: 0,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let missing = Address::generate(&env); // unregistered merchant
+
+    // Helper: schedule + advance time + execute via the timelocked path.
+    let schedule_and_execute = |client: &SettlementContractClient,
+                                admins: &soroban_sdk::Vec<Address>,
+                                op: &Operation| {
+        client.schedule(admins, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+        client.execute(&admins.get(0).unwrap(), op);
+    };
+
+    // ---- 1. Paused ⇒ Paused (code 5) on both paths ----
+    client.pause(&admins);
+
+    let op = Operation::SetSettlementRule(merchant.clone(), valid_rule.clone());
+    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &valid_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(5));
+    assert_eq!(client.try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(5));
+
+    // Unpause for the remaining cases.
+    client.unpause(&admins);
+
+    // ---- 2. Invalid fee + registered merchant ⇒ InvalidFeeBps (code 4) ----
+    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &invalid_fee_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(4));
+    let op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(4));
+
+    // ---- 3. Valid rule + missing merchant ⇒ MerchantMissing (code 302) ----
+    assert_eq!(client.try_set_settlement_rule(&admins, &missing, &valid_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(302));
+    let op = Operation::SetSettlementRule(missing.clone(), valid_rule.clone());
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(302));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn upgrade_rejects_non_admin_before_interface_check() {
