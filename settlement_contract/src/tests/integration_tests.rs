@@ -1179,3 +1179,36 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
     assert!(fallback_found, "bootstrap_fallback event missing");
     assert!(update_found, "settlement_rule_updated event missing");
 }
+
+// ---------------------------------------------------------------------------
+// get_effective_rule (issue #525)
+// ---------------------------------------------------------------------------
+
+/// When a merchant has no specific rule but a global default exists,
+/// `get_settlement_rule` returns `None` while `get_effective_rule`
+/// resolves the global default — demonstrating the divergence.
+#[test]
+fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
+    let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let default_rule = SettlementRule {
+        platform_fee_bps: 400,
+        network_fee_bps: 150,
+        settlement_delay_ledger: 5,
+        auto_settle: true,
+    };
+    settle_client.set_default_rule(&settle_admins, &default_rule);
+
+    // get_settlement_rule returns None — no merchant-specific rule stored.
+    assert_eq!(settle_client.get_settlement_rule(&merchant), None);
+
+    // get_effective_rule resolves through the global default.
+    let effective = settle_client.get_effective_rule(&merchant);
+    assert_eq!(effective.platform_fee_bps, 400);
+    assert_eq!(effective.network_fee_bps, 150);
+    assert_eq!(effective.settlement_delay_ledger, 5);
+    assert_eq!(effective.auto_settle, true);
+
+    let _ = env;
+}
