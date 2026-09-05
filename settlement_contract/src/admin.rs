@@ -349,6 +349,12 @@ impl SettlementContract {
 
     /// Schedules an administrative operation to be executed after a timelock.
     ///
+    /// # Authorization
+    ///
+    /// Requires authentication from the configured admin set. The caller must
+    /// pass enough valid signers to meet the current multisig threshold, so a
+    /// single (possibly compromised) admin cannot enqueue an operation —
+    /// including `Upgrade` — without the required consensus (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -408,6 +414,8 @@ impl SettlementContract {
     /// and executing an operation the admins intended to cancel (Issue #462).
     pub fn execute(env: Env, signers: Vec<Address>, operation: Operation) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
+
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
     /// # Execution auth policy (uniform)
     ///
     /// `execute` deliberately performs **no caller authentication** for any
@@ -486,6 +494,11 @@ impl SettlementContract {
 
     /// Cancels a scheduled administrative operation.
     ///
+    /// # Authorization
+    ///
+    /// Requires the same multisig threshold as [`Self::schedule`], so a single
+    /// admin cannot unilaterally remove an operation the full admin set agreed
+    /// to schedule (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
