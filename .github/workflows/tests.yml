@@ -48,6 +48,8 @@ jobs:
       - name: Run script smoke tests
         run: make test_scripts
 
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli --version 21.5.0
       - name: Validate CODEOWNERS
         run: make check_codeowners
 
