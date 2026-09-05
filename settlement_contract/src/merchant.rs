@@ -9,8 +9,7 @@ use crate::storage::{
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
 };
 
 #[contractimpl]

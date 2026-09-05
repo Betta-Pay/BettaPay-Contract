@@ -1,7 +1,7 @@
 use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
-    events::{self, PendingRecovery},
+    events::PendingRecovery,
     storage::{self, CommonDataKey},
 };
 
