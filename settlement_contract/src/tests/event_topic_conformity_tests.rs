@@ -245,6 +245,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins, &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(
         last_topic(&env),

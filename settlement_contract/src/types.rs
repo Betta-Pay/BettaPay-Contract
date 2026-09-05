@@ -142,4 +142,8 @@ pub(crate) enum DataKey {
     /// Instance — stored at `init` to gate initialization to the deployer
     /// and prevent front-running (issue #684).
     Deployer,
+    /// Instance-storage schema version (u32) written at `init`. Baseline for
+    /// the first storage migration, mirroring governance_contract's
+    /// `DataKey::SchemaVersion` (issue #507, issue #704).
+    SchemaVersion,
 }
