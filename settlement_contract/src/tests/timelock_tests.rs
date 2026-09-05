@@ -314,6 +314,44 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 }
 
 // ---------------------------------------------------------------------------
+// Scheduled-operation TTL must match the named policy constants.
+// ---------------------------------------------------------------------------
+
+/// Asserts that the persistent TTL applied by `schedule` to the
+/// `ScheduledOperation` key equals `SCHEDULED_OP_TTL_BUMP`. This prevents the
+/// schedule path from drifting from the policy constants (see ADR 003 and
+/// issue #474).
+#[test]
+fn scheduled_operation_ttl_matches_policy_constants() {
+    use crate::types::DataKey;
+    use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::xdr::ToXdr;
+
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(
+        &admins.get(0).unwrap(),
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+
+    let op_hash: soroban_sdk::BytesN<32> =
+        env.crypto().sha256(&operation.to_xdr(&env)).into();
+    let key = DataKey::ScheduledOperation(op_hash);
+
+    let contract_id = client.address.clone();
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+
+    // Soroban `extend_ttl(key, threshold, bump)` sets the TTL to `bump` when
+    // the current TTL is below `threshold`.
+    assert_eq!(
+        ttl,
+        SCHEDULED_OP_TTL_BUMP,
+        "scheduled-operation TTL must equal SCHEDULED_OP_TTL_BUMP"
+    );
 // Issue #463: schedule/cancel must respect the multisig threshold
 // ---------------------------------------------------------------------------
 

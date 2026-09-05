@@ -22,7 +22,8 @@ use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
+    SCHEDULED_OP_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -388,7 +389,7 @@ impl SettlementContract {
         );
         env.storage()
             .persistent()
-            .extend_ttl(&key, 17280 * 14, 17280 * 30);
+            .extend_ttl(&key, SCHEDULED_OP_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP);
 
         env.events().publish(
             (Symbol::new(&env, events::OP_SCHEDULED_EVENT), op_hash),
