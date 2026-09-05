@@ -1,4 +1,4 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::{self, PendingRecovery},
@@ -23,8 +23,21 @@ pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
+/// Resolves the "primary admin" — the address at index `0` of the stored
+/// multisig admin list — used wherever a single-address context is needed
+/// (event authorship, `schedule`/`cancel`/`execute` bookkeeping, and the
+/// other `_*` admin internals). See
+/// [`bettapay_common::storage::primary_admin`] for the shared convention
+/// this implements.
+///
+/// `write_admins` rejects an empty admin list at write time via
+/// `validate_admins_and_threshold`, so an initialized contract can never
+/// actually reach the empty case here. This still resolves it through a
+/// typed [`SettlementError::AdminSetEmpty`] rather than an untyped unwrap
+/// panic, in case that invariant is ever violated.
 pub(crate) fn read_admin(env: &Env) -> Address {
-    storage::primary_admin(&read_admins(env)).unwrap()
+    storage::primary_admin(&read_admins(env))
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AdminSetEmpty))
 }
 
 /// Returns the primary admin address, or the zero-address sentinel when the
@@ -337,7 +350,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
-    args.push_back(Symbol::new(env, "min_payment").into());
+    args.push_back(Symbol::new(env, "min_payment").into_val(env));
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),
