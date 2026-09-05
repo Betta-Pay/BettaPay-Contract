@@ -10,14 +10,17 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
+    read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_threshold,
+    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE,
+    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
     MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
     SCHEDULED_OP_TTL_THRESHOLD,
@@ -53,7 +56,6 @@ impl SettlementContract {
             &env,
             &recovery_address,
             SettlementError::InvalidRecoveryAddress,
-            SettlementError::InvalidRecoveryAddress,
         );
         for i in 0..threshold {
             admins.get(i).unwrap().require_auth();
@@ -66,6 +68,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
     }
 
     pub fn is_initialized(env: Env) -> bool {
@@ -88,6 +93,17 @@ impl SettlementContract {
         read_recovery_address(&env)
     }
 
+    /// Updates the governance address after validating it.
+    ///
+    /// # Validation policy (issue #562)
+    ///
+    /// `new_governance` is validated by [`validate_governance`] before it is
+    /// stored. The timelocked path (`_update_governance`, reached through
+    /// [`Operation::UpdateGovernance`]) routes through the **same** function,
+    /// so a governance address cannot bypass validation by taking the
+    /// scheduled route instead of the direct one. Any change to governance
+    /// validation must be made inside `validate_governance` — never inlined in
+    /// just one path, or the two paths will drift apart again.
     pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         assert_not_paused(&env);
@@ -109,12 +125,12 @@ impl SettlementContract {
             &env,
             &new_admin,
             SettlementError::InvalidAdmin,
-            SettlementError::InvalidAdmin,
         );
 
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            initiated_by: recovery_address.clone(),
         };
         env.storage()
             .instance()
@@ -123,19 +139,25 @@ impl SettlementContract {
     }
 
     pub fn cancel_recovery(env: Env, signers: Vec<Address>) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let admin = signers.get(0).unwrap();
-        if !env
-            .storage()
-            .instance()
-            .has(&CommonDataKey::PendingRecovery)
-        {
-            panic_with_error!(&env, SettlementError::RecoveryNotPending);
+        // Cancellation policy (issue #560): the pending recovery may be
+        // cancelled by the address recorded as `initiated_by` (the recovery
+        // address that started it) or by the current admin set meeting the
+        // multisig threshold. The admin path is unchanged; the initiator
+        // path lets an initiation be undone by the address that made it.
+        // Any other caller is refused with `Unauthorized`.
+        let pending = read_pending_recovery(&env);
+        let cancelled_by_initiator =
+            signers.len() == 1 && signers.get(0).unwrap() == pending.initiated_by;
+        if cancelled_by_initiator {
+            pending.initiated_by.require_auth();
+        } else {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
         }
+        let canceller = signers.get(0).unwrap();
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
-        events::emit_recovery_cancelled(&env, &admin);
+        events::emit_recovery_cancelled(&env, &canceller);
     }
 
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
@@ -295,8 +317,44 @@ impl SettlementContract {
         storage::is_paused(&env)
     }
 
+    /// Idempotent schema migration entry point.
+    ///
+    /// Issue #704: ships the schema-version marker (written at `init`) and a
+    /// migration entry point so the first real storage migration has a
+    /// defined baseline, mirroring governance_contract's `migrate` (issue
+    /// #507). There is no existing storage-format difference to convert yet,
+    /// so calling `migrate` simply confirms the `SchemaVersion` marker is at
+    /// `CURRENT_SCHEMA_VERSION`. It is admin-gated and idempotent: a
+    /// contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
+    /// * Auth failure — if the signers do not satisfy the admin threshold.
+    pub fn migrate(env: Env, signers: Vec<Address>) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
+        let admin = signers.get(0).unwrap();
+
+        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
+            env.storage()
+                .instance()
+                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+        }
+        env.events().publish(
+            (Symbol::new(&env, events::MIGRATED_EVENT),),
+            (admin, CURRENT_SCHEMA_VERSION),
+        );
+    }
+
     /// Schedules an administrative operation to be executed after a timelock.
     ///
+    /// # Authorization
+    ///
+    /// Requires authentication from the configured admin set. The caller must
+    /// pass enough valid signers to meet the current multisig threshold, so a
+    /// single (possibly compromised) admin cannot enqueue an operation —
+    /// including `Upgrade` — without the required consensus (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -348,6 +406,16 @@ impl SettlementContract {
 
     /// Executes a previously scheduled administrative operation.
     ///
+    /// # Authorization
+    ///
+    /// Requires authentication from the configured admin set. The caller must
+    /// pass enough valid signers to meet the current multisig threshold.
+    /// This prevents any external actor from front-running the timelock expiry
+    /// and executing an operation the admins intended to cancel (Issue #462).
+    pub fn execute(env: Env, signers: Vec<Address>, operation: Operation) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
     /// # Execution auth policy (uniform)
     ///
     /// `execute` deliberately performs **no caller authentication** for any
@@ -420,6 +488,11 @@ impl SettlementContract {
 
     /// Cancels a scheduled administrative operation.
     ///
+    /// # Authorization
+    ///
+    /// Requires the same multisig threshold as [`Self::schedule`], so a single
+    /// admin cannot unilaterally remove an operation the full admin set agreed
+    /// to schedule (Issue #463).
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -456,6 +529,15 @@ impl SettlementContract {
 
     // --- Internal Admin Functions ---
 
+    /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
+    /// from [`execute`](Self::execute).
+    ///
+    /// # Validation policy (issue #562)
+    ///
+    /// Mirrors the direct `update_governance` entry point exactly: the new
+    /// address must pass [`validate_governance`] before it is stored. Both
+    /// paths intentionally share this single function so the scheduled path
+    /// can never enforce a weaker (or different) check than the direct path.
     fn _update_governance(env: &Env, executor: &Address, new_governance: Address) {
         assert_not_paused(env);
         validate_governance(env, &new_governance);
@@ -493,6 +575,7 @@ impl SettlementContract {
 
         let old_admin = storage::primary_admin(&old_admins).unwrap();
     fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
+    fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
@@ -528,7 +611,6 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
-    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
     /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
@@ -537,9 +619,9 @@ impl SettlementContract {
         validate_nonzero_address(
             env,
             &merchant,
-            SettlementError::EmptyAddress,
-            SettlementError::ZeroAddress,
         );
+        let admin = read_admin(env);
+
         
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
@@ -623,6 +705,8 @@ impl SettlementContract {
     fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
         assert_not_paused(env);
 
+        validate_fee_against_governance(env, &rule);
+
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
@@ -640,6 +724,9 @@ impl SettlementContract {
         }
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
+        }
+        if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
+            panic_with_error!(env, SettlementError::MerchantMissing);
         }
 
         let prev = env
@@ -688,6 +775,8 @@ impl SettlementContract {
 
     fn _set_default_rule(env: &Env, executor: &Address, new_rule: SettlementRule) {
         assert_not_paused(env);
+
+        validate_fee_against_governance(env, &new_rule);
 
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
