@@ -5,7 +5,8 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
+    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default, read_threshold,
+    verify_admin_auth,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
@@ -177,6 +178,31 @@ mod tests {
     }
 }
 
+/// Enforces the uniform payment-read auth policy (issue #559): the caller
+/// must be either the owning merchant or an admin.
+///
+/// The SDK version pinned by this workspace has no `env.caller()`, so caller
+/// identity is proven the same way every other privileged path in this
+/// contract proves it:
+///
+/// * an **empty** `signers` list means the caller is acting as the merchant,
+///   and [`Address::require_auth`] on the merchant proves the caller controls
+///   it;
+/// * a **non-empty** `signers` list means the caller is acting as an admin,
+///   and [`verify_admin_auth`] proves those signers satisfy the admin
+///   threshold.
+///
+/// There is deliberately no `no check` path: a caller who is neither the
+/// merchant nor an admin is rejected either by the auth framework (owner
+/// path) or by `verify_admin_auth`'s admin-membership check (admin path).
+fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>) {
+    if signers.is_empty() {
+        merchant.require_auth();
+    } else {
+        verify_admin_auth(env, signers, read_threshold(env));
+    }
+}
+
 #[contractimpl]
 impl SettlementContract {
     /// Store a payment reference for a merchant and calculate the fee split.
@@ -318,6 +344,9 @@ impl SettlementContract {
     ///   record. Reads are gated behind the merchant's own authorization so
     ///   the gross/fee/net amounts cannot be probed by anyone who can guess
     ///   a reference (issue #492).
+    ///
+    ///   Since issue #559 the same entry point also allows an admin: pass a
+    ///   non-empty `signers` list to authenticate as an admin.
     /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
     ///   merchant was unregistered, its payment records are orphaned and no
     ///   longer readable (issue #490).
@@ -325,6 +354,7 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         reference: BytesN<32>,
+        signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
@@ -352,6 +382,9 @@ impl SettlementContract {
     ///
     /// * Auth failure — if the caller is not the merchant who owns the
     ///   records (issue #492).
+    ///
+    ///   Since issue #559 the same entry point also allows an admin: pass a
+    ///   non-empty `signers` list to authenticate as an admin.
     /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
     ///   merchant was unregistered, its payment records are orphaned and no
     ///   longer readable (issue #490).
@@ -367,6 +400,13 @@ impl SettlementContract {
         for reference in refs.iter() {
             let key = DataKey::Payment(merchant.clone(), reference);
             if let Some(payment) = env.storage().persistent().get::<_, PaymentRecord>(&key) {
+                // Match `get_payment_reference`'s TTL maintenance so indexers
+                // that exclusively use the batch API don't have their
+                // payments silently expire (issue #703). `extend_ttl` only
+                // writes when the current TTL is below `threshold`.
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, PAYMENT_TTL_THRESHOLD, PAYMENT_TTL_BUMP);
                 payments.push_back(payment);
             }
         }

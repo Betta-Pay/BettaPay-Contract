@@ -1,4 +1,4 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::PendingRecovery,
@@ -10,6 +10,7 @@ use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 use crate::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
     READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    CURRENT_SCHEMA_VERSION,
 };
 
 pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
@@ -60,6 +61,17 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
+/// Returns the instance-storage schema version, defaulting to the current
+/// version when the marker is absent. Per governance_contract's convention,
+/// an entry written before the marker existed is treated as version 1
+/// (issue #507, issue #704).
+pub(crate) fn read_schema_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SchemaVersion)
+        .unwrap_or(CURRENT_SCHEMA_VERSION)
+}
+
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {
     if threshold == 0 || threshold > admins.len() {
         panic_with_error!(env, SettlementError::InvalidThreshold);
@@ -72,7 +84,6 @@ pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, th
         validate_nonzero_address(
             env,
             &admin,
-            SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
         for j in (i + 1)..admins.len() {
@@ -130,10 +141,18 @@ pub(crate) fn read_recovery_address(env: &Env) -> Address {
 }
 
 pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
-    env.storage()
+    // Decode by hand so a pending recovery written before `initiated_by`
+    // existed (pre-issue #560) is refused with `RecoveryNotPending` instead
+    // of surfacing a host-level conversion panic. Refusing is deliberate:
+    // an old-format record must never be treated as a valid pending
+    // recovery (default-deny, never default-allow).
+    let val = env
+        .storage()
         .instance()
-        .get::<_, PendingRecovery>(&CommonDataKey::PendingRecovery)
-        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending))
+        .get::<_, Val>(&CommonDataKey::PendingRecovery)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending));
+    PendingRecovery::try_from_val(env, &val)
+        .unwrap_or_else(|_| panic_with_error!(env, SettlementError::RecoveryNotPending))
 }
 
 /// Validates that the provided governance address is a non-zero, non-empty address.
@@ -150,19 +169,14 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
         env,
         governance,
         SettlementError::InvalidGovernance,
-        SettlementError::InvalidGovernance,
     );
 }
 
 pub(crate) fn validate_nonzero_address(
     env: &Env,
     address: &Address,
-    empty_error: SettlementError,
     zero_error: SettlementError,
 ) {
-    if address.to_string().is_empty() {
-        panic_with_error!(env, empty_error);
-    }
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, zero_error);
     }

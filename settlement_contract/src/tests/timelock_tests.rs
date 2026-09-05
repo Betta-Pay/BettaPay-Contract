@@ -1,6 +1,12 @@
 //! Regression coverage for the settlement administrative timelock.
 
 use crate::{Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use crate::{
+    Operation, SettlementContract, SettlementContractClient, DEFAULT_TIMELOCK_DELAY_SECONDS,
+};
+use crate::{Operation, SettlementContractClient, DEFAULT_TIMELOCK_DELAY_SECONDS};
+    Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS,
+};
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env};
 
@@ -13,14 +19,23 @@ fn scheduled_operation_executes_only_after_delay() {
     let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
     let operation = Operation::TransferAdmin(new_admins.clone(), 1);
 
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(client.try_execute(&admins, &operation).is_err());
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client
         .try_execute(&admins.get(0).unwrap(), &operation)
         .is_err());
+    assert!(client.try_execute(&admins, &operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert_eq!(client.get_admin(), admins);
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins, &operation);
+
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
+    assert_eq!(client.get_threshold(), 1);
+    assert!(client.try_execute(&admins, &operation).is_err());
     client.execute(&admins.get(0).unwrap(), &operation);
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
@@ -40,6 +55,15 @@ fn schedule_rejects_non_admin_and_insufficient_delay() {
         .try_schedule(
             &soroban_sdk::vec![&env, non_admin],
             &operation,
+        .try_schedule(
+            &soroban_sdk::vec![&env, non_admin],
+        .try_schedule(&soroban_sdk::vec![&env, non_admin], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .is_err());
+    assert!(client
+        .try_schedule(
+            &soroban_sdk::vec![&env, non_admin],
+            &operation,
+            &DEFAULT_TIMELOCK_DELAY_SECONDS,
             &DEFAULT_TIMELOCK_DELAY_SECONDS
         )
         .is_err());
@@ -52,6 +76,7 @@ fn schedule_rejects_non_admin_and_insufficient_delay() {
 fn duplicate_schedule_is_rejected() {
     let (_env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
+
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client
         .try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
@@ -62,6 +87,13 @@ fn duplicate_schedule_is_rejected() {
 fn admin_can_cancel_but_non_admin_cannot() {
     let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(client
+        .try_cancel(
+            &soroban_sdk::vec![&env, Address::generate(&env)],
+            &operation,
+        )
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client
         .try_cancel(
@@ -76,6 +108,12 @@ fn admin_can_cancel_but_non_admin_cannot() {
     assert!(client
         .try_execute(&admins.get(0).unwrap(), &operation)
         .is_err());
+    assert!(client.try_execute(&operation).is_err());
+    assert!(client.try_cancel(&admins, &operation).is_err());
+    assert!(client.try_execute(&admins, &operation).is_err());
+    assert!(client.try_cancel(&admin, &operation).is_err());
+    assert!(client.try_execute(&operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert!(client
         .try_cancel(&soroban_sdk::vec![&env, admins.get(0).unwrap()], &operation)
         .is_err());
@@ -97,6 +135,8 @@ fn multisig_schedule_and_cancel_require_two_of_three_signers() {
     assert!(client
         .try_execute(&admins.get(0).unwrap(), &operation)
         .is_err());
+    assert!(client.try_execute(&two_signers, &operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
 }
 
 #[test]
@@ -113,11 +153,45 @@ fn multisig_schedule_and_execute_apply_operation_after_delay() {
     assert!(client
         .try_execute(&admins.get(0).unwrap(), &operation)
         .is_err());
+    assert!(client.try_execute(&two_signers, &operation).is_err());
+    assert!(!client.is_merchant_registered(&merchant));
+
+    env.ledger().with_mut(|ledger| ledger.timestamp += 1);
+    client.execute(&two_signers, &operation);
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert!(!client.is_merchant_registered(&merchant));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 1);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #462: execute must require admin authentication
+// ---------------------------------------------------------------------------
+
+/// A non-admin caller is rejected when trying to execute a scheduled
+/// operation, even after the timelock delay has elapsed.
+#[test]
+fn execute_rejects_unauthorized_caller() {
+    let (env, client, admins, merchant) = setup();
+    let admin = admins.get(0).unwrap();
+    let non_admin = Address::generate(&env);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let non_admin = Address::generate(&env);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let unauthorized_signers = soroban_sdk::vec![&env, non_admin];
+    assert!(client
+        .try_execute(&unauthorized_signers, &operation)
+        .is_err());
 }
 
 #[test]
@@ -127,6 +201,11 @@ fn expired_schedule_cannot_execute() {
     let operation = Operation::RegisterMerchant(merchant);
 
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &admins,
+        &operation,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
 
     // `schedule` bumps the persistent entry to 30 days (518,400 ledgers).
     // Keep the contract instance alive while advancing past only the
@@ -144,6 +223,7 @@ fn expired_schedule_cannot_execute() {
     // The host rejects access to an archived key before the contract can map
     // it to `OperationNotScheduled`, so expiry is observed as a host panic in
     // the in-memory test environment.
+    client.execute(&admins, &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
@@ -224,6 +304,10 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     // --- Timelocked path ---
     let operation = Operation::TransferAdmin(new_admins.clone(), new_threshold);
+    // The admin set is `[a1]` (threshold 1) at this point, so a single
+    // signer still meets the scheduling threshold.
+    client.schedule(&initial_admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&soroban_sdk::vec![&env, a1.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.schedule(
         &soroban_sdk::vec![&env, a1.clone()],
         &operation,
@@ -233,6 +317,8 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.execute(&a1, &operation);
+    client.execute(&initial_admins, &operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
 
     assert_eq!(
         client.get_admin(),
@@ -247,6 +333,92 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #463: schedule/cancel must respect the multisig threshold
+// ---------------------------------------------------------------------------
+
+/// Registers a fresh settlement contract with a 3-member admin set and
+/// threshold 2, returning `(env, client, admins)`.
+fn setup_multisig() -> (
+    Env,
+    SettlementContractClient<'static>,
+    soroban_sdk::Vec<Address>,
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let a3 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1, a2, a3];
+    let recovery = Address::generate(&env);
+    let governance = super::register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&admins, &2, &governance, &recovery);
+    (env, client, admins)
+}
+
+/// With a 2-of-3 admin set, a single admin must be rejected when scheduling;
+/// the full threshold is required to enqueue a timelocked operation.
+#[test]
+fn schedule_requires_full_multisig_threshold() {
+    let (env, client, admins) = setup_multisig();
+    let operation = Operation::RegisterMerchant(Address::generate(&env));
+
+    // One admin alone is not enough — previously `schedule` only compared
+    // against `admins[0]`, so this would have succeeded.
+    let single = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert!(
+        client
+            .try_schedule(&single, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+            .is_err(),
+        "a single admin must not be able to schedule in a 2-of-3 setup"
+    );
+
+    // A non-admin mixed into an otherwise-sufficient signer set is rejected too.
+    let with_non_admin = soroban_sdk::vec![&env, admins.get(0).unwrap(), Address::generate(&env)];
+    assert!(
+        client
+            .try_schedule(&with_non_admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+            .is_err(),
+        "a non-admin signer must be rejected even with two signatures"
+    );
+
+    // Two of the three admins meet the threshold.
+    let pair = soroban_sdk::vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.schedule(&pair, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // A third attempt by a single admin is still rejected.
+    assert!(client
+        .try_schedule(&single, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .is_err());
+}
+
+/// Cancelling a scheduled operation requires the same multisig threshold as
+/// scheduling it; a single admin cannot unilaterally remove it.
+#[test]
+fn cancel_requires_full_multisig_threshold() {
+    let (env, client, admins) = setup_multisig();
+    let operation = Operation::RegisterMerchant(Address::generate(&env));
+
+    let pair = soroban_sdk::vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.schedule(&pair, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // A single admin cannot cancel what the full threshold scheduled.
+    let single = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert!(
+        client.try_cancel(&single, &operation).is_err(),
+        "a single admin must not be able to cancel in a 2-of-3 setup"
+    );
+
+    // The full threshold can cancel.
+    client.cancel(&pair, &operation);
+
+    // The operation is gone: executing after the delay now fails.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(client.try_execute(&operation).is_err());
+}
 // Timelock Pause-Gating Tests
 // ---------------------------------------------------------------------------
 
@@ -311,6 +483,53 @@ fn execute_rejects_when_contract_is_paused_and_preserves_scheduled_op() {
     client.unpause(&admins);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+// ---------------------------------------------------------------------------
+// Governance update validation on the scheduled path (issue #562)
+// ---------------------------------------------------------------------------
+
+/// The scheduled path (`Operation::UpdateGovernance` executed through the
+/// timelock) must enforce the exact same `validate_governance` check as the
+/// direct `update_governance` entry point. `schedule` is admin-gated but does
+/// not inspect the operation payload, so a zero governance address must be
+/// rejected with `InvalidGovernance` (#309) at execution time instead of
+/// being stored.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_zero_address() {
+    let (env, client, admins, _) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let operation = Operation::UpdateGovernance(zero_address);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // The scheduled path must fail the same validation the direct path does.
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+/// The scheduled path accepts a governance address that passes
+/// `validate_governance`, mirroring the direct path.
+#[test]
+fn scheduled_update_governance_accepts_valid_address() {
+    let (env, client, admins, _) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+
+    assert_eq!(client.get_governance(), new_governance);
 }
 
 // ---------------------------------------------------------------------------
