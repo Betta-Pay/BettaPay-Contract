@@ -70,6 +70,9 @@ pub(crate) fn write_admins(env: &Env, admins: &Vec<Address>, threshold: u32) {
 pub(crate) fn read_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
+    env.storage()
+        .instance()
         .get(&CommonDataKey::Threshold)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
@@ -159,6 +162,9 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
     // of surfacing a host-level conversion panic. Refusing is deliberate:
     // an old-format record must never be treated as a valid pending
     // recovery (default-deny, never default-allow).
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     let val = env
         .storage()
         .instance()

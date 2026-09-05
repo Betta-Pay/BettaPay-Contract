@@ -20,9 +20,6 @@ use soroban_sdk::{Address, Env};
 // ---------------------------------------------------------------------------
 
 mod panicking_gov {
-    use crate::FeeConfig;
-    use soroban_sdk::{contract, contractimpl, Env};
-    use soroban_sdk::{contract, contractimpl, Env};
     use crate::GovFeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
 
@@ -85,7 +82,13 @@ fn read_path_governance_failure_surfaces_typed_error() {
         &recovery,
     );
     let deployer = Address::generate(&env);
-    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
 
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
@@ -118,7 +121,13 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
         &recovery,
     );
     let deployer = Address::generate(&env);
-    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
     // Empty governance returns None — bootstrap default should apply (100 bps platform, 5 network).
@@ -158,7 +167,13 @@ fn write_path_governance_failure_surfaces_typed_error() {
         &recovery,
     );
     let deployer = Address::generate(&env);
-    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
     client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
     // Directly inject the panicking governance address.
@@ -199,7 +214,13 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
         &recovery,
     );
     let deployer = Address::generate(&env);
-    client.init(&deployer, &soroban_sdk::vec![&env, admin.clone()], &1, &empty_gov, &recovery);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
 
     // Directly inject the panicking governance address.
     inject_governance(&env, &contract_id, &panicking_gov);
