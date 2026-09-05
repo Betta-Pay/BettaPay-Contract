@@ -712,7 +712,12 @@
             "data": {
               "vec": [
                 {
-                  "string": "contract try_call failed"
+                  "key": {
+                    "symbol": "network_fee_bps"
+                  },
+                  "val": {
+                    "u32": 5
+                  }
                 },
                 {
                   "symbol": "get_system_param"

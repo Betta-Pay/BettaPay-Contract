@@ -741,7 +741,7 @@
               }
             ],
             "data": {
-              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#229)'"
+              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#203)'"
             }
           }
         }

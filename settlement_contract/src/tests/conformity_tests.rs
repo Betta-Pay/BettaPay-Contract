@@ -55,7 +55,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 29] {
+fn settlement_codes() -> [(&'static str, u32); 27] {
     [
         (
             "AlreadyInitialized",
@@ -111,7 +111,6 @@ fn settlement_codes() -> [(&'static str, u32); 29] {
             "MerchantRuleNotSet",
             SettlementError::MerchantRuleNotSet as u32,
         ),
-        ("EmptyAddress", SettlementError::EmptyAddress as u32),
         ("ZeroAddress", SettlementError::ZeroAddress as u32),
         (
             "InvalidPaymentReference",

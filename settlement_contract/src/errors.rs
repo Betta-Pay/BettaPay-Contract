@@ -56,9 +56,6 @@ pub enum SettlementError {
     DuplicatePaymentReference = 303,
     /// No merchant-specific rule has been set. The merchant will use the default rule or bootstrap fallback.
     MerchantRuleNotSet = 304,
-    /// The supplied address is an empty string.
-    /// Raised by `register_merchant` and `transfer_admin`.
-    EmptyAddress = 305,
     /// The supplied address is the zero‑address.
     /// Raised by `register_merchant` and `transfer_admin`.
     ZeroAddress = 306,
@@ -121,7 +118,6 @@ const _: () = {
         SettlementError::DuplicatePaymentReference as u32 >= error_codes::SETTLEMENT_RANGE_START
     );
     assert!(SettlementError::MerchantRuleNotSet as u32 >= error_codes::SETTLEMENT_RANGE_START);
-    assert!(SettlementError::EmptyAddress as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::ZeroAddress as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidPaymentReference as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidSettlementDelay as u32 >= error_codes::SETTLEMENT_RANGE_START);
