@@ -126,6 +126,14 @@ impl SettlementContract {
             SettlementError::InvalidAdmin,
         );
 
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
+        }
+
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
@@ -457,14 +465,20 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         match operation {
-            Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, &executor, new_gov),
+            Operation::UpdateGovernance(new_gov) => {
+                Self::_update_governance(&env, &executor, new_gov)
+            }
             Operation::CancelRecovery => Self::_cancel_recovery(&env, &executor),
             Operation::TransferAdmin(new_admins, new_threshold) => {
                 Self::_transfer_admin(&env, &executor, new_admins, new_threshold)
             }
             Operation::Upgrade(wasm_hash) => Self::_upgrade(&env, &executor, wasm_hash),
-            Operation::RegisterMerchant(merchant) => Self::_register_merchant(&env, &executor, merchant),
-            Operation::UnregisterMerchant(merchant) => Self::_unregister_merchant(&env, &executor, merchant),
+            Operation::RegisterMerchant(merchant) => {
+                Self::_register_merchant(&env, &executor, merchant)
+            }
+            Operation::UnregisterMerchant(merchant) => {
+                Self::_unregister_merchant(&env, &executor, merchant)
+            }
             Operation::SetSettlementRule(merchant, rule) => {
                 Self::_set_settlement_rule(&env, &executor, merchant, rule)
             }
@@ -683,7 +697,12 @@ impl SettlementContract {
         );
     }
 
-    fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
+    fn _set_settlement_rule(
+        env: &Env,
+        executor: &Address,
+        merchant: Address,
+        rule: SettlementRule,
+    ) {
         assert_not_paused(env);
 
         validate_fee_against_governance(env, &rule);
