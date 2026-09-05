@@ -39,6 +39,10 @@ pub enum SettlementError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 15,
+    /// `unpause` was called while the contract was already unpaused.
+    AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
     /// The target merchant address is not registered. Raised by
@@ -104,6 +108,8 @@ const _: () = {
     );
     assert!(SettlementError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(SettlementError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(SettlementError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
+    assert!(SettlementError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
     assert!(SettlementError::MerchantExists as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::MerchantMissing as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(

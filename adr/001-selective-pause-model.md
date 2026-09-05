@@ -14,13 +14,12 @@ We chose a **selective pause model** where:
 
 - `pause()` and `unpause()` toggle a boolean flag stored in instance storage (`DataKey::Paused`).
 - Only state-mutating operations are blocked when paused:
-  - `register_merchant`, `unregister_merchant`
-  - `set_settlement_rule`, `clear_settlement_rule`
-  - `set_default_rule`
-  - `store_payment_reference`
-  - `update_governance`
-- Read-only operations (`get_admin`, `is_merchant_registered`, `get_settlement_rule`, `get_default_rule`, `get_payment_reference`, `is_paused`, `calculate_fee_split`) remain accessible even when paused.
-- Administrative operations (`upgrade`, `transfer_admin`, `initiate_recovery`, `cancel_recovery`, `execute_recovery`, `schedule`, `execute`, `cancel`) are intentionally NOT blocked to allow emergency fixes.
+  - Settlement: `register_merchant`, `unregister_merchant`
+  - Settlement: `set_settlement_rule`, `clear_settlement_rule`, `set_default_rule`
+  - Settlement: `store_payment_reference`, `update_governance`
+  - Governance: `set_fee_config`, `upsert_anchor`, `remove_anchor`
+- Read-only operations (`get_admin`, `is_merchant_registered`, `get_settlement_rule`, `get_default_rule`, `get_payment_reference`, `is_paused`, `calculate_fee_split`, `get_fee_config`, `get_anchor`, `get_system_param`) remain accessible even when paused.
+- Administrative operations (`upgrade`, `transfer_admin`, `change_threshold`, `update_system_param`, `initiate_recovery`, `cancel_recovery`, `execute_recovery`, `schedule`, `execute`, `cancel`) are intentionally NOT blocked to allow emergency fixes.
 
 ## Consequences
 
