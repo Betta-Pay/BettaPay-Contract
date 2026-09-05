@@ -605,7 +605,8 @@ fn multisig_threshold_works_independently_on_both_contracts() {
         "settlement rejects sub-threshold signers"
     );
 
-    // change_threshold requires threshold + 1 = 3 signers.
+    // change_threshold requires the current threshold (2) — three signers
+    // still satisfy it.
     gov_client.change_threshold(&three_signers, &3);
     assert_eq!(gov_client.get_threshold(), 3);
 
@@ -1198,7 +1199,13 @@ fn store_payment_reference_prevents_reentrancy() {
 
     let settle_client = SettlementContractClient::new(&env, &settle_id);
     let deployer = Address::generate(&env);
-    settle_client.init(&deployer, &settle_admins, &1, &mock_gov_id, &settle_recovery);
+    settle_client.init(
+        &deployer,
+        &settle_admins,
+        &1,
+        &mock_gov_id,
+        &settle_recovery,
+    );
 
     let merchant = Address::generate(&env);
     settle_client.register_merchant(&settle_admins, &merchant);

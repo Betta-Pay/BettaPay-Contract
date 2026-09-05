@@ -14,6 +14,8 @@ use crate::storage::{
     read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
+    read_recovery_address, read_rule_or_default, read_threshold, validate_admins_and_threshold,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_governance, validate_nonzero_address,
     verify_admin_auth, write_admins,
@@ -232,13 +234,17 @@ impl SettlementContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        // Require the current threshold, not threshold + 1. With an N-of-N
+        // admin set (threshold == admin count) no distinct set of signers
+        // could ever satisfy N+1, which would lock the contract out of
+        // lowering its threshold permanently (Issue #464).
+        verify_admin_auth(&env, &signers, current_threshold);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, SettlementError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
 
         env.storage()
             .instance()
@@ -457,14 +463,20 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         match operation {
-            Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, &executor, new_gov),
+            Operation::UpdateGovernance(new_gov) => {
+                Self::_update_governance(&env, &executor, new_gov)
+            }
             Operation::CancelRecovery => Self::_cancel_recovery(&env, &executor),
             Operation::TransferAdmin(new_admins, new_threshold) => {
                 Self::_transfer_admin(&env, &executor, new_admins, new_threshold)
             }
             Operation::Upgrade(wasm_hash) => Self::_upgrade(&env, &executor, wasm_hash),
-            Operation::RegisterMerchant(merchant) => Self::_register_merchant(&env, &executor, merchant),
-            Operation::UnregisterMerchant(merchant) => Self::_unregister_merchant(&env, &executor, merchant),
+            Operation::RegisterMerchant(merchant) => {
+                Self::_register_merchant(&env, &executor, merchant)
+            }
+            Operation::UnregisterMerchant(merchant) => {
+                Self::_unregister_merchant(&env, &executor, merchant)
+            }
             Operation::SetSettlementRule(merchant, rule) => {
                 Self::_set_settlement_rule(&env, &executor, merchant, rule)
             }
@@ -556,6 +568,12 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
+    fn _transfer_admin(
+        env: &Env,
+        executor: &Address,
+        new_admins: Vec<Address>,
+        new_threshold: u32,
+    ) {
     fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
@@ -601,6 +619,7 @@ impl SettlementContract {
             env,
             &merchant,
         );
+
         let admin = read_admin(env);
 
         
@@ -683,7 +702,12 @@ impl SettlementContract {
         );
     }
 
-    fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
+    fn _set_settlement_rule(
+        env: &Env,
+        executor: &Address,
+        merchant: Address,
+        rule: SettlementRule,
+    ) {
         assert_not_paused(env);
 
         validate_fee_against_governance(env, &rule);
