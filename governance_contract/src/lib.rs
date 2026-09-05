@@ -179,7 +179,7 @@ use bettapay_common::{
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    IntoVal, Symbol, TryFromVal, Val, Vec,
 };
 
 #[derive(Clone)]
@@ -476,6 +476,7 @@ impl GovernanceContract {
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            initiated_by: recovery_address.clone(),
         };
         env.storage()
             .instance()
@@ -484,19 +485,25 @@ impl GovernanceContract {
     }
 
     pub fn cancel_recovery(env: Env, signers: Vec<Address>) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let admin = signers.get(0).unwrap();
-        if !env
-            .storage()
-            .instance()
-            .has(&CommonDataKey::PendingRecovery)
-        {
-            panic_with_error!(&env, GovernanceError::RecoveryNotPending);
+        // Cancellation policy (issue #560): the pending recovery may be
+        // cancelled by the address recorded as `initiated_by` (the recovery
+        // address that started it) or by the current admin set meeting the
+        // multisig threshold. The admin path is unchanged; the initiator
+        // path lets an initiation be undone by the address that made it.
+        // Any other caller is refused with `Unauthorized`.
+        let pending = read_pending_recovery(&env);
+        let cancelled_by_initiator =
+            signers.len() == 1 && signers.get(0).unwrap() == pending.initiated_by;
+        if cancelled_by_initiator {
+            pending.initiated_by.require_auth();
+        } else {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
         }
+        let canceller = signers.get(0).unwrap();
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
-        events::emit_recovery_cancelled(&env, &admin);
+        events::emit_recovery_cancelled(&env, &canceller);
     }
 
     /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
@@ -842,10 +849,18 @@ fn read_recovery_address(env: &Env) -> Address {
 }
 
 fn read_pending_recovery(env: &Env) -> PendingRecovery {
-    env.storage()
+    // Decode by hand so a pending recovery written before `initiated_by`
+    // existed (pre-issue #560) is refused with `RecoveryNotPending` instead
+    // of surfacing a host-level conversion panic. Refusing is deliberate:
+    // an old-format record must never be treated as a valid pending
+    // recovery (default-deny, never default-allow).
+    let val = env
+        .storage()
         .instance()
-        .get(&CommonDataKey::PendingRecovery)
-        .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending))
+        .get::<_, Val>(&CommonDataKey::PendingRecovery)
+        .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending));
+    PendingRecovery::try_from_val(env, &val)
+        .unwrap_or_else(|_| panic_with_error!(env, GovernanceError::RecoveryNotPending))
 }
 
 /// Returns the instance-storage schema version, defaulting to the current
@@ -875,7 +890,7 @@ fn read_optional_primary_admin(env: &Env) -> Address {
 }
 
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
-    if address.to_string().is_empty() || storage::is_zero_address(env, address) {
+    if storage::is_zero_address(env, address) {
         panic_with_error!(env, error);
     }
 }
@@ -934,6 +949,7 @@ mod tests {
     use proptest::prelude::*;
     use soroban_sdk::testutils::storage::Persistent;
     use soroban_sdk::testutils::{Address as _, Events, Ledger};
+    use soroban_sdk::testutils::{Address as _, Events};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -1981,5 +1997,93 @@ mod tests {
         client.execute_recovery();
         assert_eq!(client.get_admin(), vec![&env, recovered.clone()]);
         assert_eq!(client.get_threshold(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Recovery initiator (issue #560)
+    // -----------------------------------------------------------------------
+
+    // The pending recovery must record the address that initiated it, so
+    // `cancel_recovery` can validate the cancellation against the initiator
+    // and off-chain consumers can audit who started the recovery.
+    #[test]
+    fn pending_recovery_records_initiating_address() {
+        let (env, client, _admins, recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+
+        client.initiate_recovery(&new_admin);
+
+        let pending: PendingRecovery = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&CommonDataKey::PendingRecovery)
+                .unwrap()
+        });
+        assert_eq!(pending.initiated_by, recovery_address);
+        assert_eq!(pending.new_admin, new_admin);
+    }
+
+    // The address that initiated a recovery may cancel it directly. The
+    // admin gate is unchanged, so this is an additional canceller, not a
+    // replacement.
+    #[test]
+    fn cancel_recovery_by_initiator_succeeds() {
+        let (env, client, _admins, recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        client.cancel_recovery(&vec![&env, recovery_address]);
+
+        assert!(
+            !env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "a cancelled recovery must be removed from storage"
+        );
+    }
+
+    // A caller that is neither an admin nor the recorded initiator is
+    // refused, and the pending recovery survives the refused attempt.
+    #[test]
+    fn cancel_recovery_by_non_initiator_non_admin_is_refused() {
+        let (env, client, _admins, _recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        let stranger = Address::generate(&env);
+        let result = client.try_cancel_recovery(&vec![&env, stranger]);
+        assert_eq!(
+            result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(
+                GovernanceError::Unauthorized as u32
+            )))
+        );
+        assert!(
+            env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "a refused cancellation must leave the pending recovery in place"
+        );
+    }
+
+    // The pre-existing admin path is preserved: the admin set can still
+    // cancel a recovery it did not initiate.
+    #[test]
+    fn cancel_recovery_by_admin_still_succeeds() {
+        let (env, client, admins, _recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        client.cancel_recovery(&admins);
+
+        assert!(
+            !env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "the admin path must still be able to cancel a pending recovery"
+        );
     }
 }
