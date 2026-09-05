@@ -337,7 +337,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
-    args.push_back(Symbol::new(env, "min_payment").into());
+    args.push_back(Symbol::new(env, "min_payment").to_val());
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),

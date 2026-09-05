@@ -10,13 +10,10 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
-    read_governance, read_pending_recovery, read_recovery_address, read_rule_or_default,
-    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
-    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
     read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
-    validate_admins_and_threshold, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
+    validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -165,7 +162,6 @@ impl SettlementContract {
         validate_nonzero_address(
             &env,
             &new_recovery,
-            SettlementError::InvalidRecoveryAddress,
             SettlementError::InvalidRecoveryAddress,
         );
         env.storage()
@@ -398,8 +394,6 @@ impl SettlementContract {
     /// pass enough valid signers to meet the current multisig threshold.
     /// This prevents any external actor from front-running the timelock expiry
     /// and executing an operation the admins intended to cancel (Issue #462).
-    pub fn execute(env: Env, signers: Vec<Address>, operation: Operation) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
     /// # Execution auth policy (uniform)
     ///
     /// `execute` deliberately performs **no caller authentication** for any
@@ -423,7 +417,7 @@ impl SettlementContract {
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
     pub fn execute(env: Env, executor: Address, operation: Operation) {
         assert_not_paused(&env);
-        executor.require_auth();
+        // executor is intentionally not required to authenticate here (permissionless execution after timelock)
 
         let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
@@ -584,10 +578,7 @@ impl SettlementContract {
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     fn _register_merchant(env: &Env, executor: &Address, merchant: Address) {
         assert_not_paused(env);
-        validate_nonzero_address(
-            env,
-            &merchant,
-        );
+        validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
         let admin = read_admin(env);
 
         
