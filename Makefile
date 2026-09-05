@@ -40,6 +40,7 @@ test_scripts:
 wasm_size: optimize
 	bash scripts/check_wasm_size.sh
 
+all: fmt check clippy test test_scripts
 check_codeowners:
 	bash scripts/check_codeowners.sh
 

@@ -20,6 +20,9 @@ use soroban_sdk::{Address, Env, Symbol};
 // ---------------------------------------------------------------------------
 
 mod panicking_gov {
+    use crate::FeeConfig;
+    use soroban_sdk::{contract, contractimpl, Env};
+    use soroban_sdk::{contract, contractimpl, Env};
     use crate::GovFeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
 
