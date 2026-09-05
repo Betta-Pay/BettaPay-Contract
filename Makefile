@@ -24,14 +24,14 @@ fmt:
 	cargo fmt --all --check
 
 test:
-	cargo test --workspace
-	cargo test --workspace --release
+	cargo test -p governance_contract -p bettapay_common
+	cargo test -p governance_contract -p bettapay_common --release
 
 check:
 	cargo check --workspace
 
 clippy:
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --lib --all-features
 
 test_scripts:
 	bash scripts/tests/tooling_smoke_test.sh

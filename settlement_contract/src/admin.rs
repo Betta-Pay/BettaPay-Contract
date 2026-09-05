@@ -579,7 +579,7 @@ impl SettlementContract {
     fn _register_merchant(env: &Env, executor: &Address, merchant: Address) {
         assert_not_paused(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
-        let admin = read_admin(env);
+        let _admin = read_admin(env);
 
         
         // Prevent an admin from being registered as a merchant

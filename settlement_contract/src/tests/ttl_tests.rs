@@ -71,6 +71,7 @@ fn read_pending_recovery_bumps_instance_ttl() {
     let pending = PendingRecovery {
         new_admin,
         execute_after: env.ledger().timestamp(),
+        initiated_by: Address::generate(&env),
     };
     env.as_contract(&client.address, || {
         env.storage()

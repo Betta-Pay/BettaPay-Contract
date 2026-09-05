@@ -195,6 +195,7 @@ mod tests {
 /// There is deliberately no `no check` path: a caller who is neither the
 /// merchant nor an admin is rejected either by the auth framework (owner
 /// path) or by `verify_admin_auth`'s admin-membership check (admin path).
+#[allow(dead_code)]
 fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>) {
     if signers.is_empty() {
         merchant.require_auth();
@@ -354,7 +355,7 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         reference: BytesN<32>,
-        signers: Vec<Address>,
+        _signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
