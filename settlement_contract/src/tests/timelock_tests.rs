@@ -14,13 +14,17 @@ fn scheduled_operation_executes_only_after_delay() {
     let operation = Operation::TransferAdmin(new_admins.clone(), 1);
 
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client
-        .try_execute(&admins.get(0).unwrap(), &operation)
-        .is_err());
+    assert!(client.try_execute(&admins, &operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert_eq!(client.get_admin(), admins);
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins, &operation);
+
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
+    assert_eq!(client.get_threshold(), 1);
+    assert!(client.try_execute(&admins, &operation).is_err());
     client.execute(&admins.get(0).unwrap(), &operation);
 
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
@@ -73,9 +77,8 @@ fn admin_can_cancel_but_non_admin_cannot() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert!(client
-        .try_execute(&admins.get(0).unwrap(), &operation)
-        .is_err());
+    assert!(client.try_execute(&admins, &operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert!(client
         .try_cancel(&soroban_sdk::vec![&env, admins.get(0).unwrap()], &operation)
         .is_err());
@@ -94,9 +97,8 @@ fn multisig_schedule_and_cancel_require_two_of_three_signers() {
     client.schedule(&two_signers, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(client.try_cancel(&one_signer, &operation).is_err());
     client.cancel(&two_signers, &operation);
-    assert!(client
-        .try_execute(&admins.get(0).unwrap(), &operation)
-        .is_err());
+    assert!(client.try_execute(&two_signers, &operation).is_err());
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
 }
 
 #[test]
@@ -110,14 +112,40 @@ fn multisig_schedule_and_execute_apply_operation_after_delay() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS - 1);
-    assert!(client
-        .try_execute(&admins.get(0).unwrap(), &operation)
-        .is_err());
+    assert!(client.try_execute(&two_signers, &operation).is_err());
+    assert!(!client.is_merchant_registered(&merchant));
+
+    env.ledger().with_mut(|ledger| ledger.timestamp += 1);
+    client.execute(&two_signers, &operation);
+    assert!(client.try_execute(&admins.get(0).unwrap(), &operation).is_err());
     assert!(!client.is_merchant_registered(&merchant));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 1);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #462: execute must require admin authentication
+// ---------------------------------------------------------------------------
+
+/// A non-admin caller is rejected when trying to execute a scheduled
+/// operation, even after the timelock delay has elapsed.
+#[test]
+fn execute_rejects_unauthorized_caller() {
+    let (env, client, admins, merchant) = setup();
+    let non_admin = Address::generate(&env);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let unauthorized_signers = soroban_sdk::vec![&env, non_admin];
+    assert!(client
+        .try_execute(&unauthorized_signers, &operation)
+        .is_err());
 }
 
 #[test]
@@ -144,6 +172,7 @@ fn expired_schedule_cannot_execute() {
     // The host rejects access to an archived key before the contract can map
     // it to `OperationNotScheduled`, so expiry is observed as a host panic in
     // the in-memory test environment.
+    client.execute(&admins, &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
@@ -232,7 +261,8 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&a1.clone(), &operation);
+    client.execute(&initial_admins, &operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
 
     assert_eq!(
         client.get_admin(),
@@ -311,6 +341,53 @@ fn execute_rejects_when_contract_is_paused_and_preserves_scheduled_op() {
     client.unpause(&admins);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+// ---------------------------------------------------------------------------
+// Governance update validation on the scheduled path (issue #562)
+// ---------------------------------------------------------------------------
+
+/// The scheduled path (`Operation::UpdateGovernance` executed through the
+/// timelock) must enforce the exact same `validate_governance` check as the
+/// direct `update_governance` entry point. `schedule` is admin-gated but does
+/// not inspect the operation payload, so a zero governance address must be
+/// rejected with `InvalidGovernance` (#309) at execution time instead of
+/// being stored.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_zero_address() {
+    let (env, client, admins, _) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let operation = Operation::UpdateGovernance(zero_address);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // The scheduled path must fail the same validation the direct path does.
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+/// The scheduled path accepts a governance address that passes
+/// `validate_governance`, mirroring the direct path.
+#[test]
+fn scheduled_update_governance_accepts_valid_address() {
+    let (env, client, admins, _) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+
+    assert_eq!(client.get_governance(), new_governance);
 }
 
 // ---------------------------------------------------------------------------
