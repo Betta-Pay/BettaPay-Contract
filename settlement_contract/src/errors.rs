@@ -39,8 +39,10 @@ pub enum SettlementError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// A recovery is already pending; initiate_recovery cannot overwrite it.
+    RecoveryAlreadyPending = 15,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
@@ -83,6 +85,11 @@ pub enum SettlementError {
     /// by `execute()`/`cancel()` if the operation supplied does not
     /// byte-for-byte match the operation stored under that hash.
     OperationHashCollision = 316,
+    /// The stored admin list was empty when resolving the primary admin
+    /// (index `0`). Unreachable in practice — `write_admins` rejects an
+    /// empty admin list at write time — but `read_admin` surfaces this
+    /// instead of an untyped panic if that invariant is ever violated.
+    AdminSetEmpty = 317,
 }
 
 const _: () = {
@@ -105,6 +112,9 @@ const _: () = {
     );
     assert!(SettlementError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(SettlementError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(
+        SettlementError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
+    );
     assert!(SettlementError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
     assert!(SettlementError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
     assert!(SettlementError::MerchantExists as u32 >= error_codes::SETTLEMENT_RANGE_START);
@@ -126,4 +136,5 @@ const _: () = {
     assert!(SettlementError::BatchTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::OperationHashCollision as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::AdminSetEmpty as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

@@ -281,7 +281,7 @@ pub enum GovernanceError {
     AnchorMissing = 200,
     InvalidParamValue = 201,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
@@ -351,7 +351,7 @@ impl GovernanceContract {
             &recovery_address,
             GovernanceError::InvalidRecoveryAddress,
         );
-        for i in 0..threshold {
+        for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
         }
         env.storage().instance().set(&DataKey::Deployer, &deployer);
@@ -898,7 +898,7 @@ pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) 
     let env = Env::default();
     env.mock_all_auths();
 
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
     let admin = Address::generate(&env);
     let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
@@ -946,7 +946,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery_address);
         (env, client, admins, recovery_address)
     }
@@ -1047,9 +1047,82 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
-        let (_env, client, admins, recovery) = setup();
-    let deployer = Address::generate(&env);
+        let (env, client, admins, recovery) = setup();
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
+    }
+
+    // Issue #471: init used to authenticate only the first `threshold` admins,
+    // so with `admins.len() > threshold` the extras were stored without ever
+    // proving key control — a later `change_threshold` could then elevate an
+    // admin who never consented at init. Every proposed admin must authenticate.
+    #[test]
+    fn init_requires_auth_from_every_admin_when_threshold_below_len() {
+        let env = Env::default();
+        // No mock_all_auths: only the auths explicitly mocked below succeed.
+
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env); // extra admin beyond threshold
+        let admins = vec![&env, admin_a.clone(), admin_b.clone()];
+        let recovery = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        // Only the in-threshold admin authenticates; the extra admin does not.
+        let invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (admins.clone(), 1u32, &recovery).into_val(&env),
+            sub_invokes: &[],
+        };
+        env.mock_auths(&[MockAuth {
+            address: &admin_a,
+            invoke: &invoke,
+        }]);
+
+        assert!(
+            client.try_init(&admins, &1, &recovery).is_err(),
+            "init must fail when an admin beyond the threshold never authenticated"
+        );
+        assert!(
+            !client.is_initialized(),
+            "failed init must not leave the contract initialized"
+        );
+    }
+
+    // Issue #471: the same len > threshold setup succeeds once every proposed
+    // admin has authenticated, and all of them are stored.
+    #[test]
+    fn init_accepts_all_admins_authenticated_when_threshold_below_len() {
+        let env = Env::default();
+
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env);
+        let admins = vec![&env, admin_a.clone(), admin_b.clone()];
+        let recovery = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        let invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (admins.clone(), 1u32, &recovery).into_val(&env),
+            sub_invokes: &[],
+        };
+        env.mock_auths(&[
+            MockAuth {
+                address: &admin_a,
+                invoke: &invoke,
+            },
+            MockAuth {
+                address: &admin_b,
+                invoke: &invoke,
+            },
+        ]);
+
+        client.init(&admins, &1, &recovery);
+        assert_eq!(client.get_admin(), admins);
+        assert_eq!(client.get_threshold(), 1);
     }
 
     #[test]
@@ -1061,8 +1134,8 @@ mod tests {
         let recovery = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin], &0, &recovery);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &0, &recovery);
     }
 
     #[test]
@@ -1395,7 +1468,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             let config = FeeConfig {
@@ -1437,7 +1510,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
@@ -1457,8 +1530,8 @@ mod tests {
             let recovery = Address::generate(&env);
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-
-            let result = client.try_init(&admins, &threshold, &recovery);
+            let deployer = Address::generate(&env);
+            let result = client.try_init(&deployer, &admins, &threshold, &recovery);
             if threshold == 0 || threshold > admin_count {
                 prop_assert!(result.is_err());
             } else {
@@ -1486,8 +1559,8 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         assert!(!client.is_initialized());
-    let deployer = Address::generate(&env);
-        client.init(&deployer, &vec![env, admin.clone()], &1, &recovery_address);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin.clone()], &1, &recovery_address);
         assert!(client.is_initialized());
     }
 
@@ -1502,7 +1575,7 @@ mod tests {
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         let admins = vec![&env, admin.clone()];
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
         assert!(client.is_initialized());
         assert_eq!(client.get_admin(), admins);
@@ -1567,7 +1640,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
@@ -1591,7 +1664,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
@@ -1614,7 +1687,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
 
         // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
@@ -1635,7 +1708,7 @@ mod tests {
 
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
 
         client.change_threshold(&admins, &0);
@@ -1847,7 +1920,7 @@ mod tests {
         let recovery_address = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery_address);
 
         client.pause(&admins);

@@ -10,8 +10,8 @@ use crate::storage::{
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH,
-    PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -114,13 +114,21 @@ mod tests {
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
             let expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
-            let expected_merchant =
+            let _expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 
             prop_assert_eq!(split.gross_amount, amount);
+            // Clamp network leg so total fees never exceed gross (issue #683).
+            let clamped_network = if expected_platform + expected_network > amount {
+                (amount - expected_platform).max(0)
+            } else {
+                expected_network
+            };
+            let clamped_merchant = (amount - expected_platform - clamped_network).max(0);
+
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
-            prop_assert_eq!(split.network_fee_amount, expected_network);
-            prop_assert_eq!(split.merchant_amount, expected_merchant);
+            prop_assert_eq!(split.network_fee_amount, clamped_network);
+            prop_assert_eq!(split.merchant_amount, clamped_merchant);
             prop_assert!(split.merchant_amount >= 0);
         }
 
@@ -162,7 +170,9 @@ mod tests {
             let split = calculate_split(&env, amount, &rule);
 
             prop_assert!(split.platform_fee_amount > 0);
-            prop_assert!(split.network_fee_amount > 0);
+            // network_fee may be clamped to 0 when total fees exceed gross
+            // (issue #683), but merchant must always be non-negative.
+            prop_assert!(split.network_fee_amount >= 0);
             prop_assert_eq!(split.merchant_amount, 0);
         }
     }
@@ -185,6 +195,7 @@ mod tests {
 /// There is deliberately no `no check` path: a caller who is neither the
 /// merchant nor an admin is rejected either by the auth framework (owner
 /// path) or by `verify_admin_auth`'s admin-membership check (admin path).
+#[allow(dead_code)]
 fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>) {
     if signers.is_empty() {
         merchant.require_auth();
@@ -344,7 +355,7 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         reference: BytesN<32>,
-        signers: Vec<Address>,
+        _signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
