@@ -7,6 +7,10 @@
 //!   when no merchant-specific or default rule is set).
 //! - Write path: `validate_fee_against_governance` (reached via
 //!   `set_settlement_rule` / `set_default_rule`).
+//!
+//! Issue #483: Malformed governance configs (e.g. a 1-field config that omits
+//! `network_fee_bps`) must be rejected rather than silently skipping the
+//! network-fee ceiling.
 
 use crate::types::DataKey;
 use crate::*;
@@ -41,6 +45,41 @@ mod panicking_gov {
 }
 
 use panicking_gov::PanickingGovernance;
+
+// ---------------------------------------------------------------------------
+// Malformed governance stub — returns a 1-field struct where GovFeeConfig
+// expects 2 fields (issue #483).
+// ---------------------------------------------------------------------------
+
+mod malformed_gov {
+    use soroban_sdk::{contract, contractimpl, contracttype, Env};
+
+    /// A 1-field config struct: only `platform_fee_bps`, missing
+    /// `network_fee_bps`. When the settlement contract attempts to
+    /// deserialize this into `Option<GovFeeConfig>`, the missing field
+    /// causes a deserialization failure that must surface as
+    /// `GovernanceCallFailed`.
+    #[derive(Clone)]
+    #[contracttype]
+    pub struct OneFieldFeeConfig {
+        pub platform_fee_bps: u32,
+    }
+
+    #[contract]
+    pub struct MalformedGovernance;
+
+    #[contractimpl]
+    impl MalformedGovernance {
+        /// Returns a 1-field config where the settlement contract expects
+        /// 2 fields (platform_fee_bps + network_fee_bps). This simulates
+        /// a governance contract upgrade that forgot the network fee field.
+        pub fn get_fee_config(_env: Env) -> Option<OneFieldFeeConfig> {
+            Some(OneFieldFeeConfig {
+                platform_fee_bps: 200,
+            })
+        }
+    }
+}
 
 /// Helper: directly injects a governance address into the settlement contract's
 /// instance storage, bypassing `validate_governance` (which would itself call

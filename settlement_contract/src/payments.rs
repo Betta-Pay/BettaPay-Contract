@@ -68,7 +68,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use proptest::{prop_assert, prop_assert_eq, proptest};
 
     #[test]
     fn zero_fee_split_handles_maximum_amount() {
