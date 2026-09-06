@@ -45,6 +45,32 @@ fn scheduled_operation_executes_only_after_delay() {
 }
 
 #[test]
+fn recovery_vetoes_scheduled_operation_before_timelock_expiry() {
+    let (env, client, admins, recovery) = setup();
+    let operation = Operation::TransferAdmin(
+        soroban_sdk::vec![&env, Address::generate(&env)],
+        1,
+    );
+    let admin = admins.get(0).unwrap();
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RECOVERY_DELAY_SECONDS;
+    });
+    client.initiate_recovery(Address::generate(&env));
+
+    // Recovery begins at the same boundary as the timelock and must win the
+    // transaction race: a scheduled operation cannot execute while recovery
+    // is pending, even when its nominal delay has elapsed.
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+    });
+    assert!(client.try_execute(&operation).is_err());
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_recovery_address(), recovery);
+}
+
+#[test]
 fn schedule_rejects_non_admin_and_insufficient_delay() {
     let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);

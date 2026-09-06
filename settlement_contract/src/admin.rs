@@ -118,6 +118,11 @@ impl SettlementContract {
         );
     }
 
+    /// Initiates recovery and vetoes every pending scheduled operation.
+    ///
+    /// Recovery is intentionally the emergency veto path: once the recovery
+    /// address authenticates, no operation scheduled under the compromised
+    /// admin can execute, including an upgrade or admin transfer.
     pub fn initiate_recovery(env: Env, new_admin: Address) {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
@@ -135,6 +140,7 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::PendingRecovery, &pending);
+        // `PendingRecovery` itself is the veto marker checked by `execute`.
         events::emit_recovery_initiated(&env, &recovery_address, &new_admin, pending.execute_after);
     }
 
