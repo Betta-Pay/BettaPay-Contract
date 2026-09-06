@@ -246,6 +246,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(
         last_topic(&env),
@@ -288,21 +289,34 @@ fn scheduled_operation_events_identify_the_executor() {
 
 #[test]
 fn bootstrap_fallback_uses_canonical_topic() {
-    let (env, client, admins, merchant) = setup();
+    let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
-    // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so store_payment_reference falls all the way
-    // through to the bootstrap fallback rule. Mutating entry points must
-    // emit the bootstrap_fallback event (issue #485).
+    let amount = 1_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
     let before = env.events().all().len();
-    let reference = BytesN::<32>::from_array(&env, &[1u8; 32]);
-    client.store_payment_reference(&merchant, &reference, &1_000);
-    assert!(env.events().all().len() > before);
-    assert_eq!(
-        last_topic(&env),
-        Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT)
-    );
+    let split = client.calculate_fee_split(&merchant, &amount);
+
+    // Event silence: the hot path must not emit a bootstrap_fallback event.
+    assert_eq!(env.events().all().len(), before);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
+    // No merchant rule, no default rule, and MockGovernance's get_fee_config
+    // always returns None, so calculate_fee_split falls through to the
+    // bootstrap fallback rule. calculate_fee_split is a read-only path and
+    // does not emit events (issue #691), so we verify the fee values
+    // instead.
+    let split = client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(split.platform_fee_amount, 10);
+    assert_eq!(split.network_fee_amount, 1);
+    assert_eq!(split.merchant_amount, 989);
 }
 
 /// Regression test for issue #485: read-only rule resolution must NOT

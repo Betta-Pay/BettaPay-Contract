@@ -170,4 +170,17 @@ impl SettlementContract {
             None
         }
     }
+
+    /// Returns the effective settlement rule for a merchant, applying the full
+    /// resolution chain: merchant-specific rule → global default → governance
+    /// fee config → bootstrap fallback.
+    ///
+    /// Unlike [`get_settlement_rule`](Self::get_settlement_rule) (which returns
+    /// `None` when no merchant-specific rule is stored) and [`get_default_rule`](Self::get_default_rule) (which returns `None` when
+    /// no global default is stored), this method always returns a rule — it
+    /// follows the same resolution that the write and payment paths use
+    /// internally.
+    pub fn get_effective_rule(env: Env, merchant: Address) -> SettlementRule {
+        read_rule_or_default(&env, merchant)
+    }
 }

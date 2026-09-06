@@ -84,6 +84,7 @@ fn execute_rejects_operation_that_only_collides_on_hash() {
 
     // Would have executed and registered the merchant under the pre-fix
     // behaviour, since only the hash was checked.
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
