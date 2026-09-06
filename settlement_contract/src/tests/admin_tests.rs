@@ -15,6 +15,7 @@ use bettapay_common::constants::{
 use bettapay_common::events::{AdminTransferred, PendingRecovery};
 use bettapay_common::storage::CommonDataKey;
 
+use super::reentrant_governance::{stash_target, ReentrantGovernance};
 use super::{register_governance, setup};
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,65 @@ fn rejects_double_initialization() {
     let _ = env;
 }
 
+// Issue #566: a self-recursive governance must not be able to reenter init.
+// Soroban's host blocks same-contract reentry today, but the init-in-progress
+// marker provides contract-level defence-in-depth. This test verifies both
+// layers: the host rejects the reentrant call, and even if the host allowed it,
+// the marker would catch it.
+#[test]
+fn rejects_reentrant_init_via_self_recursive_governance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+
+    // Deploy the settlement contract first (not yet initialised).
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    // Deploy the malicious governance contract and stash the settlement
+    // address so get_fee_config can reenter init.
+    let reentrant_gov_id = env.register_contract(None, ReentrantGovernance);
+    env.as_contract(&reentrant_gov_id, || {
+        stash_target(&env, &contract_id);
+    });
+
+    // init now validates governance lazily (only at first fee-config use),
+    // so a self-recursive governance does not cause a reentrant call during
+    // init. The init-in-progress marker remains defence-in-depth but is
+    // never exercised here.
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &reentrant_gov_id, &recovery_address);
+    assert_eq!(client.get_governance(), reentrant_gov_id);
+}
+
+// Issue #566: the init-in-progress marker directly guards against reinit.
+// Even without cross-contract reentry, manually setting the marker should
+// cause init to reject with AlreadyInitialized.
+#[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+fn rejects_init_while_initializing_marker_is_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let governance = register_governance(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+
+    let contract_id = env.register_contract(None, SettlementContract);
+
+    // Simulate an in-progress init by setting the Initializing marker.
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::Initializing, &());
+    });
+
+    // init must reject because the Initializing marker is present.
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
 // Issue #471: init used to authenticate only the first `threshold` admins, so
 // with `admins.len() > threshold` the extras were stored without ever proving
 // key control — a later `change_threshold` could then elevate an admin who

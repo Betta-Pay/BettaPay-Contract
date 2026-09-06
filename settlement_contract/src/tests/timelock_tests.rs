@@ -711,6 +711,9 @@ fn test_execute_uniform_auth_all_variants() {
     assert!(client.get_settlement_rule(&merchant4).is_none());
 
     client.execute(&dummy_executor, &op_set_default_rule);
+    assert!(client.get_settlement_rule(&merchant4).is_none());
+
+    client.execute(&dummy_executor, &op_set_default_rule);
     client.execute(&Address::generate(&env), &op_clear_settlement_rule);
     assert!(client.get_settlement_rule(&merchant4).is_none());
 

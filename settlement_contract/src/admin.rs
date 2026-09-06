@@ -50,7 +50,15 @@ impl SettlementContract {
         }
         // Gate initialization to the deployer to prevent front-running (issue #684).
         deployer.require_auth();
+        if env.storage().instance().has(&DataKey::Initializing) {
+            panic_with_error!(&env, SettlementError::AlreadyInitialized);
+        }
         validate_admins_and_threshold(&env, &admins, threshold);
+
+        // Mark init as in-progress before any external call so that a
+        // self-recursive governance contract cannot reenter this function.
+        env.storage().instance().set(&DataKey::Initializing, &());
+
         validate_governance(&env, &governance);
         validate_nonzero_address(
             &env,
@@ -68,6 +76,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+
+        // Init is complete — remove the in-progress marker.
+        env.storage().instance().remove(&DataKey::Initializing);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
