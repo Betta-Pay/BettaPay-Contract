@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Vec};
 
 // `Bps` and `SettlementRule` are defined in `bettapay_common::types` (moved
 // there so the shared event builders can take a typed payload, see issue
@@ -72,6 +72,23 @@ pub struct GovFeeConfig {
     pub network_fee_bps: u32,
 }
 
+/// Storage value for a pending [`Operation`] scheduled via `schedule()`.
+///
+/// The `sha256` of the operation's XDR encoding is used as the storage key
+/// (see `DataKey::ScheduledOperation`) purely as a fixed-size index — it is
+/// not trusted as the sole proof of what was scheduled. The full
+/// `operation_xdr` is kept alongside `execute_at` so `execute()`/`cancel()`
+/// can verify the operation they were given is byte-for-byte the one that
+/// was scheduled under that hash, rather than assuming a hash match implies
+/// content equality (issue #570: a hash collision must not let an
+/// unscheduled operation silently ride an unrelated pending slot).
+#[derive(Clone)]
+#[contracttype]
+pub struct ScheduledOp {
+    pub operation_xdr: Bytes,
+    pub execute_at: u64,
+}
+
 // Admin, RecoveryAddress, PendingRecovery, and Paused live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
@@ -122,4 +139,11 @@ pub(crate) enum DataKey {
     Payment(Address, BytesN<32>),
     /// Storage key for a scheduled operation.
     ScheduledOperation(BytesN<32>),
+    /// Instance — stored at `init` to gate initialization to the deployer
+    /// and prevent front-running (issue #684).
+    Deployer,
+    /// Instance-storage schema version (u32) written at `init`. Baseline for
+    /// the first storage migration, mirroring governance_contract's
+    /// `DataKey::SchemaVersion` (issue #507, issue #704).
+    SchemaVersion,
 }

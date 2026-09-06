@@ -15,6 +15,24 @@
 //! reads back identically through `bettapay_common::CommonDataKey::Paused`,
 //! which is what allows both contracts to share this enum without disturbing
 //! any existing storage entry.
+//!
+//! ## Pause helpers
+//!
+//! The full pause lifecycle — flag storage, event emission, and idempotency
+//! semantics — is consolidated here so neither contract re-implements it:
+//!
+//! | Helper | What it does |
+//! |---|---|
+//! | [`is_paused`] | Reads the flag; bumps instance TTL |
+//! | [`set_paused`] | Writes the flag (raw; no event) |
+//! | [`apply_pause`] | Writes `true` **and** emits `paused` event |
+//! | [`apply_unpause`] | Writes `false` **and** emits `unpaused` event |
+//!
+//! Contracts call [`apply_pause`] / [`apply_unpause`] from their `pause` /
+//! `unpause` entry-points after verifying admin auth and idempotency (which
+//! must panic with contract-specific error types and therefore cannot live
+//! here). The `assert_not_paused` guards in each contract remain thin
+//! wrappers that call [`is_paused`] and panic with their own `Error::Paused`.
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
@@ -66,6 +84,27 @@ pub fn set_paused(env: &Env, paused: bool) {
     env.storage()
         .instance()
         .set(&CommonDataKey::Paused, &paused);
+}
+
+/// Atomically sets the pause flag and emits the canonical `paused` event.
+///
+/// This is the single implementation of the pause *action* shared by every
+/// BettaPay contract. Callers are still responsible for verifying admin
+/// auth and checking idempotency (via [`is_paused`]) before calling this,
+/// since those checks produce contract-specific errors that cannot live here.
+pub fn apply_pause(env: &Env, admin: &Address) {
+    set_paused(env, true);
+    crate::events::emit_paused(env, admin);
+}
+
+/// Atomically clears the pause flag and emits the canonical `unpaused` event.
+///
+/// This is the single implementation of the unpause *action* shared by every
+/// BettaPay contract. Callers are still responsible for verifying admin
+/// auth and checking idempotency (via [`is_paused`]) before calling this.
+pub fn apply_unpause(env: &Env, admin: &Address) {
+    set_paused(env, false);
+    crate::events::emit_unpaused(env, admin);
 }
 
 /// Returns the first entry of a stored multisig admin list.
@@ -169,12 +208,20 @@ mod compatibility_tests {
     fn common_data_key_encoding_matches_legacy() {
         let env = Env::default();
         let mut map: soroban_sdk::Map<Val, u32> = soroban_sdk::Map::new(&env);
-        
+
         map.set(LegacyDataKey::RecoveryAddress.into_val(&env), 1u32);
-        assert_eq!(map.get(CommonDataKey::RecoveryAddress.into_val(&env)), Some(1u32), "RecoveryAddress encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::RecoveryAddress.into_val(&env)),
+            Some(1u32),
+            "RecoveryAddress encoding mismatch"
+        );
 
         map.set(LegacyDataKey::PendingRecovery.into_val(&env), 2u32);
-        assert_eq!(map.get(CommonDataKey::PendingRecovery.into_val(&env)), Some(2u32), "PendingRecovery encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::PendingRecovery.into_val(&env)),
+            Some(2u32),
+            "PendingRecovery encoding mismatch"
+        );
 
         // Note: Paused was also a unit variant in the legacy DataKey.
         // We'll just define another legacy enum for it or reuse the same.
@@ -184,11 +231,19 @@ mod compatibility_tests {
             Paused,
             SystemParam(soroban_sdk::Symbol),
         }
-        
+
         map.set(LegacyDataKey2::Paused.into_val(&env), 3u32);
-        assert_eq!(map.get(CommonDataKey::Paused.into_val(&env)), Some(3u32), "Paused encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Paused.into_val(&env)),
+            Some(3u32),
+            "Paused encoding mismatch"
+        );
 
         map.set(LegacyDataKey::Threshold.into_val(&env), 4u32);
-        assert_eq!(map.get(CommonDataKey::Threshold.into_val(&env)), Some(4u32), "Threshold encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Threshold.into_val(&env)),
+            Some(4u32),
+            "Threshold encoding mismatch"
+        );
     }
 }

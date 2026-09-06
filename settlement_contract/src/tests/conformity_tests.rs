@@ -12,7 +12,7 @@
 use crate::errors::SettlementError;
 use governance_contract::GovernanceError;
 
-fn governance_codes() -> [(&'static str, u32); 16] {
+fn governance_codes() -> [(&'static str, u32); 17] {
     [
         (
             "AlreadyInitialized",
@@ -40,18 +40,22 @@ fn governance_codes() -> [(&'static str, u32); 16] {
             GovernanceError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", GovernanceError::InvalidThreshold as u32),
+        (
+            "RecoveryAlreadyPending",
+            GovernanceError::RecoveryAlreadyPending as u32,
+        ),
+        ("AlreadyPaused", GovernanceError::AlreadyPaused as u32),
+        ("AlreadyUnpaused", GovernanceError::AlreadyUnpaused as u32),
         ("AnchorMissing", GovernanceError::AnchorMissing as u32),
         (
             "InvalidParamValue",
             GovernanceError::InvalidParamValue as u32,
         ),
-        ("AlreadyPaused", GovernanceError::AlreadyPaused as u32),
-        ("AlreadyUnpaused", GovernanceError::AlreadyUnpaused as u32),
         ("SameAdmin", GovernanceError::SameAdmin as u32),
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 25] {
+fn settlement_codes() -> [(&'static str, u32); 27] {
     [
         (
             "AlreadyInitialized",
@@ -91,6 +95,12 @@ fn settlement_codes() -> [(&'static str, u32); 25] {
             SettlementError::InvalidWasmInterface as u32,
         ),
         ("InvalidThreshold", SettlementError::InvalidThreshold as u32),
+        (
+            "RecoveryAlreadyPending",
+            SettlementError::RecoveryAlreadyPending as u32,
+        ),
+        ("AlreadyPaused", SettlementError::AlreadyPaused as u32),
+        ("AlreadyUnpaused", SettlementError::AlreadyUnpaused as u32),
         ("MerchantExists", SettlementError::MerchantExists as u32),
         ("MerchantMissing", SettlementError::MerchantMissing as u32),
         (
@@ -101,7 +111,6 @@ fn settlement_codes() -> [(&'static str, u32); 25] {
             "MerchantRuleNotSet",
             SettlementError::MerchantRuleNotSet as u32,
         ),
-        ("EmptyAddress", SettlementError::EmptyAddress as u32),
         ("ZeroAddress", SettlementError::ZeroAddress as u32),
         (
             "InvalidPaymentReference",
@@ -117,6 +126,10 @@ fn settlement_codes() -> [(&'static str, u32); 25] {
         ),
         ("AmountOverflow", SettlementError::AmountOverflow as u32),
         ("PaymentOrphaned", SettlementError::PaymentOrphaned as u32),
+        (
+            "OperationHashCollision",
+            SettlementError::OperationHashCollision as u32,
+        ),
     ]
 }
 

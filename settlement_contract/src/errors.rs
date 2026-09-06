@@ -39,6 +39,12 @@ pub enum SettlementError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// A recovery is already pending; initiate_recovery cannot overwrite it.
+    RecoveryAlreadyPending = 15,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 17,
+    /// `unpause` was called while the contract was already unpaused.
+    AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
     /// The target merchant address is not registered. Raised by
@@ -50,9 +56,6 @@ pub enum SettlementError {
     DuplicatePaymentReference = 303,
     /// No merchant-specific rule has been set. The merchant will use the default rule or bootstrap fallback.
     MerchantRuleNotSet = 304,
-    /// The supplied address is an empty string.
-    /// Raised by `register_merchant` and `transfer_admin`.
-    EmptyAddress = 305,
     /// The supplied address is the zero‑address.
     /// Raised by `register_merchant` and `transfer_admin`.
     ZeroAddress = 306,
@@ -76,6 +79,17 @@ pub enum SettlementError {
     /// longer readable even if the merchant is later re-registered.
     /// Raised by `get_payment_reference` and `get_payments`.
     PaymentOrphaned = 315,
+    /// `schedule()` computed a `sha256(operation)` key that already holds a
+    /// *different* pending operation's data — an actual hash collision
+    /// rather than a duplicate schedule of the same operation. Also raised
+    /// by `execute()`/`cancel()` if the operation supplied does not
+    /// byte-for-byte match the operation stored under that hash.
+    OperationHashCollision = 316,
+    /// The stored admin list was empty when resolving the primary admin
+    /// (index `0`). Unreachable in practice — `write_admins` rejects an
+    /// empty admin list at write time — but `read_admin` surfaces this
+    /// instead of an untyped panic if that invariant is ever violated.
+    AdminSetEmpty = 317,
 }
 
 const _: () = {
@@ -98,13 +112,17 @@ const _: () = {
     );
     assert!(SettlementError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(SettlementError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(
+        SettlementError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
+    );
+    assert!(SettlementError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
+    assert!(SettlementError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
     assert!(SettlementError::MerchantExists as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::MerchantMissing as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(
         SettlementError::DuplicatePaymentReference as u32 >= error_codes::SETTLEMENT_RANGE_START
     );
     assert!(SettlementError::MerchantRuleNotSet as u32 >= error_codes::SETTLEMENT_RANGE_START);
-    assert!(SettlementError::EmptyAddress as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::ZeroAddress as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidPaymentReference as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidSettlementDelay as u32 >= error_codes::SETTLEMENT_RANGE_START);
@@ -117,4 +135,6 @@ const _: () = {
     assert!(SettlementError::AmountTooSmall as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::BatchTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::OperationHashCollision as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::AdminSetEmpty as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

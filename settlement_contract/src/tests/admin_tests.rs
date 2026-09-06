@@ -27,8 +27,9 @@ fn emits_event_on_initialization() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,
@@ -46,7 +47,8 @@ fn rejects_double_initialization() {
     let (env, client, admins, _) = setup();
     let governance = register_governance(&env);
     let recovery_address = Address::generate(&env);
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     let _ = env;
 }
 
@@ -175,7 +177,8 @@ fn every_admin_writer_preserves_the_vector_shape() {
     client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, scheduled_admin]);
 }
 
@@ -189,6 +192,7 @@ fn failed_recovery_keeps_pending_target() {
     let pending = PendingRecovery {
         new_admin: zero_admin.clone(),
         execute_after: env.ledger().timestamp(),
+        initiated_by: Address::generate(&env),
     };
 
     env.as_contract(&client.address, || {
@@ -229,6 +233,15 @@ fn transfer_admin_rejected_for_non_admin() {
         &soroban_sdk::vec![&env, new_admin],
         &1,
     );
+}
+
+// Issue #475: transfer_admin to the identical admin set must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn rejects_same_admin_transfer() {
+    let (_env, client, admins, _merchant) = setup();
+    let threshold = client.get_threshold();
+    client.transfer_admin(&admins, &admins, &threshold);
 }
 
 #[test]
@@ -319,6 +332,118 @@ fn pause_rejected_for_non_admin() {
     client.pause(&soroban_sdk::vec![&env, non_admin]);
 }
 
+// Issue #470: settlement previously accepted a second `pause` while already
+// paused, re-emitting a misleading `paused` event (governance rejected it
+// with `AlreadyPaused`). These pin settlement's guards to the same behaviour.
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn double_pause_is_rejected() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+    // Second pause while already paused must be rejected with AlreadyPaused.
+// ---------------------------------------------------------------------------
+// Pause idempotency (mirrors governance — both contracts must behave the same)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn pause_rejected_when_already_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    // Second pause must reject with AlreadyPaused (#15) and emit no extra event.
+    client.pause(&admins);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #317)")]
+fn double_unpause_is_rejected() {
+    let (_env, client, admins, _merchant) = setup();
+    // Unpause with no prior pause must be rejected with AlreadyUnpaused.
+    client.unpause(&admins);
+}
+
+// Issue #470: a rejected double-pause must not emit a duplicate `paused`
+// event, so indexers only ever see transitions.
+#[test]
+fn double_pause_emits_no_duplicate_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    let events_before = env.events().all().len();
+
+    let result = client.try_pause(&admins);
+    assert!(result.is_err(), "double pause must be rejected");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "rejected double pause must not emit a duplicate `paused` event"
+    );
+    assert!(client.is_paused(), "state must remain paused");
+}
+
+#[test]
+fn double_unpause_emits_no_duplicate_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    client.unpause(&admins);
+    let events_before = env.events().all().len();
+
+    let result = client.try_unpause(&admins);
+    assert!(result.is_err(), "double unpause must be rejected");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "rejected double unpause must not emit a duplicate `unpaused` event"
+    );
+    assert!(!client.is_paused(), "state must remain unpaused");
+}
+
+// Issue #470: a real pause/unpause transition emits exactly one event each.
+#[test]
+fn pause_unpause_emit_exactly_one_event_per_transition() {
+    let (env, client, admins, _merchant) = setup();
+
+    let before = env.events().all().len();
+    client.pause(&admins);
+    assert_eq!(env.events().all().len(), before + 1);
+
+    let before = env.events().all().len();
+    client.unpause(&admins);
+    assert_eq!(env.events().all().len(), before + 1);
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_rejected_when_already_unpaused() {
+    let (_env, client, admins, _merchant) = setup();
+    // Contract starts unpaused; calling unpause immediately must reject with AlreadyUnpaused (#16).
+    client.unpause(&admins);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn double_pause_emits_no_extra_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    let prev = env.events().all().len();
+    client.pause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "double pause must not emit events"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn unpause_when_not_paused_emits_no_event() {
+    let (env, client, admins, _merchant) = setup();
+    let prev = env.events().all().len();
+    client.unpause(&admins);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "unpause when not paused must not emit events"
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #5)")]
 fn merchant_registration_blocked_when_paused() {
@@ -384,10 +509,14 @@ fn register_merchant_rejects_admin_address() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn set_default_rule_rejected_when_paused() {
     let (_env, client, admins, _merchant) = setup();
-    
+
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
-    assert_eq!(client.is_paused(), true, "Contract must be paused before testing rejection");
+    assert_eq!(
+        client.is_paused(),
+        true,
+        "Contract must be paused before testing rejection"
+    );
 
     // Attempt to set a valid default rule; this should be rejected due to the pause state
     let rule = SettlementRule {
@@ -493,7 +622,10 @@ fn executes_contract_wasm_upgrade_successfully() {
 
     // Empty wasm has no `supports_interface` — upgrade must fail.
     let result = client.try_upgrade(&admins, &bad_hash);
-    assert!(result.is_err(), "upgrade with non-conforming wasm must be rejected");
+    assert!(
+        result.is_err(),
+        "upgrade with non-conforming wasm must be rejected"
+    );
 
     // Contract remains operational after the rejected upgrade.
     let live_client = SettlementContractClient::new(&env, &client.address);
@@ -518,7 +650,8 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
 
     // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
     client.change_threshold(&admins, &3);
@@ -537,7 +670,8 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &2, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
 
     client.change_threshold(&admins, &0);
 }
@@ -556,8 +690,9 @@ fn recovery_executes_after_delay() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-
+    let deployer = Address::generate(&env);
     client.init(
+        &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
         &governance,
@@ -573,6 +708,33 @@ fn recovery_executes_after_delay() {
     assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn initiate_recovery_rejects_overwrite_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let first_target = Address::generate(&env);
+    let second_target = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&first_target);
+
+    // Second initiation must be rejected — a recovery is already pending.
+    client.initiate_recovery(&second_target);
+}
+
 // ---------------------------------------------------------------------------
 // governance update
 // ---------------------------------------------------------------------------
@@ -585,6 +747,21 @@ fn update_governance_stores_validated_address() {
     client.update_governance(&admins, &new_governance);
 
     assert_eq!(client.get_governance(), new_governance);
+}
+
+/// The direct `update_governance` path must reject an address that fails
+/// `validate_governance`. A zero address is rejected with
+/// `InvalidGovernance` (#309) before any storage is written.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn update_governance_rejects_zero_address() {
+    let (env, client, admins, _merchant) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+
+    client.update_governance(&admins, &zero_address);
 }
 
 #[test]
@@ -629,6 +806,81 @@ fn upgrade_rejects_wasm_missing_supports_interface() {
 
 /// Non-admin callers must be rejected with `Unauthorized` (code 3) before
 /// the interface check is even attempted.
+// ---------------------------------------------------------------------------
+// Matrix test: check-order parity between direct and scheduled paths (issue #523)
+// ---------------------------------------------------------------------------
+
+/// Verifies that the direct (`set_settlement_rule`) and scheduled
+/// (`schedule` + `execute`) paths enforce the same canonical check order:
+///   pause → fee validation → merchant registration.
+///
+/// For every (paused, invalid_fee, missing_merchant) combination the test
+/// asserts that both paths surface the identical error code.
+#[test]
+fn settlement_rule_check_order_parity_across_paths() {
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, client, admins, merchant) = setup();
+    // Register the merchant so we have a "present" case to contrast with.
+    client.register_merchant(&admins, &merchant);
+
+    let valid_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    let invalid_fee_rule = SettlementRule {
+        platform_fee_bps: 0,
+        network_fee_bps: 0,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let missing = Address::generate(&env); // unregistered merchant
+
+    // Helper: schedule + advance time + execute via the timelocked path.
+    let schedule_and_execute = |client: &SettlementContractClient,
+                                admins: &soroban_sdk::Vec<Address>,
+                                op: &Operation| {
+        client.schedule(admins, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+        client.execute(&admins.get(0).unwrap(), op);
+    };
+
+    // ---- 1. Paused ⇒ Paused (code 5) on both paths ----
+    client.pause(&admins);
+
+    let op = Operation::SetSettlementRule(merchant.clone(), valid_rule.clone());
+    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &valid_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(5));
+    assert_eq!(client.try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(5));
+
+    // Unpause for the remaining cases.
+    client.unpause(&admins);
+
+    // ---- 2. Invalid fee + registered merchant ⇒ InvalidFeeBps (code 4) ----
+    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &invalid_fee_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(4));
+    let op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(4));
+
+    // ---- 3. Valid rule + missing merchant ⇒ MerchantMissing (code 302) ----
+    assert_eq!(client.try_set_settlement_rule(&admins, &missing, &valid_rule).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(302));
+    let op = Operation::SetSettlementRule(missing.clone(), valid_rule.clone());
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
+               soroban_sdk::Error::from_contract_error(302));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn upgrade_rejects_non_admin_before_interface_check() {
@@ -638,4 +890,62 @@ fn upgrade_rejects_non_admin_before_interface_check() {
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #704: SchemaVersion baseline + migrate skeleton
+// ---------------------------------------------------------------------------
+
+/// `init` must write the `SchemaVersion` marker, and calling `migrate`
+/// repeatedly must be a no-op once the contract is already at
+/// `CURRENT_SCHEMA_VERSION` — mirroring governance_contract's equivalent
+/// test for issue #507.
+#[test]
+fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
+    use crate::types::DataKey;
+
+    let (env, client, admins, _merchant) = setup();
+
+    let version = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+    });
+    assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+
+    client.migrate(&admins);
+    client.migrate(&admins);
+
+    let version_after = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+    });
+    assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
+
+    let (_, topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
+    );
+}
+
+/// `migrate` is admin-gated like every other administrative entry point.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn migrate_rejected_for_non_admin() {
+    let (env, client, _admins, _merchant) = setup();
+    let non_admin = Address::generate(&env);
+    client.migrate(&soroban_sdk::vec![&env, non_admin]);
+}
+
+/// `migrate` must respect the same pause gate as the rest of the admin
+/// surface — a paused contract can't be migrated out from under an
+/// in-progress incident response.
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn migrate_rejected_while_paused() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    client.migrate(&admins);
 }

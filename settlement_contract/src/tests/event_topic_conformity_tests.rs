@@ -126,7 +126,8 @@ fn threshold_changed_uses_canonical_topic() {
     let governance = register_governance(&env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admins, &1, &governance, &recovery);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
 
     client.change_threshold(&admins, &2);
     assert_eq!(
@@ -150,7 +151,11 @@ fn upgrade_uses_canonical_topic() {
     let result = client.try_upgrade(&admins, &bad_hash);
     assert!(result.is_err(), "non-conforming wasm must be rejected");
     // No event emitted on failure.
-    assert_eq!(env.events().all().len(), before, "no event on failed upgrade");
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no event on failed upgrade"
+    );
 }
 
 #[test]
@@ -241,7 +246,8 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
+    client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(
         last_topic(&env),
         Symbol::new(&env, events::OP_EXECUTED_EVENT)
@@ -257,20 +263,44 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 }
 
 #[test]
-fn bootstrap_fallback_uses_canonical_topic() {
+fn scheduled_operation_events_identify_the_executor() {
     let (env, client, admins, merchant) = setup();
+    let executor = Address::generate(&env);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&executor, &operation);
+
+    let events = env.events().all();
+    let mut actor = None;
+    for i in 0..events.len() {
+        let (_contract, topics, data) = events.get(i).unwrap();
+        if Symbol::from_val(&env, &topics.get(0).unwrap())
+            == Symbol::new(&env, events::MERCHANT_REGISTERED_EVENT)
+        {
+            actor = Some(Address::from_val(&env, &data));
+        }
+    }
+
+    assert_eq!(actor, Some(executor));
+}
+
+#[test]
+fn bootstrap_fallback_uses_canonical_topic() {
+    let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so this call falls all the way through to the
-    // bootstrap fallback rule.
-    let before = env.events().all().len();
-    client.calculate_fee_split(&merchant, &1_000);
-    assert!(env.events().all().len() > before);
-    assert_eq!(
-        last_topic(&env),
-        Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT)
-    );
+    // always returns None, so calculate_fee_split falls through to the
+    // bootstrap fallback rule. calculate_fee_split is a read-only path and
+    // does not emit events (issue #691), so we verify the fee values
+    // instead.
+    let split = client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(split.platform_fee_amount, 10);
+    assert_eq!(split.network_fee_amount, 1);
+    assert_eq!(split.merchant_amount, 989);
 }
 
 #[test]
