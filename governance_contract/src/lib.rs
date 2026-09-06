@@ -205,7 +205,7 @@ const SYSTEM_PARAM_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
 const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, Paused, and Threshold live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
 // contract's own storage without a migration.
