@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
@@ -33,17 +34,17 @@
 //!
 //! ## Settlement Boundary (Off-Chain Execution)
 //!
-//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a 
+//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a
 //! `payment_stored` event. It does **not** transfer tokens, hold funds, or expose an in-contract `settle` function.
 //!
 //! Settlement execution is intentionally designed to be **off-chain**:
 //! 1. **Indexers** listen to `payment_stored` events and read the `PaymentRecord` state.
-//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay: 
+//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay:
 //!    `current_ledger >= record.ledger + record.settlement_delay_ledger`.
-//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where 
+//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where
 //!    appropriate based on `auto_settle` preferences) and tracks settlement state externally.
 //!
-//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives 
+//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives
 //! enforcing standardized agreement parameters for off-chain consumers; they do not trigger on-chain state transitions.
 //!
 //! ## Event Conventions
@@ -124,6 +125,11 @@
 //!   admin-recovery flow itself must keep working while paused
 //! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
 //!
+//! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
+//! governance: pausing while already paused panics with `AlreadyPaused`, and
+//! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
+//! `unpaused` event is only ever emitted on an actual state transition.
+//!
 //! ## Event Convention
 //!
 //! This contract follows a consistent event emission pattern (see Issue #49):
@@ -184,7 +190,9 @@ use bettapay_common::constants::MIN_FEE_BPS;
 use soroban_sdk::contract;
 
 pub use errors::SettlementError;
-pub use types::{Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule};
+pub use types::{
+    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule,
+};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
@@ -221,8 +229,24 @@ pub(crate) const RULE_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 pub(crate) const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
+pub(crate) const SCHEDULED_OP_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
+pub(crate) const SCHEDULED_OP_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
 
 pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 2 * 24 * 60 * 60; // 48 hours
+
+/// The single interface version advertised by `supports_interface`.
+///
+/// `upgrade` probes the incoming Wasm with `supports_interface(SUPPORTED_INTERFACE_VERSION)`
+/// before committing the swap. Any Wasm that returns `false` (or traps) is
+/// rejected with `InvalidWasmInterface`. Increment this constant in a future
+/// Wasm update when a breaking API change requires callers to distinguish the
+/// new contract from this one (issue #48).
+pub(crate) const SUPPORTED_INTERFACE_VERSION: u32 = 1;
+
+/// The schema version this build expects. `init` writes this value and
+/// `migrate` advances any stored value below it. Mirrors
+/// governance_contract's `CURRENT_SCHEMA_VERSION` (issue #507, issue #704).
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 // Settlement-specific TTL policy for short-lived reads of admin / governance /
 // recovery addresses. Deliberately shorter than the protocol defaults so that

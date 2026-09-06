@@ -29,3 +29,10 @@ Thumbs.db
 .soroban/
 identity/
 *.secret
+
+# MiMoCode
+.mimocode/
+.mimocode
+
+# Dependencies
+node_modules/

@@ -4,13 +4,12 @@ use bettapay_common::events;
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_threshold, validate_nonzero_address,
-    verify_admin_auth,
+    assert_not_paused, is_merchant_registered_internal, read_fallback_rule, read_threshold,
+    validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -20,7 +19,6 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
-    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
     /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
@@ -30,7 +28,6 @@ impl SettlementContract {
         validate_nonzero_address(
             &env,
             &merchant,
-            SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
 
@@ -46,6 +43,12 @@ impl SettlementContract {
             }
         }
 
+        // The merchant must consent to its own registration — admin auth alone
+        // is not proof the merchant address is controlled by the party being
+        // registered, and would otherwise let an admin register arbitrary or
+        // squatted addresses as merchants.
+        merchant.require_auth();
+
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, SettlementError::MerchantExists);
@@ -55,6 +58,12 @@ impl SettlementContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+
+        // Remove any ArchivedMerchant tombstone from a prior registration so
+        // the re-registered merchant can read new payment records (issue #685).
+        let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+        env.storage().persistent().remove(&archived_key);
+
         env.events().publish(
             (
                 Symbol::new(&env, events::MERCHANT_REGISTERED_EVENT),
@@ -100,13 +109,11 @@ impl SettlementContract {
         if let Some(old_rule) = old_rule {
             env.storage().persistent().remove(&rule_key);
             // Emit the same canonical event shape as clear_settlement_rule
-            // (issue #491): (admin, removed, fallback). The fallback is read
-            // directly from storage so no bootstrap_fallback event is emitted.
-            let fallback = env
-                .storage()
-                .persistent()
-                .get::<_, SettlementRule>(&DataKey::DefaultRule)
-                .unwrap_or(BOOTSTRAP_DEFAULT_RULE);
+            // (issue #491): (admin, removed, fallback). Use the shared
+            // fallback chain (default → governance → bootstrap) so the event
+            // matches the rule that will actually govern the next payment
+            // (issue #689).
+            let fallback = read_fallback_rule(&env);
             events::emit_settlement_rule_cleared(&env, &merchant, &admin, &old_rule, &fallback);
         }
 

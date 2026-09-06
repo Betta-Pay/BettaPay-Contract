@@ -1,7 +1,7 @@
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
-    events::{self, PendingRecovery},
+    events::{PendingRecovery},
     storage::{self, CommonDataKey},
 };
 
@@ -10,6 +10,7 @@ use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 use crate::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
     READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    CURRENT_SCHEMA_VERSION,
 };
 
 pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
@@ -24,6 +25,22 @@ pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
 
 pub(crate) fn read_admin(env: &Env) -> Address {
     storage::primary_admin(&read_admins(env)).unwrap()
+}
+
+/// Returns the primary admin address, or the zero-address sentinel when the
+/// admin entry is missing or has no primary. Used only by `execute_recovery`,
+/// which must be able to repair a corrupt admin set (issue #514 / #687).
+pub(crate) fn read_optional_primary_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get::<_, Vec<Address>>(&DataKey::Admin)
+        .and_then(|admins| storage::primary_admin(&admins))
+        .unwrap_or_else(|| {
+            Address::from_string(&soroban_sdk::String::from_str(
+                env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ))
+        })
 }
 
 /// Validates and writes the complete admin configuration in its canonical
@@ -44,6 +61,17 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
+/// Returns the instance-storage schema version, defaulting to the current
+/// version when the marker is absent. Per governance_contract's convention,
+/// an entry written before the marker existed is treated as version 1
+/// (issue #507, issue #704).
+pub(crate) fn read_schema_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SchemaVersion)
+        .unwrap_or(CURRENT_SCHEMA_VERSION)
+}
+
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {
     if threshold == 0 || threshold > admins.len() {
         panic_with_error!(env, SettlementError::InvalidThreshold);
@@ -56,7 +84,6 @@ pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, th
         validate_nonzero_address(
             env,
             &admin,
-            SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
         for j in (i + 1)..admins.len() {
@@ -114,33 +141,42 @@ pub(crate) fn read_recovery_address(env: &Env) -> Address {
 }
 
 pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
-    env.storage()
+    // Decode by hand so a pending recovery written before `initiated_by`
+    // existed (pre-issue #560) is refused with `RecoveryNotPending` instead
+    // of surfacing a host-level conversion panic. Refusing is deliberate:
+    // an old-format record must never be treated as a valid pending
+    // recovery (default-deny, never default-allow).
+    let val = env
+        .storage()
         .instance()
-        .get::<_, PendingRecovery>(&CommonDataKey::PendingRecovery)
-        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending))
+        .get::<_, Val>(&CommonDataKey::PendingRecovery)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::RecoveryNotPending));
+    PendingRecovery::try_from_val(env, &val)
+        .unwrap_or_else(|_| panic_with_error!(env, SettlementError::RecoveryNotPending))
 }
 
+/// Validates that the provided governance address is a non-zero, non-empty address.
+///
+/// Note (Issue #124): This function intentionally avoids making a cross-contract call
+/// to `governance` during `init` or `update_governance`. Making a cross-contract call
+/// during initialization creates a reentrancy / DoS vector where a self-recursive or
+/// broken governance contract can call back into the uninitialized settlement contract
+/// (causing `NotInitialized` panics) or trap. Governance fee config validity is
+/// verified at first use via `try_invoke_contract` in [`read_governance_fee_rule`]
+/// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(
         env,
         governance,
         SettlementError::InvalidGovernance,
-        SettlementError::InvalidGovernance,
     );
-    let args: Vec<Val> = Vec::new(env);
-    let _: Option<GovFeeConfig> =
-        env.invoke_contract(governance, &Symbol::new(env, "get_fee_config"), args);
 }
 
 pub(crate) fn validate_nonzero_address(
     env: &Env,
     address: &Address,
-    empty_error: SettlementError,
     zero_error: SettlementError,
 ) {
-    if address.to_string().is_empty() {
-        panic_with_error!(env, empty_error);
-    }
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, zero_error);
     }
@@ -220,12 +256,9 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
     let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
-        .persistent()
+        .instance()
         .get::<_, SettlementRule>(&default_key)
     {
-        env.storage()
-            .persistent()
-            .extend_ttl(&default_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
         return rule;
     }
     // Protocol fee source: governance's GovFeeConfig, when available.
@@ -233,10 +266,29 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
         return rule;
     }
     // Final fallback keeps the contract usable before any config is stored.
-    env.events().publish(
-        (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
-        BOOTSTRAP_DEFAULT_RULE,
-    );
+    // No event emitted here — the hot path runs this on every payment and
+    // event spam would burn unnecessary compute (issue #691).
+    BOOTSTRAP_DEFAULT_RULE
+}
+
+/// Reads the effective fallback rule without a merchant-specific override,
+/// mirroring the fallback chain in [`read_rule_or_default`] (default →
+/// governance → bootstrap) but **without** emitting a `bootstrap_fallback`
+/// event. Used by event-emitting paths (`clear_settlement_rule`,
+/// `unregister_merchant`) where the returned rule is included in a different
+/// event payload and a separate bootstrap event would be misleading (issue #689).
+pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
+    let default_key = DataKey::DefaultRule;
+    if let Some(rule) = env
+        .storage()
+        .instance()
+        .get::<_, SettlementRule>(&default_key)
+    {
+        return rule;
+    }
+    if let Some(rule) = read_governance_fee_rule(env) {
+        return rule;
+    }
     BOOTSTRAP_DEFAULT_RULE
 }
 
@@ -273,6 +325,26 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         Ok(Ok(None)) => None,
         // Governance call failed (contract error or host error).
         _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    }
+}
+
+/// Reads the minimum payment amount from the governance contract's system
+/// parameters, falling back to [`crate::MIN_PAYMENT_AMOUNT`] (100) when the
+/// parameter is unset or governance is unreachable (issue #690).
+pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
+    let governance: Option<Address> = env.storage().instance().get(&DataKey::Governance);
+    let Some(governance) = governance else {
+        return crate::MIN_PAYMENT_AMOUNT;
+    };
+    let mut args = Vec::<Val>::new(env);
+    args.push_back(Symbol::new(env, "min_payment").to_val());
+    match env.try_invoke_contract::<Option<i128>, SettlementError>(
+        &governance,
+        &Symbol::new(env, "get_system_param"),
+        args,
+    ) {
+        Ok(Ok(Some(min))) => min,
+        _ => crate::MIN_PAYMENT_AMOUNT,
     }
 }
 
