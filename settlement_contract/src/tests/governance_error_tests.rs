@@ -46,37 +46,24 @@ mod panicking_gov {
 
 use panicking_gov::PanickingGovernance;
 
-// ---------------------------------------------------------------------------
-// Malformed governance stub — returns a 1-field struct where GovFeeConfig
-// expects 2 fields (issue #483).
-// ---------------------------------------------------------------------------
+// A second failing-governance stub that returns a *typed error* rather than
+// trapping. This exercises the `Ok(Err(_))` branch of `try_invoke_contract`
+// (a contract that deliberately rejects the read), as opposed to the trap
+// branch exercised by `PanickingGovernance`.
+mod erroring_gov {
+    use crate::errors::SettlementError;
+    use crate::GovFeeConfig;
+    use soroban_sdk::{contract, contractimpl, Env};
 
-mod malformed_gov {
-    use soroban_sdk::{contract, contractimpl, contracttype, Env};
-
-    /// A 1-field config struct: only `platform_fee_bps`, missing
-    /// `network_fee_bps`. When the settlement contract attempts to
-    /// deserialize this into `Option<GovFeeConfig>`, the missing field
-    /// causes a deserialization failure that must surface as
-    /// `GovernanceCallFailed`.
-    #[derive(Clone)]
-    #[contracttype]
-    pub struct OneFieldFeeConfig {
-        pub platform_fee_bps: u32,
-    }
-
+    /// A governance stub whose `get_fee_config` returns a typed error.
     #[contract]
-    pub struct MalformedGovernance;
+    pub struct ErroringGovernance;
 
     #[contractimpl]
-    impl MalformedGovernance {
-        /// Returns a 1-field config where the settlement contract expects
-        /// 2 fields (platform_fee_bps + network_fee_bps). This simulates
-        /// a governance contract upgrade that forgot the network fee field.
-        pub fn get_fee_config(_env: Env) -> Option<OneFieldFeeConfig> {
-            Some(OneFieldFeeConfig {
-                platform_fee_bps: 200,
-            })
+    impl ErroringGovernance {
+        #[allow(unused_variables)]
+        pub fn get_fee_config(env: Env) -> Result<Option<GovFeeConfig>, SettlementError> {
+            Err(SettlementError::GovernanceCallFailed)
         }
     }
 }
