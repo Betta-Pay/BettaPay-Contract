@@ -1,12 +1,12 @@
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Symbol, Vec};
 
+use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
     constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS},
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
 };
-use bettapay_common::upgrade::probe_supports_interface;
 
 use crate::errors::SettlementError;
 use crate::storage::{
@@ -135,11 +135,7 @@ impl SettlementContract {
     pub fn initiate_recovery(env: Env, new_admin: Address) {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
-        validate_nonzero_address(
-            &env,
-            &new_admin,
-            SettlementError::InvalidAdmin,
-        );
+        validate_nonzero_address(&env, &new_admin, SettlementError::InvalidAdmin);
 
         // Issue #468: reject a second initiation while a recovery is already
         // pending — silently overwriting the original target would hide the
@@ -189,11 +185,7 @@ impl SettlementContract {
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
-        validate_nonzero_address(
-            &env,
-            &new_recovery,
-            SettlementError::InvalidRecoveryAddress,
-        );
+        validate_nonzero_address(&env, &new_recovery, SettlementError::InvalidRecoveryAddress);
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
@@ -420,9 +412,11 @@ impl SettlementContract {
                 execute_at,
             },
         );
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, SCHEDULED_OP_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP);
+        env.storage().persistent().extend_ttl(
+            &key,
+            SCHEDULED_OP_TTL_THRESHOLD,
+            SCHEDULED_OP_TTL_BUMP,
+        );
 
         env.events().publish(
             (Symbol::new(&env, events::OP_SCHEDULED_EVENT), op_hash),
@@ -487,7 +481,10 @@ impl SettlementContract {
         // the compromised admin are blocked, including an upgrade or an admin
         // transfer. The check runs before the scheduled key is consumed, so a
         // vetoed operation stays in the queue until the recovery is resolved.
-        if env.storage().instance().has(&CommonDataKey::PendingRecovery)
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
             && !matches!(operation, Operation::CancelRecovery)
         {
             panic_with_error!(&env, SettlementError::RecoveryDelayActive);

@@ -1,6 +1,4 @@
-use soroban_sdk::{
-    panic_with_error, Address, Env, IntoVal, Map, Symbol, TryFromVal, Val, Vec,
-};
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Map, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::PendingRecovery,
@@ -10,9 +8,9 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 use crate::{
-    BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
-    READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
-    CURRENT_SCHEMA_VERSION,
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
+    MERCHANT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
+    RULE_TTL_THRESHOLD,
 };
 
 pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
@@ -86,11 +84,7 @@ pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, th
     }
     for i in 0..admins.len() {
         let admin = admins.get(i).unwrap();
-        validate_nonzero_address(
-            env,
-            &admin,
-            SettlementError::ZeroAddress,
-        );
+        validate_nonzero_address(env, &admin, SettlementError::ZeroAddress);
         for j in (i + 1)..admins.len() {
             if admin == admins.get(j).unwrap() {
                 panic_with_error!(env, SettlementError::InvalidAdmin);
@@ -173,18 +167,10 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
 /// verified at first use via `try_invoke_contract` in [`read_governance_fee_rule`]
 /// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
-    validate_nonzero_address(
-        env,
-        governance,
-        SettlementError::InvalidGovernance,
-    );
+    validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
 }
 
-pub(crate) fn validate_nonzero_address(
-    env: &Env,
-    address: &Address,
-    zero_error: SettlementError,
-) {
+pub(crate) fn validate_nonzero_address(env: &Env, address: &Address, zero_error: SettlementError) {
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, zero_error);
     }
@@ -377,7 +363,6 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
     };
     let mut args = Vec::<Val>::new(env);
     args.push_back(Symbol::new(env, "min_payment").into_val(env));
-    args.push_back(Symbol::new(env, "min_payment").to_val());
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),

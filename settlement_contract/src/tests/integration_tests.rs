@@ -10,8 +10,8 @@
 
 use crate::*;
 use proptest::prelude::*;
-use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::testutils::storage::Persistent;
+use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol, TryFromVal, Vec};
 
 use bettapay_common::constants::{BPS_DENOMINATOR, RECOVERY_DELAY_SECONDS};
@@ -904,7 +904,11 @@ fn get_payment_reference_allows_unauthenticated_indexer_reads() {
 
     // Turn off auth mocking: public reads must not need the merchant's key.
     env.set_auths(&[]);
-    let result = settle_client.get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env, merchant.clone()]);
+    let result = settle_client.get_payment_reference(
+        &merchant,
+        &reference,
+        &soroban_sdk::vec![&env, merchant.clone()],
+    );
     assert!(
         result.is_some(),
         "unauthenticated indexer read must return the stored payment"
@@ -1341,7 +1345,11 @@ fn batch_and_singular_reads_yield_identical_ttl_outcomes() {
 
     // One record goes through get_payment_reference, the other through
     // get_payments, from the same starting TTL and the same ledger sequence.
-    settle_client.get_payment_reference(&merchant, &ref_single, &soroban_sdk::vec![&env, merchant.clone()]);
+    settle_client.get_payment_reference(
+        &merchant,
+        &ref_single,
+        &soroban_sdk::vec![&env, merchant.clone()],
+    );
     let refs = soroban_sdk::vec![&env, ref_batch.clone()];
     settle_client.get_payments(&merchant, &refs);
 
@@ -1462,7 +1470,10 @@ fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
     assert_eq!(effective.platform_fee_bps, 400);
     assert_eq!(effective.network_fee_bps, 150);
     assert_eq!(effective.settlement_delay_ledger, 5);
-    assert_eq!(effective.auto_settle, true);
+    assert!(
+        effective.auto_settle,
+        "effective rule must carry auto_settle"
+    );
 
     let _ = env;
 }

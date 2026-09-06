@@ -930,7 +930,7 @@ pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) 
     let env = Env::default();
     env.mock_all_auths();
 
-        let deployer = Address::generate(&env);
+    let deployer = Address::generate(&env);
     let admin = Address::generate(&env);
     let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
@@ -1773,31 +1773,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #15)")]
-    fn initiate_recovery_rejects_overwrite_while_pending() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let recovery_address = Address::generate(&env);
-        let first_target = Address::generate(&env);
-        let second_target = Address::generate(&env);
-        let contract_id = env.register_contract(None, GovernanceContract);
-        let client = GovernanceContractClient::new(&env, &contract_id);
-        let deployer = Address::generate(&env);
-        client.init(
-            &deployer,
-            &vec![&env, admin.clone()],
-            &1,
-            &recovery_address,
-        );
-
-        client.initiate_recovery(&first_target);
-
-        // Second initiation must be rejected — a recovery is already pending.
-        client.initiate_recovery(&second_target);
-    }
-
-    #[test]
     fn execute_recovery_clears_pending_record() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1927,6 +1902,29 @@ mod tests {
             Symbol::from_val(&env, &unpause_topics.get(0).unwrap()),
             Symbol::new(&env, bettapay_common::events::UNPAUSED_EVENT)
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn initiate_recovery_rejects_overwrite_while_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admins = vec![&env, admin1, admin2];
+        let recovery_address = Address::generate(&env);
+        let first_target = Address::generate(&env);
+        let second_target = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery_address);
+
+        client.initiate_recovery(&first_target);
+
+        // Second initiation must be rejected — a recovery is already pending.
+        client.initiate_recovery(&second_target);
     }
 
     // -----------------------------------------------------------------------

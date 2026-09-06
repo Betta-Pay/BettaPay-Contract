@@ -1,9 +1,9 @@
 //! Regression coverage for the settlement administrative timelock.
 
 use crate::{Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, Env};
-use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 
 use super::setup;
 
@@ -24,24 +24,20 @@ fn scheduled_operation_executes_only_after_delay() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     client.execute(&admins.get(0).unwrap(), &operation);
 
-    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin.clone()]);
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, new_admin.clone()]
+    );
     assert_eq!(client.get_threshold(), 1);
 }
 
 #[test]
 fn recovery_vetoes_scheduled_operation_before_timelock_expiry() {
     let (env, client, admins, _merchant) = setup();
-    let operation = Operation::TransferAdmin(
-        soroban_sdk::vec![&env, Address::generate(&env)],
-        1,
-    );
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
     let admin_signers = soroban_sdk::vec![&env, admins.get(0).unwrap()];
 
-    client.schedule(
-        &admin_signers,
-        &operation,
-        &DEFAULT_TIMELOCK_DELAY_SECONDS,
-    );
+    client.schedule(&admin_signers, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger().with_mut(|ledger| {
         ledger.timestamp += RECOVERY_DELAY_SECONDS;
     });

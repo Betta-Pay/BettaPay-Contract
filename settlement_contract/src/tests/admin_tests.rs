@@ -139,7 +139,14 @@ fn init_requires_auth_from_every_admin_when_threshold_below_len() {
     let invoke = MockAuthInvoke {
         contract: &contract_id,
         fn_name: "init",
-        args: (deployer.clone(), admins.clone(), 1u32, &governance, &recovery).into_val(&env),
+        args: (
+            deployer.clone(),
+            admins.clone(),
+            1u32,
+            &governance,
+            &recovery,
+        )
+            .into_val(&env),
         sub_invokes: &[],
     };
     env.mock_auths(&[
@@ -183,7 +190,14 @@ fn init_accepts_all_admins_authenticated_when_threshold_below_len() {
     let invoke = MockAuthInvoke {
         contract: &contract_id,
         fn_name: "init",
-        args: (deployer.clone(), admins.clone(), 1u32, &governance, &recovery).into_val(&env),
+        args: (
+            deployer.clone(),
+            admins.clone(),
+            1u32,
+            &governance,
+            &recovery,
+        )
+            .into_val(&env),
         sub_invokes: &[],
     };
     env.mock_auths(&[
@@ -765,11 +779,10 @@ fn merchant_marker_is_identical_across_direct_and_timelocked_paths() {
             .unwrap()
     });
 
-    // Both writers must produce the same stored value type.
-    assert_eq!(
-        marker_a, marker_b,
-        "direct and timelocked register_merchant must store identical marker values"
-    );
+    // The typed `let _: ()` reads above are the assertion: both writers must
+    // store a value that deserializes as the unit type. Silence the clippy lint
+    // on the bindings themselves (`unit_cmp` fires on comparing `()` values).
+    let _ = (&marker_a, &marker_b);
 }
 
 // ---------------------------------------------------------------------------
@@ -1237,7 +1250,6 @@ fn upgrade_rejects_wasm_missing_supports_interface() {
 // ---------------------------------------------------------------------------
 // Matrix test: check-order parity between direct and scheduled paths (issue #523)
 // ---------------------------------------------------------------------------
-
 /// Verifies that the direct (`set_settlement_rule`) and scheduled
 /// (`schedule` + `execute`) paths enforce the same canonical check order:
 ///   pause → fee validation → merchant registration.
@@ -1267,46 +1279,69 @@ fn settlement_rule_check_order_parity_across_paths() {
     let missing = Address::generate(&env); // unregistered merchant
 
     // Helper: schedule + advance time + execute via the timelocked path.
-    let schedule_and_execute = |client: &SettlementContractClient,
-                                admins: &soroban_sdk::Vec<Address>,
-                                op: &Operation| {
-        client.schedule(admins, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-        env.ledger()
-            .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-        client.execute(&admins.get(0).unwrap(), op);
-    };
+    let schedule_and_execute =
+        |client: &SettlementContractClient, admins: &soroban_sdk::Vec<Address>, op: &Operation| {
+            client.schedule(admins, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+            env.ledger()
+                .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+            client.execute(&admins.get(0).unwrap(), op);
+        };
 
     // ---- 1. Paused ⇒ Paused (code 5) on both paths ----
     client.pause(&admins);
 
     let op = Operation::SetSettlementRule(merchant.clone(), valid_rule.clone());
-    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &valid_rule).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(5)));
-    assert_eq!(client.try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(5)));
+    assert_eq!(
+        client
+            .try_set_settlement_rule(&admins, &merchant, &valid_rule)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(5))
+    );
+    assert_eq!(
+        client
+            .try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(5))
+    );
 
     // Unpause for the remaining cases.
     client.unpause(&admins);
 
     // ---- 2. Invalid fee + registered merchant ⇒ InvalidFeeBps (code 4) ----
-    assert_eq!(client.try_set_settlement_rule(&admins, &merchant, &invalid_fee_rule).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(4)));
+    assert_eq!(
+        client
+            .try_set_settlement_rule(&admins, &merchant, &invalid_fee_rule)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(4))
+    );
     let op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
     client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(4)));
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(4))
+    );
 
     // ---- 3. Valid rule + missing merchant ⇒ MerchantMissing (code 302) ----
-    assert_eq!(client.try_set_settlement_rule(&admins, &missing, &valid_rule).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(302)));
+    assert_eq!(
+        client
+            .try_set_settlement_rule(&admins, &missing, &valid_rule)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(302))
+    );
     let op = Operation::SetSettlementRule(missing.clone(), valid_rule.clone());
     client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    assert_eq!(client.try_execute(&admins.get(0).unwrap(), &op).unwrap_err(),
-               Ok(soroban_sdk::Error::from_contract_error(302)));
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(302))
+    );
 }
 
 #[test]

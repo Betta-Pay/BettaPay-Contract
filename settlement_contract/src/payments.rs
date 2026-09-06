@@ -427,9 +427,11 @@ impl SettlementContract {
                 // that exclusively use the batch API don't have their
                 // payments silently expire (issue #703). `extend_ttl` only
                 // writes when the current TTL is below `threshold`.
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, PAYMENT_TTL_THRESHOLD, PAYMENT_TTL_BUMP);
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PAYMENT_TTL_THRESHOLD,
+                    PAYMENT_TTL_BUMP,
+                );
                 payments.push_back(payment);
             }
         }

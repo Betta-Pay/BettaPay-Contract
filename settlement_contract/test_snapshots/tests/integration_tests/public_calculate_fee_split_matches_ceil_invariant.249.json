@@ -215,7 +215,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 2174
+                        "u32": 4992
                       }
                     },
                     {
@@ -223,7 +223,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 231
+                        "u32": 2014
                       }
                     },
                     {
@@ -655,7 +655,7 @@
                                 "symbol": "network_fee_bps"
                               },
                               "val": {
-                                "u32": 2174
+                                "u32": 4992
                               }
                             },
                             {
@@ -663,7 +663,7 @@
                                 "symbol": "platform_fee_bps"
                               },
                               "val": {
-                                "u32": 231
+                                "u32": 2014
                               }
                             },
                             {
@@ -1078,7 +1078,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 2174
+                        "u32": 4992
                       }
                     },
                     {
@@ -1086,7 +1086,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 231
+                        "u32": 2014
                       }
                     },
                     {
@@ -1219,7 +1219,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 2174
+                        "u32": 4992
                       }
                     },
                     {
@@ -1227,7 +1227,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 231
+                        "u32": 2014
                       }
                     },
                     {
@@ -1294,7 +1294,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 137350594
+                    "lo": 694558239
                   }
                 }
               ]
@@ -1323,14 +1323,7 @@
               }
             ],
             "data": {
-              "vec": [
-                {
-                  "symbol": "min_payment"
-                },
-                {
-                  "symbol": "min_payment"
-                }
-              ]
+              "symbol": "min_payment"
             }
           }
         }
@@ -1346,89 +1339,13 @@
           "v0": {
             "topics": [
               {
-                "symbol": "log"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "string": "caught panic 'invalid number of input arguments: 1 expected, got 2' from contract function 'Symbol(obj#383)'"
-                },
-                {
-                  "symbol": "min_payment"
-                },
-                {
-                  "symbol": "min_payment"
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000003",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
+                "symbol": "fn_return"
               },
               {
-                "error": {
-                  "wasm_vm": "invalid_action"
-                }
+                "symbol": "get_system_param"
               }
             ],
-            "data": {
-              "string": "caught error from function"
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000008",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
-              },
-              {
-                "error": {
-                  "wasm_vm": "invalid_action"
-                }
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "string": "contract try_call failed"
-                },
-                {
-                  "symbol": "get_system_param"
-                },
-                {
-                  "vec": [
-                    {
-                      "symbol": "min_payment"
-                    },
-                    {
-                      "symbol": "min_payment"
-                    }
-                  ]
-                }
-              ]
-            }
+            "data": "void"
           }
         }
       },
@@ -1458,7 +1375,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 137350594
+                      "lo": 694558239
                     }
                   }
                 },
@@ -1469,7 +1386,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 104317775
+                      "lo": 207950736
                     }
                   }
                 },
@@ -1480,7 +1397,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 29860020
+                      "lo": 346723473
                     }
                   }
                 },
@@ -1491,7 +1408,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 3172799
+                      "lo": 139884030
                     }
                   }
                 }

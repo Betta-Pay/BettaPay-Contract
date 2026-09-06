@@ -710,14 +710,7 @@
               }
             ],
             "data": {
-              "vec": [
-                {
-                  "symbol": "min_payment"
-                },
-                {
-                  "symbol": "min_payment"
-                }
-              ]
+              "symbol": "min_payment"
             }
           }
         }
@@ -785,9 +778,6 @@
                   "vec": [
                     {
                       "symbol": "min_payment"
-                    },
-                    {
-                      "symbol": "min_payment"
                     }
                   ]
                 }
@@ -835,7 +825,7 @@
               }
             ],
             "data": {
-              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#245)'"
+              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#241)'"
             }
           }
         }

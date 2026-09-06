@@ -1253,14 +1253,7 @@
               }
             ],
             "data": {
-              "vec": [
-                {
-                  "symbol": "min_payment"
-                },
-                {
-                  "symbol": "min_payment"
-                }
-              ]
+              "symbol": "min_payment"
             }
           }
         }
@@ -1326,9 +1319,6 @@
                 },
                 {
                   "vec": [
-                    {
-                      "symbol": "min_payment"
-                    },
                     {
                       "symbol": "min_payment"
                     }
