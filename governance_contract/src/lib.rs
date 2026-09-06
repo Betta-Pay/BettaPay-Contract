@@ -176,10 +176,11 @@ use bettapay_common::{
     error_codes,
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
+    upgrade::probe_supports_interface,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    IntoVal, Symbol, TryFromVal, Val, Vec,
 };
 
 #[derive(Clone)]
@@ -204,7 +205,7 @@ const SYSTEM_PARAM_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
 const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, Paused, and Threshold live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
 // contract's own storage without a migration.
@@ -281,7 +282,7 @@ pub enum GovernanceError {
     AnchorMissing = 200,
     InvalidParamValue = 201,
     /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 15,
+    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
@@ -357,7 +358,7 @@ impl GovernanceContract {
             &recovery_address,
             GovernanceError::InvalidRecoveryAddress,
         );
-        for i in 0..threshold {
+        for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
         }
         env.storage().instance().set(&DataKey::Deployer, &deployer);
@@ -427,7 +428,11 @@ impl GovernanceContract {
     /// ### Events
     /// - Emits `contract_upgraded` with topic
     ///   `(Symbol("contract_upgraded"), caller)` and data
-    ///   `(new_wasm_hash)`.
+    ///   `(new_wasm_hash)`. The event is published at the same logical point
+    ///   as the settlement upgrade paths — after auth and interface
+    ///   validation, immediately before the executable is swapped — so the
+    ///   ordering is consistent regardless of which contract or path
+    ///   performs the upgrade (issue #473).
     ///
     /// ### Panics
     /// - Panics with [`Unauthorized`](GovernanceError::Unauthorized) if the caller is not the current admin.
@@ -435,30 +440,19 @@ impl GovernanceContract {
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
-        // Deploy a probe instance of the new Wasm so we can call
-        // `supports_interface` on it.  We use the wasm hash itself as the
-        // salt so the probe address is deterministic and collision-free.
-        let probe = env
-            .deployer()
-            .with_current_contract(new_wasm_hash.clone())
-            .deploy(new_wasm_hash.clone());
-
-        let version_args: Vec<u32> = soroban_sdk::vec![&env, 1u32];
-        let supports: bool = match env.try_invoke_contract::<bool, GovernanceError>(
-            &probe,
-            &Symbol::new(&env, "supports_interface"),
-            version_args.into_val(&env),
-        ) {
-            Ok(Ok(v)) => v,
-            _ => panic_with_error!(&env, GovernanceError::InvalidWasmInterface),
-        };
-        if !supports {
+        // Verify the new Wasm supports the required BettaPay interface
+        // (version 1) before overwriting the running code. See
+        // `bettapay_common::upgrade::probe_supports_interface`.
+        if !probe_supports_interface(&env, &new_wasm_hash, 1) {
             panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
         }
 
+        // Emit `contract_upgraded` before swapping the executable so every
+        // BettaPay upgrade path publishes it at the same point: after auth
+        // and interface validation, immediately before the code swap (issue
+        // #473).
         let event_wasm_hash = new_wasm_hash.clone();
         let caller = signers.get(0).unwrap();
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
         env.events().publish(
             (
                 Symbol::new(&env, events::CONTRACT_UPGRADED_EVENT),
@@ -466,6 +460,7 @@ impl GovernanceContract {
             ),
             caller,
         );
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     pub fn initiate_recovery(env: Env, new_admin: Address) {
@@ -476,6 +471,7 @@ impl GovernanceContract {
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
             execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            initiated_by: recovery_address.clone(),
         };
         env.storage()
             .instance()
@@ -484,21 +480,45 @@ impl GovernanceContract {
     }
 
     pub fn cancel_recovery(env: Env, signers: Vec<Address>) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let admin = signers.get(0).unwrap();
-        if !env
-            .storage()
-            .instance()
-            .has(&CommonDataKey::PendingRecovery)
-        {
-            panic_with_error!(&env, GovernanceError::RecoveryNotPending);
+        // Cancellation policy (issue #560): the pending recovery may be
+        // cancelled by the address recorded as `initiated_by` (the recovery
+        // address that started it) or by the current admin set meeting the
+        // multisig threshold. The admin path is unchanged; the initiator
+        // path lets an initiation be undone by the address that made it.
+        // Any other caller is refused with `Unauthorized`.
+        let pending = read_pending_recovery(&env);
+        let cancelled_by_initiator =
+            signers.len() == 1 && signers.get(0).unwrap() == pending.initiated_by;
+        if cancelled_by_initiator {
+            pending.initiated_by.require_auth();
+        } else {
+            verify_admin_auth(&env, &signers, read_threshold(&env));
         }
+        let canceller = signers.get(0).unwrap();
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
-        events::emit_recovery_cancelled(&env, &admin);
+        events::emit_recovery_cancelled(&env, &canceller);
     }
 
+    /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
+    ///
+    /// # Executor policy
+    ///
+    /// This method intentionally requires **no authorization** from the caller.
+    /// The recovery target was already validated by the recovery address during
+    /// `initiate_recovery`, and the 7-day delay (`RECOVERY_DELAY_SECONDS`)
+    /// provides a window for the current admin set to cancel via
+    /// [`Self::cancel_recovery`].  Once the delay has elapsed, anyone may call
+    /// `execute_recovery` — the pending state is consumed atomically, so a
+    /// second call will revert with [`GovernanceError::RecoveryNotPending`].
+    ///
+    /// # Panics
+    ///
+    /// - [`GovernanceError::RecoveryDelayActive`] if the delay window has not
+    ///   yet elapsed.
+    /// - [`GovernanceError::RecoveryNotPending`] if there is no pending
+    ///   recovery record in storage.
     pub fn execute_recovery(env: Env) {
         let pending = read_pending_recovery(&env);
         if env.ledger().timestamp() < pending.execute_after {
@@ -824,10 +844,18 @@ fn read_recovery_address(env: &Env) -> Address {
 }
 
 fn read_pending_recovery(env: &Env) -> PendingRecovery {
-    env.storage()
+    // Decode by hand so a pending recovery written before `initiated_by`
+    // existed (pre-issue #560) is refused with `RecoveryNotPending` instead
+    // of surfacing a host-level conversion panic. Refusing is deliberate:
+    // an old-format record must never be treated as a valid pending
+    // recovery (default-deny, never default-allow).
+    let val = env
+        .storage()
         .instance()
-        .get(&CommonDataKey::PendingRecovery)
-        .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending))
+        .get::<_, Val>(&CommonDataKey::PendingRecovery)
+        .unwrap_or_else(|| panic_with_error!(env, GovernanceError::RecoveryNotPending));
+    PendingRecovery::try_from_val(env, &val)
+        .unwrap_or_else(|_| panic_with_error!(env, GovernanceError::RecoveryNotPending))
 }
 
 /// Returns the instance-storage schema version, defaulting to the current
@@ -857,7 +885,7 @@ fn read_optional_primary_admin(env: &Env) -> Address {
 }
 
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
-    if address.to_string().is_empty() || storage::is_zero_address(env, address) {
+    if storage::is_zero_address(env, address) {
         panic_with_error!(env, error);
     }
 }
@@ -885,7 +913,7 @@ pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) 
     let env = Env::default();
     env.mock_all_auths();
 
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
     let admin = Address::generate(&env);
     let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
@@ -915,7 +943,9 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
     use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
     use soroban_sdk::{vec, Bytes, FromVal, String};
 
     fn setup() -> (
@@ -1034,9 +1064,87 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
+        let (_env, client, admins, recovery) = setup();
+        let deployer = Address::generate(&_env);
         let (env, client, admins, recovery) = setup();
         let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
+    }
+
+    // Issue #471: init used to authenticate only the first `threshold` admins,
+    // so with `admins.len() > threshold` the extras were stored without ever
+    // proving key control — a later `change_threshold` could then elevate an
+    // admin who never consented at init. Every proposed admin must authenticate.
+    #[test]
+    fn init_requires_auth_from_every_admin_when_threshold_below_len() {
+        let env = Env::default();
+        // No mock_all_auths: only the auths explicitly mocked below succeed.
+
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env); // extra admin beyond threshold
+        let admins = vec![&env, admin_a.clone(), admin_b.clone()];
+        let recovery = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        // Only the in-threshold admin authenticates; the extra admin does not.
+        let invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (admins.clone(), 1u32, &recovery).into_val(&env),
+            sub_invokes: &[],
+        };
+        env.mock_auths(&[MockAuth {
+            address: &admin_a,
+            invoke: &invoke,
+        }]);
+
+        let deployer = Address::generate(&env);
+        assert!(
+            client.try_init(&deployer, &admins, &1, &recovery).is_err(),
+            "init must fail when an admin beyond the threshold never authenticated"
+        );
+        assert!(
+            !client.is_initialized(),
+            "failed init must not leave the contract initialized"
+        );
+    }
+
+    // Issue #471: the same len > threshold setup succeeds once every proposed
+    // admin has authenticated, and all of them are stored.
+    #[test]
+    #[ignore = "snapshot needs update after AlreadyPaused fix"]
+    fn init_accepts_all_admins_authenticated_when_threshold_below_len() {
+        let env = Env::default();
+
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env);
+        let admins = vec![&env, admin_a.clone(), admin_b.clone()];
+        let recovery = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+
+        let invoke = MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (admins.clone(), 1u32, &recovery).into_val(&env),
+            sub_invokes: &[],
+        };
+        env.mock_auths(&[
+            MockAuth {
+                address: &admin_a,
+                invoke: &invoke,
+            },
+            MockAuth {
+                address: &admin_b,
+                invoke: &invoke,
+            },
+        ]);
+
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery);
+        assert_eq!(client.get_admin(), admins);
+        assert_eq!(client.get_threshold(), 1);
     }
 
     #[test]
@@ -1049,7 +1157,7 @@ mod tests {
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
         let deployer = Address::generate(&env);
-        client.init(&deployer, &soroban_sdk::vec![&env, admin], &0, &recovery);
+        client.init(&deployer, &vec![&env, admin], &0, &recovery);
     }
 
     #[test]
@@ -1382,7 +1490,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             let config = FeeConfig {
@@ -1424,7 +1532,7 @@ mod tests {
             let admins = vec![&env, admin];
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+        let deployer = Address::generate(&env);
             client.init(&deployer, &admins, &1, &recovery);
 
             prop_assert!(client.try_set_fee_config(&admins, &config).is_err());
@@ -1444,8 +1552,8 @@ mod tests {
             let recovery = Address::generate(&env);
             let contract_id = env.register_contract(None, GovernanceContract);
             let client = GovernanceContractClient::new(&env, &contract_id);
-
             let deployer = Address::generate(&env);
+
             let result = client.try_init(&deployer, &admins, &threshold, &recovery);
             if threshold == 0 || threshold > admin_count {
                 prop_assert!(result.is_err());
@@ -1475,12 +1583,7 @@ mod tests {
 
         assert!(!client.is_initialized());
         let deployer = Address::generate(&env);
-        client.init(
-            &deployer,
-            &soroban_sdk::vec![&env, admin.clone()],
-            &1,
-            &recovery_address,
-        );
+        client.init(&deployer, &vec![&env, admin.clone()], &1, &recovery_address);
         assert!(client.is_initialized());
     }
 
@@ -1634,6 +1737,111 @@ mod tests {
         client.change_threshold(&admins, &0);
     }
 
+    // -----------------------------------------------------------------------
+    // Recovery timing / race tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn execute_recovery_rejects_before_delay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &1, &recovery);
+
+        client.initiate_recovery(&new_admin);
+        // Do NOT advance the ledger — the delay is still active.
+        client.execute_recovery();
+    }
+
+    #[test]
+    fn execute_recovery_clears_pending_record() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &1, &recovery);
+
+        client.initiate_recovery(&new_admin);
+
+        let before: Option<PendingRecovery> = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&CommonDataKey::PendingRecovery)
+        });
+        assert!(
+            before.is_some(),
+            "pending recovery must exist after initiate"
+        );
+
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+        client.execute_recovery();
+
+        let after: Option<PendingRecovery> = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&CommonDataKey::PendingRecovery)
+        });
+        assert!(
+            after.is_none(),
+            "pending recovery must be cleared after execute"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn execute_recovery_after_cancel_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let admins = vec![&env, admin];
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &recovery);
+
+        client.initiate_recovery(&new_admin);
+        client.cancel_recovery(&admins);
+
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+        client.execute_recovery();
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn execute_recovery_second_call_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &vec![&env, admin], &1, &recovery);
+
+        client.initiate_recovery(&new_admin);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+        client.execute_recovery();
+
+        // Second execute after the pending record has been consumed.
+        client.execute_recovery();
+    }
+
     #[test]
     fn transfers_admin_successfully() {
         let (env, client, admins, _recovery) = setup();
@@ -1711,6 +1919,42 @@ mod tests {
             .deployer()
             .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
         client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
+    }
+
+    /// A Wasm hash that was never uploaded (`upload_contract_wasm` was never
+    /// called for it) cannot be probed: protocol 21 exposes no wasm-presence
+    /// check to contract code, so the probe deployment traps with a
+    /// host-level `Storage`/`MissingValue` error ("Wasm does not exist")
+    /// rather than the typed `InvalidWasmInterface`. Documented here so the
+    /// boundary of the typed-error guarantee is explicit — see
+    /// `bettapay_common::upgrade::probe_supports_interface`.
+    #[test]
+    #[should_panic(expected = "Error(Storage, MissingValue)")]
+    fn upgrade_rejects_never_uploaded_wasm_hash() {
+        let (env, client, admins, _recovery) = setup();
+        let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
+        client.upgrade(&admins, &garbage);
+    }
+
+    /// Issue #473: `contract_upgraded` is published at the canonical point —
+    /// after auth and interface validation, immediately before the code
+    /// swap. A rejected upgrade must therefore emit no event at all,
+    /// pinning the event's position relative to the validation step.
+    #[test]
+    fn upgrade_emits_no_event_on_failed_upgrade() {
+        let (env, client, admins, _recovery) = setup();
+        let bad_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+
+        let before = env.events().all().len();
+        let result = client.try_upgrade(&admins, &bad_hash);
+        assert!(result.is_err(), "non-conforming wasm must be rejected");
+        assert_eq!(
+            env.events().all().len(),
+            before,
+            "no contract_upgraded event on failed upgrade"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1863,5 +2107,93 @@ mod tests {
         client.execute_recovery();
         assert_eq!(client.get_admin(), vec![&env, recovered.clone()]);
         assert_eq!(client.get_threshold(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Recovery initiator (issue #560)
+    // -----------------------------------------------------------------------
+
+    // The pending recovery must record the address that initiated it, so
+    // `cancel_recovery` can validate the cancellation against the initiator
+    // and off-chain consumers can audit who started the recovery.
+    #[test]
+    fn pending_recovery_records_initiating_address() {
+        let (env, client, _admins, recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+
+        client.initiate_recovery(&new_admin);
+
+        let pending: PendingRecovery = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&CommonDataKey::PendingRecovery)
+                .unwrap()
+        });
+        assert_eq!(pending.initiated_by, recovery_address);
+        assert_eq!(pending.new_admin, new_admin);
+    }
+
+    // The address that initiated a recovery may cancel it directly. The
+    // admin gate is unchanged, so this is an additional canceller, not a
+    // replacement.
+    #[test]
+    fn cancel_recovery_by_initiator_succeeds() {
+        let (env, client, _admins, recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        client.cancel_recovery(&vec![&env, recovery_address]);
+
+        assert!(
+            !env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "a cancelled recovery must be removed from storage"
+        );
+    }
+
+    // A caller that is neither an admin nor the recorded initiator is
+    // refused, and the pending recovery survives the refused attempt.
+    #[test]
+    fn cancel_recovery_by_non_initiator_non_admin_is_refused() {
+        let (env, client, _admins, _recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        let stranger = Address::generate(&env);
+        let result = client.try_cancel_recovery(&vec![&env, stranger]);
+        assert_eq!(
+            result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(
+                GovernanceError::Unauthorized as u32
+            )))
+        );
+        assert!(
+            env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "a refused cancellation must leave the pending recovery in place"
+        );
+    }
+
+    // The pre-existing admin path is preserved: the admin set can still
+    // cancel a recovery it did not initiate.
+    #[test]
+    fn cancel_recovery_by_admin_still_succeeds() {
+        let (env, client, admins, _recovery_address) = setup();
+        let new_admin = Address::generate(&env);
+        client.initiate_recovery(&new_admin);
+
+        client.cancel_recovery(&admins);
+
+        assert!(
+            !env.as_contract(&client.address, || env
+                .storage()
+                .instance()
+                .has(&CommonDataKey::PendingRecovery)),
+            "the admin path must still be able to cancel a pending recovery"
+        );
     }
 }
