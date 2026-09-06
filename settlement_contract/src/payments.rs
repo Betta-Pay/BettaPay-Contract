@@ -112,8 +112,15 @@ mod tests {
             let denom = BPS_DENOMINATOR as i128;
             let expected_platform =
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
-            let expected_network =
+            let mut expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
+            // Mirror the implementation's clamp (issue #683): when the two
+            // ceil-rounded fee legs would exceed the gross, the network leg is
+            // clamped so total fees never exceed the amount.
+            if expected_platform + expected_network > amount {
+                expected_network = amount - expected_platform;
+            }
+            let expected_merchant =
             let _expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 
@@ -170,6 +177,11 @@ mod tests {
             let split = calculate_split(&env, amount, &rule);
 
             prop_assert!(split.platform_fee_amount > 0);
+            prop_assert_eq!(
+                split.platform_fee_amount + split.network_fee_amount,
+                amount,
+                "extreme fees must collect the full gross (issue #683)"
+            );
             // network_fee may be clamped to 0 when total fees exceed gross
             // (issue #683), but merchant must always be non-negative.
             prop_assert!(split.network_fee_amount >= 0);

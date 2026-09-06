@@ -292,6 +292,22 @@ fn bootstrap_fallback_uses_canonical_topic() {
     let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
+    let amount = 1_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
+    let before = env.events().all().len();
+    let split = client.calculate_fee_split(&merchant, &amount);
+
+    // Event silence: the hot path must not emit a bootstrap_fallback event.
+    assert_eq!(env.events().all().len(), before);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
     // No merchant rule, no default rule, and MockGovernance's get_fee_config
     // always returns None, so calculate_fee_split falls through to the
     // bootstrap fallback rule. calculate_fee_split is a read-only path and

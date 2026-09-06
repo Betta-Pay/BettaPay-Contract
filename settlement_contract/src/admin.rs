@@ -12,6 +12,8 @@ use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
+    read_recovery_address, read_rule_or_default, read_threshold, validate_admins_and_threshold,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
     validate_nonzero_address, verify_admin_auth, write_admins,
@@ -178,6 +180,24 @@ impl SettlementContract {
         );
     }
 
+    /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
+    ///
+    /// # Executor policy
+    ///
+    /// This method intentionally requires **no authorization** from the caller.
+    /// The recovery target was already validated by the recovery address during
+    /// `initiate_recovery`, and the 7-day delay (`RECOVERY_DELAY_SECONDS`)
+    /// provides a window for the current admin set to cancel via
+    /// [`Self::cancel_recovery`].  Once the delay has elapsed, anyone may call
+    /// `execute_recovery` — the pending state is consumed atomically, so a
+    /// second call will revert with [`SettlementError::RecoveryNotPending`].
+    ///
+    /// # Panics
+    ///
+    /// - [`SettlementError::RecoveryDelayActive`] if the delay window has not
+    ///   yet elapsed.
+    /// - [`SettlementError::RecoveryNotPending`] if there is no pending
+    ///   recovery record in storage.
     pub fn execute_recovery(env: Env) {
         let pending = read_pending_recovery(&env);
         if env.ledger().timestamp() < pending.execute_after {
@@ -441,14 +461,20 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         match operation {
-            Operation::UpdateGovernance(new_gov) => Self::_update_governance(&env, &executor, new_gov),
+            Operation::UpdateGovernance(new_gov) => {
+                Self::_update_governance(&env, &executor, new_gov)
+            }
             Operation::CancelRecovery => Self::_cancel_recovery(&env, &executor),
             Operation::TransferAdmin(new_admins, new_threshold) => {
                 Self::_transfer_admin(&env, &executor, new_admins, new_threshold)
             }
             Operation::Upgrade(wasm_hash) => Self::_upgrade(&env, &executor, wasm_hash),
-            Operation::RegisterMerchant(merchant) => Self::_register_merchant(&env, &executor, merchant),
-            Operation::UnregisterMerchant(merchant) => Self::_unregister_merchant(&env, &executor, merchant),
+            Operation::RegisterMerchant(merchant) => {
+                Self::_register_merchant(&env, &executor, merchant)
+            }
+            Operation::UnregisterMerchant(merchant) => {
+                Self::_unregister_merchant(&env, &executor, merchant)
+            }
             Operation::SetSettlementRule(merchant, rule) => {
                 Self::_set_settlement_rule(&env, &executor, merchant, rule)
             }
@@ -535,6 +561,12 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
+    fn _transfer_admin(
+        env: &Env,
+        _executor: &Address,
+        new_admins: Vec<Address>,
+        new_threshold: u32,
+    ) {
     fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
@@ -576,6 +608,12 @@ impl SettlementContract {
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     fn _register_merchant(env: &Env, executor: &Address, merchant: Address) {
         assert_not_paused(env);
+        validate_nonzero_address(
+            env,
+            &merchant,
+        );
+
+        let admin = read_admin(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
         let _admin = read_admin(env);
 
@@ -659,7 +697,12 @@ impl SettlementContract {
         );
     }
 
-    fn _set_settlement_rule(env: &Env, executor: &Address, merchant: Address, rule: SettlementRule) {
+    fn _set_settlement_rule(
+        env: &Env,
+        executor: &Address,
+        merchant: Address,
+        rule: SettlementRule,
+    ) {
         assert_not_paused(env);
 
         validate_fee_against_governance(env, &rule);

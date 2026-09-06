@@ -55,6 +55,7 @@ fn admin_transfer_and_threshold_change_require_real_authorization() {
     let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &recovery);
     env.mock_auths(&[]);
 

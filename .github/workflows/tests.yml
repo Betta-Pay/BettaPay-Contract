@@ -54,4 +54,4 @@ jobs:
         run: make check_codeowners
 
       - name: Make All
-        run: make all
+        run: make fmt check clippy test test_scripts check_codeowners

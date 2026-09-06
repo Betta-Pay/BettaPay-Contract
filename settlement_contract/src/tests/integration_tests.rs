@@ -1060,10 +1060,12 @@ fn payments_of_unregistered_merchant_are_orphaned() {
     );
 }
 
-/// The orphaning must survive re-registration: a re-registered merchant must
-/// not be able to resurrect the payment history of its earlier registration.
+/// Orphaning lasts until the merchant re-registers: while unregistered the
+/// `ArchivedMerchant` tombstone renders payment records unreadable (issue
+/// #490), but re-registration clears the tombstone so the merchant can read
+/// its records again (issue #685).
 #[test]
-fn reregistered_merchant_cannot_resurrect_orphaned_payments() {
+fn re_registration_clears_orphan_tombstone() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
@@ -1071,13 +1073,27 @@ fn reregistered_merchant_cannot_resurrect_orphaned_payments() {
     settle_client.store_payment_reference(&merchant, &reference, &1_000);
 
     settle_client.unregister_merchant(&settle_admins, &merchant);
-    settle_client.register_merchant(&settle_admins, &merchant);
-    assert!(settle_client.is_merchant_registered(&merchant));
+    assert!(!settle_client.is_merchant_registered(&merchant));
 
+    // While unregistered, reads are rejected with PaymentOrphaned (#315).
+    let orphaned = soroban_sdk::Error::from_contract_error(SettlementError::PaymentOrphaned as u32);
+    let result = settle_client.try_get_payment_reference(&merchant, &reference);
     // The tombstone outlives the registration cycle.
     let result =
         settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
     assert!(
+        matches!(result, Err(Ok(ref err)) if *err == orphaned),
+        "while unregistered the merchant's payments must be orphaned"
+    );
+
+    // Re-registration removes the tombstone (issue #685), restoring readability.
+    settle_client.register_merchant(&settle_admins, &merchant);
+    assert!(settle_client.is_merchant_registered(&merchant));
+    assert!(
+        settle_client
+            .get_payment_reference(&merchant, &reference)
+            .is_some(),
+        "re-registration must clear the tombstone and restore record readability"
         result.is_ok(),
         "re-registration clears the tombstone so payments are readable again"
     );
@@ -1419,7 +1435,7 @@ fn off_chain_settlement_readiness_logic() {
 }
 
 #[test]
-fn set_settlement_rule_emits_fallback_and_updated_events() {
+fn set_settlement_rule_skips_fallback_event_and_emits_updated() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
     settle_client.register_merchant(&settle_admins, &merchant);
 
@@ -1440,6 +1456,9 @@ fn set_settlement_rule_emits_fallback_and_updated_events() {
             continue;
         }
         let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+        if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
+            panic!("bootstrap_fallback must not be emitted on the rule-storage path (issue #689)");
+        } else if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
         if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
             update_found = true;
             assert!(

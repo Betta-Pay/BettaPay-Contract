@@ -28,6 +28,7 @@ fn emits_event_on_initialization() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let deployer = Address::generate(&env);
+
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -513,6 +514,8 @@ fn set_default_rule_rejected_when_paused() {
 
     // Pause the contract to simulate an emergency state
     client.pause(&admins);
+    assert!(
+        client.is_paused(),
     assert_eq!(
         client.is_paused(),
         true,
@@ -859,6 +862,7 @@ fn recovery_executes_after_delay() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let deployer = Address::generate(&env);
+
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -901,6 +905,135 @@ fn initiate_recovery_rejects_overwrite_while_pending() {
 
     // Second initiation must be rejected — a recovery is already pending.
     client.initiate_recovery(&second_target);
+}
+
+// ---------------------------------------------------------------------------
+// recovery timing / race tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn execute_recovery_rejects_before_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&new_admin);
+    // Do NOT advance the ledger — the delay is still active.
+    client.execute_recovery();
+}
+
+#[test]
+fn execute_recovery_clears_pending_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&new_admin);
+
+    // Pending record exists before the delay.
+    let before: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        before.is_some(),
+        "pending recovery must exist after initiate"
+    );
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+    client.execute_recovery();
+
+    let after: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        after.is_none(),
+        "pending recovery must be cleared after execute"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn execute_recovery_after_cancel_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, admin];
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
+
+    client.initiate_recovery(&new_admin);
+    client.cancel_recovery(&admins);
+
+    // Advance past the delay — but the recovery was cancelled.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+    client.execute_recovery();
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn execute_recovery_second_call_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &governance,
+        &recovery_address,
+    );
+
+    client.initiate_recovery(&new_admin);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+    client.execute_recovery();
+
+    // Second execute after the pending record has been consumed.
+    client.execute_recovery();
 }
 
 // ---------------------------------------------------------------------------
