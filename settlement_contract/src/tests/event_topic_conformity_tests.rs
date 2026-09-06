@@ -246,7 +246,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&admins, &operation);
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
     client.execute(&admins.get(0).unwrap(), &operation);
     assert_eq!(
         last_topic(&env),
@@ -289,7 +289,7 @@ fn scheduled_operation_events_identify_the_executor() {
 
 #[test]
 fn bootstrap_fallback_uses_canonical_topic() {
-    let (env, client, admins, merchant) = setup();
+    let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     let amount = 1_000i128;
@@ -308,6 +308,15 @@ fn bootstrap_fallback_uses_canonical_topic() {
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
     assert_eq!(split.merchant_amount, expected_merchant);
+    // No merchant rule, no default rule, and MockGovernance's get_fee_config
+    // always returns None, so calculate_fee_split falls through to the
+    // bootstrap fallback rule. calculate_fee_split is a read-only path and
+    // does not emit events (issue #691), so we verify the fee values
+    // instead.
+    let split = client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(split.platform_fee_amount, 10);
+    assert_eq!(split.network_fee_amount, 1);
+    assert_eq!(split.merchant_amount, 989);
 }
 
 #[test]

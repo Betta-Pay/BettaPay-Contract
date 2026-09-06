@@ -52,6 +52,7 @@ fn admin_transfer_and_threshold_change_require_real_authorization() {
     let a3 = Address::generate(&env);
     let admins = soroban_sdk::vec![&env, a1, a2, a3];
     let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
     let deployer = Address::generate(&env);
