@@ -1,5 +1,8 @@
 //! Regression coverage for the settlement administrative timelock.
 
+use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use soroban_sdk::testutils::{Address as _, Events, Ledger};
+use soroban_sdk::Address;
 use crate::{
     Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS,
 };
@@ -196,6 +199,86 @@ fn setup_multisig() -> (
     client.init(&deployer, &admins, &2, &governance, &recovery);
     let merchant = Address::generate(&env);
     (env, client, admins, merchant)
+}
+
+// ---------------------------------------------------------------------------
+// Issue #472: the timelocked upgrade path must validate the Wasm hash the
+// same way the direct `upgrade` entry point does.
+// ---------------------------------------------------------------------------
+
+/// A scheduled upgrade to Wasm that does not implement the required interface
+/// (here: an uploaded but empty Wasm with no `supports_interface` export)
+/// must be rejected at execution time with the typed `InvalidWasmInterface`
+/// (#13), leaving the running code untouched.
+#[test]
+fn timelocked_upgrade_rejects_non_conforming_wasm() {
+    let (env, client, admins, _) = setup();
+    let admin = admins.get(0).unwrap();
+    let bad_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+    let operation = Operation::Upgrade(bad_hash);
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // The typed contract error (#13), not a raw host panic, is raised.
+    match client.try_execute(&operation) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(13)),
+        other => panic!("expected InvalidWasmInterface (#13), got: {other:?}"),
+    }
+
+    // The contract remains operational after the rejected upgrade.
+    assert_eq!(client.get_admin(), admins);
+}
+
+/// A scheduled upgrade to a Wasm hash that was never uploaded cannot even be
+/// probed: protocol 21 exposes no wasm-presence check to contract code, so
+/// the probe deployment traps with a host-level `Storage`/`MissingValue`
+/// error ("Wasm does not exist") before `InvalidWasmInterface` can be raised.
+/// Documented here — mirroring `expired_schedule_cannot_execute` — so the
+/// boundary of the typed-error guarantee is explicit. See
+/// `bettapay_common::upgrade::probe_supports_interface`.
+#[test]
+#[should_panic(expected = "Error(Storage, MissingValue)")]
+fn timelocked_upgrade_rejects_never_uploaded_wasm() {
+    let (env, client, admins, _) = setup();
+    let admin = admins.get(0).unwrap();
+    let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
+    let operation = Operation::Upgrade(garbage);
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&operation);
+}
+
+/// Issue #473: the scheduled path must publish `contract_upgraded` at the
+/// same logical point as the direct path — after the interface check,
+/// immediately before the code swap. A rejected scheduled upgrade therefore
+/// emits no events at all (neither `contract_upgraded` nor the wrapping
+/// `op_executed`), pinning the event's position relative to validation.
+#[test]
+fn rejected_timelocked_upgrade_emits_no_events() {
+    let (env, client, admins, _) = setup();
+    let admin = admins.get(0).unwrap();
+    let bad_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
+    let operation = Operation::Upgrade(bad_hash);
+
+    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let before = env.events().all().len();
+    assert!(client.try_execute(&operation).is_err());
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "no contract_upgraded or op_executed event on failed upgrade"
+    );
 }
 
 // ---------------------------------------------------------------------------

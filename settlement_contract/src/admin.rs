@@ -1,10 +1,11 @@
 use soroban_sdk::xdr::ToXdr;
-use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, IntoVal, Symbol, Vec};
+use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Symbol, Vec};
 
 use bettapay_common::{
     constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS},
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
+    upgrade::probe_supports_interface,
 };
 
 use crate::errors::SettlementError;
@@ -257,28 +258,17 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        // Deploy a probe instance of the new Wasm and verify it supports
-        // the required BettaPay interface (version 1) before overwriting the
-        // running code.  The wasm hash is reused as the salt so the probe
-        // address is deterministic and collision-free.
-        let probe = env
-            .deployer()
-            .with_current_contract(new_wasm_hash.clone())
-            .deploy(new_wasm_hash.clone());
-
-        let version_args: Vec<u32> = soroban_sdk::vec![&env, 1u32];
-        let supports: bool = match env.try_invoke_contract::<bool, SettlementError>(
-            &probe,
-            &Symbol::new(&env, "supports_interface"),
-            version_args.into_val(&env),
-        ) {
-            Ok(Ok(v)) => v,
-            _ => panic_with_error!(&env, SettlementError::InvalidWasmInterface),
-        };
-        if !supports {
+        // Verify the new Wasm supports the required BettaPay interface
+        // (version 1) before overwriting the running code. See
+        // `bettapay_common::upgrade::probe_supports_interface`.
+        if !probe_supports_interface(&env, &new_wasm_hash, 1) {
             panic_with_error!(&env, SettlementError::InvalidWasmInterface);
         }
 
+        // Emit `contract_upgraded` before swapping the executable so every
+        // BettaPay upgrade path (direct, timelocked, and governance)
+        // publishes it at the same point: after auth and interface
+        // validation, immediately before the code swap (issue #473).
         let event_wasm_hash = new_wasm_hash.clone();
         env.events().publish(
             (
@@ -578,6 +568,18 @@ impl SettlementContract {
         );
     }
 
+    fn _upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
+        // The timelocked path must enforce the same interface check as the
+        // direct `upgrade` entry point: a scheduled upgrade to Wasm that does
+        // not implement the BettaPay interface must raise
+        // `InvalidWasmInterface` instead of swapping in broken code.
+        if !probe_supports_interface(env, &new_wasm_hash, 1) {
+            panic_with_error!(env, SettlementError::InvalidWasmInterface);
+        }
+
+        // Same canonical ordering as the direct path: `contract_upgraded` is
+        // emitted before the executable is swapped (issue #473).
+        let admin = read_admin(env);
     fn _upgrade(env: &Env, executor: &Address, new_wasm_hash: BytesN<32>) {
         env.events().publish(
             (
