@@ -9,6 +9,7 @@ use crate::storage::{
     verify_admin_auth,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
+use crate::BOOTSTRAP_DEFAULT_RULE;
 use crate::{
     SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
     PAYMENT_TTL_THRESHOLD,
@@ -291,6 +292,16 @@ impl SettlementContract {
         env.storage().persistent().set(&payment_key, &dummy_record);
 
         let rule = read_rule_or_default(&env, merchant.clone());
+        if rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+            && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
+            && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
+            && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
+        {
+            env.events().publish(
+                (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
+                BOOTSTRAP_DEFAULT_RULE,
+            );
+        }
         let split = calculate_split(&env, amount, &rule);
         let record = PaymentRecord {
             merchant: merchant.clone(),

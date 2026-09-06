@@ -325,6 +325,26 @@ fn bootstrap_fallback_uses_canonical_topic() {
     assert_eq!(split.merchant_amount, 989);
 }
 
+/// Regression test for issue #485: read-only rule resolution must NOT
+/// emit bootstrap_fallback. Only mutating entry points should signal an
+/// unconfigured deployment.
+#[test]
+fn read_path_does_not_emit_bootstrap_fallback() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // No merchant rule, no default rule, and MockGovernance's get_fee_config
+    // always returns None — calculate_fee_split resolves to bootstrap but
+    // must NOT emit bootstrap_fallback because it is a read-only path.
+    let before = env.events().all().len();
+    client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "read-only calculate_fee_split must not emit bootstrap_fallback"
+    );
+}
+
 #[test]
 fn clear_settlement_rule_emits_only_one_event() {
     let (env, client, admins, merchant) = setup();
