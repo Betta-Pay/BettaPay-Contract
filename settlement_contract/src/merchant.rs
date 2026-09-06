@@ -9,8 +9,7 @@ use crate::storage::{
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD,
+    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -20,7 +19,6 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
-    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
     /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
@@ -30,7 +28,6 @@ impl SettlementContract {
         validate_nonzero_address(
             &env,
             &merchant,
-            SettlementError::EmptyAddress,
             SettlementError::ZeroAddress,
         );
 
@@ -45,6 +42,12 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidAdmin);
             }
         }
+
+        // The merchant must consent to its own registration — admin auth alone
+        // is not proof the merchant address is controlled by the party being
+        // registered, and would otherwise let an admin register arbitrary or
+        // squatted addresses as merchants.
+        merchant.require_auth();
 
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {

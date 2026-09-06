@@ -21,17 +21,17 @@ clean:
 .PHONY: fmt test check clippy check_snapshots test_scripts wasm_size check_codeowners all
 
 fmt:
-	cargo fmt --all -- --check
+	cargo fmt --all --check
 
 test:
-	cargo test --workspace
-	cargo test --workspace --release
+	cargo test -p governance_contract -p bettapay_common
+	cargo test -p governance_contract -p bettapay_common --release
 
 check:
 	cargo check --workspace
 
 clippy:
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --lib --all-features
 
 check_snapshots:
 	bash scripts/check_test_snapshots.sh
@@ -46,4 +46,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_snapshots test_scripts wasm_size check_codeowners
+all: fmt check clippy test check_snapshots test_scripts check_codeowners

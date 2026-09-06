@@ -3,11 +3,13 @@
 //! Each contract keeps its own private `DataKey` enum for keys that are
 //! contract-specific (e.g. settlement's `Merchant(Address)` or governance's
 //! `Anchor(Address)`). The keys that are semantically shared — the pause
-//! flag, the recovery address, and the pending recovery operation — live in
-//! [`CommonDataKey`] so every contract reads and writes them in exactly the
-//! same shape. The admin role is *not* one of these: both contracts store it
-//! as a multisig `Vec<Address>` under their own `DataKey::Admin`, so there is
-//! no single-`Address` shape for this crate to own.
+//! flag, the recovery address, the pending recovery operation, and the
+//! multisig threshold — are declared exactly once, in [`CommonDataKey`]
+//! below; neither contract redeclares its own `Paused` / `RecoveryAddress` /
+//! `PendingRecovery` / `Threshold` variant. The admin role is *not* one of
+//! these: both contracts store it as a multisig `Vec<Address>` under their
+//! own `DataKey::Admin`, so there is no single-`Address` shape for this
+//! crate to own.
 //!
 //! The on-chain SCVal encoding of a Soroban `#[contracttype]` enum is based on
 //! the variant name only; the parent enum's Rust name is not part of the
@@ -167,7 +169,55 @@ pub fn bump_instance_ttl(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, vec};
+    use soroban_sdk::{contract, testutils::Address as _, vec};
+
+    /// No-op contract used only to obtain a real, registered contract
+    /// address for [`Env::as_contract`] — instance storage helpers like
+    /// [`is_paused`]/[`set_paused`] can only be exercised inside a
+    /// registered contract's storage context.
+    #[contract]
+    struct DummyContract;
+
+    #[test]
+    fn is_paused_defaults_to_false_and_round_trips_via_common_data_key() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            // No entry written yet — CommonDataKey::Paused is the *only*
+            // pause key either contract can read, so a missing entry must
+            // read back as unpaused rather than panicking.
+            assert!(!is_paused(&env));
+
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn two_contract_instances_have_independent_paused_flags() {
+        // Instance storage is scoped per contract address, so pausing one
+        // instance under CommonDataKey::Paused must not affect another
+        // instance that happens to share the same key type — this is what
+        // "storage separation" means despite governance_contract and
+        // settlement_contract both using CommonDataKey.
+        let env = Env::default();
+        let governance_like = env.register_contract(None, DummyContract);
+        let settlement_like = env.register_contract(None, DummyContract);
+
+        env.as_contract(&governance_like, || {
+            set_paused(&env, true);
+        });
+
+        env.as_contract(&settlement_like, || {
+            assert!(!is_paused(&env));
+        });
+        env.as_contract(&governance_like, || {
+            assert!(is_paused(&env));
+        });
+    }
 
     #[test]
     fn primary_admin_returns_first_entry() {
@@ -208,12 +258,20 @@ mod compatibility_tests {
     fn common_data_key_encoding_matches_legacy() {
         let env = Env::default();
         let mut map: soroban_sdk::Map<Val, u32> = soroban_sdk::Map::new(&env);
-        
+
         map.set(LegacyDataKey::RecoveryAddress.into_val(&env), 1u32);
-        assert_eq!(map.get(CommonDataKey::RecoveryAddress.into_val(&env)), Some(1u32), "RecoveryAddress encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::RecoveryAddress.into_val(&env)),
+            Some(1u32),
+            "RecoveryAddress encoding mismatch"
+        );
 
         map.set(LegacyDataKey::PendingRecovery.into_val(&env), 2u32);
-        assert_eq!(map.get(CommonDataKey::PendingRecovery.into_val(&env)), Some(2u32), "PendingRecovery encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::PendingRecovery.into_val(&env)),
+            Some(2u32),
+            "PendingRecovery encoding mismatch"
+        );
 
         // Note: Paused was also a unit variant in the legacy DataKey.
         // We'll just define another legacy enum for it or reuse the same.
@@ -223,11 +281,19 @@ mod compatibility_tests {
             Paused,
             SystemParam(soroban_sdk::Symbol),
         }
-        
+
         map.set(LegacyDataKey2::Paused.into_val(&env), 3u32);
-        assert_eq!(map.get(CommonDataKey::Paused.into_val(&env)), Some(3u32), "Paused encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Paused.into_val(&env)),
+            Some(3u32),
+            "Paused encoding mismatch"
+        );
 
         map.set(LegacyDataKey::Threshold.into_val(&env), 4u32);
-        assert_eq!(map.get(CommonDataKey::Threshold.into_val(&env)), Some(4u32), "Threshold encoding mismatch");
+        assert_eq!(
+            map.get(CommonDataKey::Threshold.into_val(&env)),
+            Some(4u32),
+            "Threshold encoding mismatch"
+        );
     }
 }
