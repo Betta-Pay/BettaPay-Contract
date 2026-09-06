@@ -255,6 +255,16 @@ fn pause_rejected_for_non_admin() {
     client.pause(&soroban_sdk::vec![&env, non_admin]);
 }
 
+// Issue #470: settlement previously accepted a second `pause` while already
+// paused, re-emitting a misleading `paused` event (governance rejected it
+// with `AlreadyPaused`). These pin settlement's guards to the same behaviour.
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn double_pause_is_rejected() {
+    let (_env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+    // Second pause while already paused must be rejected with AlreadyPaused.
 // ---------------------------------------------------------------------------
 // Pause idempotency (mirrors governance — both contracts must behave the same)
 // ---------------------------------------------------------------------------
@@ -269,6 +279,60 @@ fn pause_rejected_when_already_paused() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #317)")]
+fn double_unpause_is_rejected() {
+    let (_env, client, admins, _merchant) = setup();
+    // Unpause with no prior pause must be rejected with AlreadyUnpaused.
+    client.unpause(&admins);
+}
+
+// Issue #470: a rejected double-pause must not emit a duplicate `paused`
+// event, so indexers only ever see transitions.
+#[test]
+fn double_pause_emits_no_duplicate_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    let events_before = env.events().all().len();
+
+    let result = client.try_pause(&admins);
+    assert!(result.is_err(), "double pause must be rejected");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "rejected double pause must not emit a duplicate `paused` event"
+    );
+    assert!(client.is_paused(), "state must remain paused");
+}
+
+#[test]
+fn double_unpause_emits_no_duplicate_event() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    client.unpause(&admins);
+    let events_before = env.events().all().len();
+
+    let result = client.try_unpause(&admins);
+    assert!(result.is_err(), "double unpause must be rejected");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "rejected double unpause must not emit a duplicate `unpaused` event"
+    );
+    assert!(!client.is_paused(), "state must remain unpaused");
+}
+
+// Issue #470: a real pause/unpause transition emits exactly one event each.
+#[test]
+fn pause_unpause_emit_exactly_one_event_per_transition() {
+    let (env, client, admins, _merchant) = setup();
+
+    let before = env.events().all().len();
+    client.pause(&admins);
+    assert_eq!(env.events().all().len(), before + 1);
+
+    let before = env.events().all().len();
+    client.unpause(&admins);
+    assert_eq!(env.events().all().len(), before + 1);
 #[should_panic(expected = "Error(Contract, #16)")]
 fn unpause_rejected_when_already_unpaused() {
     let (_env, client, admins, _merchant) = setup();
