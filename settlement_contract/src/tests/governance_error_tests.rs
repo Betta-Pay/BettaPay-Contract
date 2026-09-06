@@ -23,9 +23,6 @@ use soroban_sdk::{Address, Env, FromVal, Symbol};
 // ---------------------------------------------------------------------------
 
 mod panicking_gov {
-    use crate::FeeConfig;
-    use soroban_sdk::{contract, contractimpl, Env};
-    use soroban_sdk::{contract, contractimpl, Env};
     use crate::GovFeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
 
@@ -294,6 +291,7 @@ fn init_succeeds_with_panicking_governance() {
     let deployer = Address::generate(&env);
 
     // init must succeed directly with panicking_gov without cross-calling it
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -323,6 +321,7 @@ fn update_governance_succeeds_with_panicking_governance() {
     let admins = soroban_sdk::vec![&env, admin];
     let deployer = Address::generate(&env);
 
+    let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &empty_gov, &recovery);
     client.update_governance(&admins, &panicking_gov);
 
@@ -351,6 +350,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
         soroban_sdk::vec![&env, contract_id.to_val()],
     );
 
+    let deployer = Address::generate(&env);
     client.init(
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
@@ -372,6 +372,8 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
     );
     assert!(res.is_err());
 }
+
+// ---------------------------------------------------------------------------
 // Failure Variant Coverage for Governance Fee Rule Resolution
 // ---------------------------------------------------------------------------
 
@@ -382,6 +384,8 @@ fn read_path_governance_valid_config_used() {
     let env = Env::default();
     env.mock_all_auths();
 
+    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
+
     let gov_id = env.register_contract(None, GovernanceContract);
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
     let gov_admin = Address::generate(&env);
@@ -389,6 +393,9 @@ fn read_path_governance_valid_config_used() {
     let gov_deployer = Address::generate(&env);
     gov_client.init(
         &gov_deployer,
+    let deployer = Address::generate(&env);
+    gov_client.init(
+        &deployer,
         &soroban_sdk::vec![&env, gov_admin.clone()],
         &1,
         &recovery,
@@ -397,7 +404,7 @@ fn read_path_governance_valid_config_used() {
     // Set governance fee config: 250 platform bps, 50 network bps
     gov_client.set_fee_config(
         &soroban_sdk::vec![&env, gov_admin],
-        &GovFeeConfig {
+        &FeeConfig {
             platform_fee_bps: 250,
             network_fee_bps: 50,
         },
@@ -427,6 +434,14 @@ fn read_path_governance_valid_config_used() {
 /// fallback chain resolves to the protocol bootstrap defaults without
 /// surfacing `GovernanceCallFailed` and without emitting a
 /// `BOOTSTRAP_FALLBACK_EVENT` on the hot path (issue #691).
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the read
+/// path falls back to the bootstrap default and does not emit a fallback event
+/// (issue #691).
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the fallback
+/// to bootstrap default applies the bootstrap fee values.
+///
+/// Note: `calculate_fee_split` is a read-only path and does not emit events
+/// (issue #691), so we verify the fee values directly.
 #[test]
 fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     let env = Env::default();
@@ -475,4 +490,9 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
             );
         }
     }
+    // Bootstrap default: 100 bps platform, 5 bps network.
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
 }

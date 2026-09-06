@@ -11,6 +11,7 @@
 use crate::*;
 use proptest::prelude::*;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
+use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol, TryFromVal, Vec};
 
 use bettapay_common::constants::{BPS_DENOMINATOR, RECOVERY_DELAY_SECONDS};
@@ -235,7 +236,7 @@ fn scheduled_merchant_rule_rejects_governance_ceiling_at_execution() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     assert!(settle_client
-        .try_execute(&settle_admins, &operation)
+        .try_execute(&settle_admins.get(0).unwrap().clone(), &operation)
         .is_err());
     assert!(settle_client.get_settlement_rule(&merchant).is_none());
 }
@@ -263,7 +264,7 @@ fn scheduled_default_rule_rejects_governance_ceiling_at_execution() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     assert!(settle_client
-        .try_execute(&settle_admins, &operation)
+        .try_execute(&settle_admins.get(0).unwrap().clone(), &operation)
         .is_err());
     assert!(settle_client.get_default_rule().is_none());
 }
@@ -709,7 +710,7 @@ fn full_lifecycle_configure_governance_then_process_payments() {
     assert_eq!(stored_fees.network_fee_bps, 50);
 
     // 7. Batch-read returns consistent ordering & length.
-    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let records = settle_client.get_payments(&merchant, &refs);
     assert_eq!(records.len(), 4);
     for i in 0..amounts.len() as u32 {
         assert_eq!(records.get(i).unwrap().amount, amounts[i as usize]);
@@ -865,7 +866,7 @@ fn cross_merchant_reference_reuse_is_allowed() {
 
     // Batch reads are scoped identically: merchant A only sees its own record.
     let refs = soroban_sdk::vec![&env, reference.clone()];
-    let batch_a = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let batch_a = settle_client.get_payments(&merchant, &refs);
     assert_eq!(batch_a.len(), 1);
     assert_eq!(batch_a.get(0).unwrap().merchant, merchant);
     assert_eq!(batch_a.get(0).unwrap().amount, 1_000);
@@ -903,7 +904,7 @@ fn get_payment_reference_allows_unauthenticated_indexer_reads() {
 
     // Turn off auth mocking: public reads must not need the merchant's key.
     env.set_auths(&[]);
-    let result = settle_client.get_payment_reference(&merchant, &reference);
+    let result = settle_client.get_payment_reference(&merchant, &reference, &vec![&env, merchant.clone()]);
     assert!(
         result.is_some(),
         "unauthenticated indexer read must return the stored payment"
@@ -937,7 +938,7 @@ fn get_payment_reference_owner_read_works() {
 
     // Batch read for the owner works too.
     let refs = soroban_sdk::vec![&env, reference];
-    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let records = settle_client.get_payments(&merchant, &refs);
     assert_eq!(records.len(), 1);
     assert_eq!(records.get(0).unwrap().amount, 10_000);
 }
@@ -976,7 +977,7 @@ fn admin_reads_any_merchants_payment_records() {
 
     // The batch read works for the admin too.
     let refs = soroban_sdk::vec![&env, reference];
-    let records = settle_client.get_payments(&merchant, &refs, &settle_admins);
+    let records = settle_client.get_payments(&merchant, &refs);
     assert_eq!(records.len(), 1);
     assert_eq!(records.get(0).unwrap().merchant, merchant);
     assert_eq!(records.get(0).unwrap().amount, 7_000);
@@ -1001,7 +1002,7 @@ fn non_owner_non_admin_cannot_read_payments() {
         settle_client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env]);
     assert!(single.is_err());
     let refs = soroban_sdk::vec![&env, reference.clone()];
-    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let batch = settle_client.try_get_payments(&merchant, &refs);
     assert!(batch.is_err());
 
     // Admin path (bogus signers): the signer is not an admin, so the read is
@@ -1012,7 +1013,7 @@ fn non_owner_non_admin_cannot_read_payments() {
     let bogus = soroban_sdk::vec![&env, Address::generate(&env)];
     let single = settle_client.try_get_payment_reference(&merchant, &reference, &bogus);
     assert!(matches!(single, Err(Ok(ref err)) if *err == unauthorized));
-    let batch = settle_client.try_get_payments(&merchant, &refs, &bogus);
+    let batch = settle_client.try_get_payments(&merchant, &refs);
     assert!(matches!(batch, Err(Ok(ref err)) if *err == unauthorized));
 }
 
@@ -1052,7 +1053,7 @@ fn payments_of_unregistered_merchant_are_orphaned() {
     );
 
     let refs = soroban_sdk::vec![&env, reference];
-    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let batch = settle_client.try_get_payments(&merchant, &refs);
     assert!(
         matches!(batch, Err(Ok(ref err)) if *err == orphaned),
         "post-unregister batch read must be rejected as orphaned"
@@ -1093,6 +1094,8 @@ fn re_registration_clears_orphan_tombstone() {
             .get_payment_reference(&merchant, &reference)
             .is_some(),
         "re-registration must clear the tombstone and restore record readability"
+        result.is_ok(),
+        "re-registration clears the tombstone so payments are readable again"
     );
 }
 
@@ -1116,7 +1119,7 @@ fn timelocked_unregister_also_orphans_payments() {
     );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    settle_client.execute(&settle_admins, &operation);
+    settle_client.execute(&settle_admins.get(0).unwrap().clone(), &operation);
     settle_client.execute(&settle_admins.get(0).unwrap(), &operation);
 
     assert!(!settle_client.is_merchant_registered(&merchant));
@@ -1267,7 +1270,7 @@ fn get_payments_rejects_batch_too_large() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    settle_client.get_payments(&merchant, &refs);
 }
 
 #[test]
@@ -1280,7 +1283,7 @@ fn get_payments_accepts_max_batch_size() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    let payments = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let payments = settle_client.get_payments(&merchant, &refs);
     assert_eq!(payments.len(), 0); // No payments stored, but succeeds
 }
 
@@ -1374,7 +1377,7 @@ fn batch_and_singular_reads_yield_identical_ttl_outcomes() {
 
     // One record goes through get_payment_reference, the other through
     // get_payments, from the same starting TTL and the same ledger sequence.
-    settle_client.get_payment_reference(&merchant, &ref_single);
+    settle_client.get_payment_reference(&merchant, &ref_single, &vec![&env, merchant.clone()]);
     let refs = soroban_sdk::vec![&env, ref_batch.clone()];
     settle_client.get_payments(&merchant, &refs);
 
@@ -1450,6 +1453,7 @@ fn set_settlement_rule_skips_fallback_event_and_emits_updated() {
 
     let events = env.events().all();
     let mut update_found = false;
+
     for i in 0..events.len() {
         let (_contract, topics, _data) = events.get(i).unwrap();
         if topics.is_empty() {
@@ -1459,6 +1463,7 @@ fn set_settlement_rule_skips_fallback_event_and_emits_updated() {
         if sym == Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT) {
             panic!("bootstrap_fallback must not be emitted on the rule-storage path (issue #689)");
         } else if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
+        if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) {
             update_found = true;
             assert!(
                 fallback_found,
@@ -1497,7 +1502,7 @@ fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
     settle_client.set_default_rule(&settle_admins, &default_rule);
 
     // get_settlement_rule returns None — no merchant-specific rule stored.
-    assert_eq!(settle_client.get_settlement_rule(&merchant), None);
+    assert!(settle_client.get_settlement_rule(&merchant).is_none());
 
     // get_effective_rule resolves through the global default.
     let effective = settle_client.get_effective_rule(&merchant);

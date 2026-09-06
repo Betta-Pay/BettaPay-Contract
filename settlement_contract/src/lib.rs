@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
@@ -124,6 +125,11 @@
 //!   admin-recovery flow itself must keep working while paused
 //! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
 //!
+//! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
+//! governance: pausing while already paused panics with `AlreadyPaused`, and
+//! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
+//! `unpaused` event is only ever emitted on an actual state transition.
+//!
 //! ## Event Convention
 //!
 //! This contract follows a consistent event emission pattern (see Issue #49):
@@ -223,8 +229,16 @@ pub(crate) const RULE_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
 pub(crate) const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
 pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
+pub(crate) const SCHEDULED_OP_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
+pub(crate) const SCHEDULED_OP_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
 
-pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 2 * 24 * 60 * 60; // 48 hours
+/// Minimum delay for scheduled administrative operations.
+///
+/// This matches the seven-day recovery window so the recovery address has
+/// time to replace compromised admins before a scheduled upgrade or admin
+/// transfer can execute. The recovery path is the veto authority for pending
+/// schedules; ordinary admin cancellation remains available as well.
+pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// The single interface version advertised by `supports_interface`.
 ///

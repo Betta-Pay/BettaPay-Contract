@@ -3,6 +3,7 @@ use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
     events::PendingRecovery,
+    events::{PendingRecovery},
     storage::{self, CommonDataKey},
 };
 
@@ -350,6 +351,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
     };
     let mut args = Vec::<Val>::new(env);
     args.push_back(Symbol::new(env, "min_payment").into_val(env));
+    args.push_back(Symbol::new(env, "min_payment").to_val());
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
         &Symbol::new(env, "get_system_param"),
