@@ -12,8 +12,6 @@ use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
     read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_threshold, validate_admins_and_threshold,
-    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
     read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
     validate_nonzero_address, verify_admin_auth, write_admins,
@@ -142,6 +140,17 @@ impl SettlementContract {
             &new_admin,
             SettlementError::InvalidAdmin,
         );
+
+        // Issue #468: reject a second initiation while a recovery is already
+        // pending — silently overwriting the original target would hide the
+        // first recovery address's intent with no distinguishing event.
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
+        }
 
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
@@ -423,12 +432,6 @@ impl SettlementContract {
 
     /// Executes a previously scheduled administrative operation.
     ///
-    /// # Authorization
-    ///
-    /// Requires authentication from the configured admin set. The caller must
-    /// pass enough valid signers to meet the current multisig threshold.
-    /// This prevents any external actor from front-running the timelock expiry
-    /// and executing an operation the admins intended to cancel (Issue #462).
     /// # Execution auth policy (uniform)
     ///
     /// `execute` deliberately performs **no caller authentication** for any
@@ -450,6 +453,8 @@ impl SettlementContract {
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`OperationNotScheduled`](SettlementError::OperationNotScheduled) — if the operation was not scheduled.
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
+    /// * [`RecoveryDelayActive`](SettlementError::RecoveryDelayActive) — if a recovery is pending and the operation is
+    ///   not `CancelRecovery`.
     pub fn execute(env: Env, executor: Address, operation: Operation) {
         assert_not_paused(&env);
         // executor is intentionally not required to authenticate here (permissionless execution after timelock)
@@ -473,6 +478,19 @@ impl SettlementContract {
 
         if env.ledger().timestamp() < scheduled.execute_at {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
+
+        // Recovery veto (issue #501): while a recovery is pending, no
+        // scheduled operation may execute except `CancelRecovery` itself.
+        // `PendingRecovery` is the veto marker left by `initiate_recovery` —
+        // once the recovery address authenticates, operations scheduled under
+        // the compromised admin are blocked, including an upgrade or an admin
+        // transfer. The check runs before the scheduled key is consumed, so a
+        // vetoed operation stays in the queue until the recovery is resolved.
+        if env.storage().instance().has(&CommonDataKey::PendingRecovery)
+            && !matches!(operation, Operation::CancelRecovery)
+        {
+            panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
 
         env.storage().persistent().remove(&key);
@@ -584,7 +602,6 @@ impl SettlementContract {
         new_admins: Vec<Address>,
         new_threshold: u32,
     ) {
-    fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
@@ -625,17 +642,9 @@ impl SettlementContract {
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     fn _register_merchant(env: &Env, executor: &Address, merchant: Address) {
         assert_not_paused(env);
-        validate_nonzero_address(
-            env,
-            &merchant,
-        );
-        let _admin = read_admin(env);
-
-        let admin = read_admin(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
         let _admin = read_admin(env);
 
-        
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
         for i in 0..admins.len() {
@@ -753,20 +762,6 @@ impl SettlementContract {
             .get::<_, SettlementRule>(&DataKey::Rule(merchant.clone()))
             .unwrap_or_else(|| read_rule_or_default(env, merchant.clone()));
 
-        // Signal an unconfigured deployment when the resolved rule is the
-        // bootstrap default (issue #485). Pure read paths must not emit this
-        // event — only mutating entry points do so.
-        if prev.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
-            && prev.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
-            && prev.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
-            && prev.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
-        {
-            env.events().publish(
-                (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
-                BOOTSTRAP_DEFAULT_RULE,
-            );
-        }
-
         let key = DataKey::Rule(merchant.clone());
         env.storage().persistent().set(&key, &rule);
         env.storage()
@@ -818,6 +813,9 @@ impl SettlementContract {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
+            panic_with_error!(env, SettlementError::InvalidFeeBps);
+        }
+        if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(env, SettlementError::InvalidFeeBps);
         }
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {

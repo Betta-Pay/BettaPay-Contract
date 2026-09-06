@@ -55,20 +55,6 @@ impl SettlementContract {
             .get::<_, SettlementRule>(&DataKey::Rule(merchant.clone()))
             .unwrap_or_else(|| read_rule_or_default(&env, merchant.clone()));
 
-        // Signal an unconfigured deployment when the resolved rule is the
-        // bootstrap default (issue #485). Pure read paths must not emit this
-        // event — only mutating entry points do so.
-        if prev.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
-            && prev.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
-            && prev.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
-            && prev.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
-        {
-            env.events().publish(
-                (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
-                BOOTSTRAP_DEFAULT_RULE,
-            );
-        }
-
         let key = DataKey::Rule(merchant.clone());
         env.storage().persistent().set(&key, &rule);
 
@@ -123,6 +109,9 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
+            panic_with_error!(&env, SettlementError::InvalidFeeBps);
+        }
+        if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {

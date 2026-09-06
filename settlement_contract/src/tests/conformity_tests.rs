@@ -55,7 +55,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 27] {
+fn settlement_codes() -> [(&'static str, u32); 28] {
     [
         (
             "AlreadyInitialized",

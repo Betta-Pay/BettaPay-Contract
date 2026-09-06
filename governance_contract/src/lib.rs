@@ -180,7 +180,7 @@ use bettapay_common::{
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
-    IntoVal, Symbol, TryFromVal, Val, Vec,
+    Symbol, TryFromVal, Val, Vec,
 };
 
 #[derive(Clone)]
@@ -278,6 +278,9 @@ pub enum GovernanceError {
     InvalidWasmInterface = 13,
     /// The provided multisig threshold is invalid.
     InvalidThreshold = 14,
+    /// A recovery is already pending; `initiate_recovery` was called again
+    /// before the pending recovery was executed or cancelled (issue #468).
+    RecoveryAlreadyPending = 15,
     /// The anchor for the specified asset was not found.
     AnchorMissing = 200,
     InvalidParamValue = 201,
@@ -303,6 +306,9 @@ const _: () = {
     assert!(GovernanceError::RecoveryDelayActive as u32 == error_codes::RECOVERY_DELAY_ACTIVE);
     assert!(GovernanceError::InvalidWasmInterface as u32 == error_codes::INVALID_WASM_INTERFACE);
     assert!(GovernanceError::InvalidThreshold as u32 == error_codes::INVALID_THRESHOLD);
+    assert!(
+        GovernanceError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
+    );
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
@@ -467,6 +473,17 @@ impl GovernanceContract {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
         assert_not_zero(&env, &new_admin, GovernanceError::InvalidAdmin);
+
+        // Issue #468: reject a second initiation while a recovery is already
+        // pending — silently overwriting the original target would hide the
+        // first recovery address's intent with no distinguishing event.
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+        {
+            panic_with_error!(&env, GovernanceError::RecoveryAlreadyPending);
+        }
 
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
@@ -943,10 +960,8 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use soroban_sdk::testutils::storage::Persistent;
-    use soroban_sdk::testutils::{Address as _, Events, Ledger};
-    use soroban_sdk::testutils::{Address as _, Events};
-    use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
-    use soroban_sdk::{vec, Bytes, FromVal, String};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke};
+    use soroban_sdk::{vec, Bytes, FromVal, IntoVal, String};
 
     fn setup() -> (
         Env,
@@ -1064,8 +1079,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn governance_rejects_double_initialization() {
-        let (_env, client, admins, recovery) = setup();
-        let deployer = Address::generate(&_env);
         let (env, client, admins, recovery) = setup();
         let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &2, &recovery);
@@ -1757,6 +1770,31 @@ mod tests {
         client.initiate_recovery(&new_admin);
         // Do NOT advance the ledger — the delay is still active.
         client.execute_recovery();
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn initiate_recovery_rejects_overwrite_while_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let recovery_address = Address::generate(&env);
+        let first_target = Address::generate(&env);
+        let second_target = Address::generate(&env);
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(
+            &deployer,
+            &vec![&env, admin.clone()],
+            &1,
+            &recovery_address,
+        );
+
+        client.initiate_recovery(&first_target);
+
+        // Second initiation must be rejected — a recovery is already pending.
+        client.initiate_recovery(&second_target);
     }
 
     #[test]

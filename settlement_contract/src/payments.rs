@@ -121,7 +121,6 @@ mod tests {
             if expected_platform + expected_network > amount {
                 expected_network = amount - expected_platform;
             }
-            let expected_merchant =
             let _expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 

@@ -1,9 +1,9 @@
-use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
-use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{
+    panic_with_error, Address, Env, IntoVal, Map, Symbol, TryFromVal, Val, Vec,
+};
 
 use bettapay_common::{
     events::PendingRecovery,
-    events::{PendingRecovery},
     storage::{self, CommonDataKey},
 };
 
@@ -57,6 +57,9 @@ pub(crate) fn write_admins(env: &Env, admins: &Vec<Address>, threshold: u32) {
 }
 
 pub(crate) fn read_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     env.storage()
         .instance()
         .get(&CommonDataKey::Threshold)
@@ -148,6 +151,9 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
     // of surfacing a host-level conversion panic. Refusing is deliberate:
     // an old-format record must never be treated as a valid pending
     // recovery (default-deny, never default-allow).
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     let val = env
         .storage()
         .instance()
