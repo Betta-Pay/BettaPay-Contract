@@ -1434,6 +1434,10 @@ fn off_chain_settlement_readiness_logic() {
     assert!(is_ready(1011, &record), "Ready after delay");
 }
 
+/// `set_settlement_rule` captures the previous rule in the
+/// `settlement_rule_updated` event payload instead of emitting a separate
+/// `bootstrap_fallback` event, even when nothing was configured before and the
+/// effective previous rule is the bootstrap default (issue #689).
 #[test]
 fn set_settlement_rule_skips_fallback_event_and_emits_updated() {
     let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();

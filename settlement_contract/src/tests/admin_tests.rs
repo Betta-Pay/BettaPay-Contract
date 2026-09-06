@@ -1,7 +1,11 @@
 //! Tests for administrative entry points:
 //! `init`, `transfer_admin`, `pause`, `unpause`, `upgrade`, `recovery`.
 
+use crate::types::DataKey;
 use crate::*;
+use soroban_sdk::testutils::storage::Persistent as _;
+use soroban_sdk::testutils::{Address as _, Events, Ledger};
+use soroban_sdk::{Address, Env, FromVal, Symbol, TryFromVal};
 use soroban_sdk::testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke};
 use soroban_sdk::{Address, Env, FromVal, IntoVal, Symbol, TryFromVal};
 
@@ -1193,6 +1197,36 @@ fn upgrade_rejects_non_admin_before_interface_check() {
     client.upgrade(&soroban_sdk::vec![&env, non_admin], &bad_hash);
 }
 
+// Issue #563: is_merchant_registered (public) must not bump the merchant entry's TTL.
+#[test]
+fn is_merchant_registered_is_ttl_neutral() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Advance the ledger so that any TTL bump would be observable.
+    env.ledger().with_mut(|l| l.sequence_number += 100);
+
+    // Record the TTL immediately before the public read.
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+
+    // The public query must succeed and return true.
+    assert!(client.is_merchant_registered(&merchant));
+
+    // The merchant entry TTL must NOT have increased.
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+    assert!(
+        ttl_after <= ttl_before,
+        "is_merchant_registered must be TTL-neutral (before={ttl_before}, after={ttl_after})"
+    );
+}
 /// A Wasm hash that was never uploaded (`upload_contract_wasm` was never
 /// called for it) cannot be probed: protocol 21 exposes no wasm-presence
 /// check to contract code, so the probe deployment traps with a host-level

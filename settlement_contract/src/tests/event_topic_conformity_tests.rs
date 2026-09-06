@@ -287,7 +287,13 @@ fn scheduled_operation_events_identify_the_executor() {
     assert_eq!(actor, Some(executor));
 }
 
+/// The fee hot path falls back to the protocol bootstrap rule when no
+/// merchant rule, default rule, or governance fee config is set — without
+/// emitting a `bootstrap_fallback` event on every payment (issue #691). The
+/// resolved rule is exactly the canonical [`BOOTSTRAP_DEFAULT_RULE`].
 #[test]
+fn bootstrap_fallback_resolves_without_emitting_event() {
+    let (env, client, admins, merchant) = setup();
 fn bootstrap_fallback_uses_canonical_topic() {
     let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);

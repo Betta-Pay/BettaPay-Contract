@@ -1,3 +1,4 @@
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
 use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
@@ -183,14 +184,25 @@ pub(crate) fn validate_nonzero_address(
     }
 }
 
+/// Returns whether a merchant has been registered **without** touching TTL.
+///
+/// This is the TTL-neutral read used by public query entry points so that a
+/// read-only check never mutates storage.
+pub(crate) fn is_merchant_registered_read(env: &Env, merchant: Address) -> bool {
+    let key = DataKey::Merchant(merchant);
+    env.storage().persistent().has(&key)
+}
+
+/// Returns whether a merchant has been registered and keeps the marker entry warm in storage.
 /// Panics with [`SettlementError::PaymentOrphaned`] when the merchant's
 /// payment records are no longer readable.
 ///
 /// Policy (issue #490): unregistering a merchant orphans its payment
-/// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone that
-/// survives re-registration, and a merchant that was never registered has no
-/// readable history either. A payment read therefore requires both a live
-/// merchant marker and no tombstone.
+/// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone while
+/// the merchant is unregistered, and a merchant that was never registered has
+/// no readable history either. A payment read therefore requires both a live
+/// merchant marker and no tombstone. Re-registration clears the tombstone
+/// (issue #685), so a re-registered merchant's records become readable again.
 pub(crate) fn assert_payments_readable(env: &Env, merchant: &Address) {
     let registered = is_merchant_registered_internal(env, merchant.clone());
     let archived = env
@@ -338,6 +350,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
+    args.push_back(Symbol::new(env, "min_payment").into_val(env));
     args.push_back(Symbol::new(env, "min_payment").to_val());
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,

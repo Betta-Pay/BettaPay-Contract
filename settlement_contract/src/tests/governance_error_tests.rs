@@ -288,6 +288,7 @@ fn init_succeeds_with_panicking_governance() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // init must succeed directly with panicking_gov without cross-calling it
     let deployer = Address::generate(&env);
@@ -318,6 +319,7 @@ fn update_governance_succeeds_with_panicking_governance() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
+    let deployer = Address::generate(&env);
 
     let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &empty_gov, &recovery);
@@ -339,6 +341,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // Configure target for potential reentrancy callback
     env.invoke_contract::<()>(
@@ -427,6 +430,10 @@ fn read_path_governance_valid_config_used() {
     assert_eq!(split.merchant_amount, 9_700);
 }
 
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the
+/// fallback chain resolves to the protocol bootstrap defaults without
+/// surfacing `GovernanceCallFailed` and without emitting a
+/// `BOOTSTRAP_FALLBACK_EVENT` on the hot path (issue #691).
 /// Verifies that when governance has no config set (`Ok(Ok(None))`), the read
 /// path falls back to the bootstrap default and does not emit a fallback event
 /// (issue #691).

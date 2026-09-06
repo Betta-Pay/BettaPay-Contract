@@ -618,6 +618,7 @@ impl SettlementContract {
             env,
             &merchant,
         );
+        let _admin = read_admin(env);
 
         let admin = read_admin(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
