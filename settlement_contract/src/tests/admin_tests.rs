@@ -342,9 +342,7 @@ fn double_pause_is_rejected() {
     client.pause(&admins);
     assert!(client.is_paused());
     // Second pause while already paused must be rejected with AlreadyPaused.
-// ---------------------------------------------------------------------------
-// Pause idempotency (mirrors governance — both contracts must behave the same)
-// ---------------------------------------------------------------------------
+}
 
 #[test]
 #[should_panic(expected = "Error(Contract, #17)")]
@@ -410,6 +408,9 @@ fn pause_unpause_emit_exactly_one_event_per_transition() {
     let before = env.events().all().len();
     client.unpause(&admins);
     assert_eq!(env.events().all().len(), before + 1);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #16)")]
 fn unpause_rejected_when_already_unpaused() {
     let (_env, client, admins, _merchant) = setup();
@@ -679,7 +680,7 @@ fn merchant_marker_is_identical_across_direct_and_timelocked_paths() {
     );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&Address::generate(&env), &operation);
 
     let marker_b: () = env.as_contract(&client.address, || {
         env.storage()
@@ -1072,6 +1073,8 @@ fn upgrade_rejects_never_uploaded_wasm_hash() {
     let (env, client, admins, _) = setup();
     let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
     client.upgrade(&admins, &garbage);
+}
+
 // ---------------------------------------------------------------------------
 // Issue #704: SchemaVersion baseline + migrate skeleton
 // ---------------------------------------------------------------------------

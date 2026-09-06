@@ -219,12 +219,12 @@ fn timelocked_upgrade_rejects_non_conforming_wasm() {
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     let operation = Operation::Upgrade(bad_hash);
 
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&vec![&env, admin.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     // The typed contract error (#13), not a raw host panic, is raised.
-    match client.try_execute(&operation) {
+    match client.try_execute(&Address::generate(&env), &operation) {
         Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(13)),
         other => panic!("expected InvalidWasmInterface (#13), got: {other:?}"),
     }
@@ -248,10 +248,10 @@ fn timelocked_upgrade_rejects_never_uploaded_wasm() {
     let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
     let operation = Operation::Upgrade(garbage);
 
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&vec![&env, admin.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&operation);
+    client.execute(&Address::generate(&env), &operation);
 }
 
 /// Issue #473: the scheduled path must publish `contract_upgraded` at the
@@ -268,12 +268,12 @@ fn rejected_timelocked_upgrade_emits_no_events() {
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     let operation = Operation::Upgrade(bad_hash);
 
-    client.schedule(&admin, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&vec![&env, admin.clone()], &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     let before = env.events().all().len();
-    assert!(client.try_execute(&operation).is_err());
+    assert!(client.try_execute(&Address::generate(&env), &operation).is_err());
     assert_eq!(
         env.events().all().len(),
         before,

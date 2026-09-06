@@ -236,7 +236,7 @@ fn scheduled_merchant_rule_rejects_governance_ceiling_at_execution() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     assert!(settle_client
-        .try_execute(&settle_admins, &operation)
+        .try_execute(&settle_admins.get(0).unwrap().clone(), &operation)
         .is_err());
     assert!(settle_client.get_settlement_rule(&merchant).is_none());
 }
@@ -264,7 +264,7 @@ fn scheduled_default_rule_rejects_governance_ceiling_at_execution() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     assert!(settle_client
-        .try_execute(&settle_admins, &operation)
+        .try_execute(&settle_admins.get(0).unwrap().clone(), &operation)
         .is_err());
     assert!(settle_client.get_default_rule().is_none());
 }
@@ -1103,7 +1103,7 @@ fn timelocked_unregister_also_orphans_payments() {
     );
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    settle_client.execute(&settle_admins, &operation);
+    settle_client.execute(&settle_admins.get(0).unwrap().clone(), &operation);
     settle_client.execute(&settle_admins.get(0).unwrap(), &operation);
 
     assert!(!settle_client.is_merchant_registered(&merchant));

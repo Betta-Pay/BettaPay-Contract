@@ -5,8 +5,8 @@ use bettapay_common::{
     constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS},
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
-    upgrade::probe_supports_interface,
 };
+use bettapay_common::upgrade::probe_supports_interface;
 
 use crate::errors::SettlementError;
 use crate::storage::{
@@ -283,7 +283,6 @@ impl SettlementContract {
 
     pub fn pause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        if Self::is_paused(env.clone()) {
         if storage::is_paused(&env) {
             panic_with_error!(&env, SettlementError::AlreadyPaused);
         }
@@ -293,7 +292,6 @@ impl SettlementContract {
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        if !Self::is_paused(env.clone()) {
         if !storage::is_paused(&env) {
             panic_with_error!(&env, SettlementError::AlreadyUnpaused);
         }
@@ -537,17 +535,6 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
-    fn _transfer_admin(env: &Env, new_admins: Vec<Address>, new_threshold: u32) {
-        validate_admins_and_threshold(env, &new_admins, new_threshold);
-
-        let old_admins = read_admins(env);
-        let old_threshold = read_threshold(env);
-        if old_admins == new_admins && old_threshold == new_threshold {
-            panic_with_error!(env, SettlementError::SameAdmin);
-        }
-
-        let old_admin = storage::primary_admin(&old_admins).unwrap();
-    fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
     fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
@@ -568,18 +555,6 @@ impl SettlementContract {
         );
     }
 
-    fn _upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
-        // The timelocked path must enforce the same interface check as the
-        // direct `upgrade` entry point: a scheduled upgrade to Wasm that does
-        // not implement the BettaPay interface must raise
-        // `InvalidWasmInterface` instead of swapping in broken code.
-        if !probe_supports_interface(env, &new_wasm_hash, 1) {
-            panic_with_error!(env, SettlementError::InvalidWasmInterface);
-        }
-
-        // Same canonical ordering as the direct path: `contract_upgraded` is
-        // emitted before the executable is swapped (issue #473).
-        let admin = read_admin(env);
     fn _upgrade(env: &Env, executor: &Address, new_wasm_hash: BytesN<32>) {
         env.events().publish(
             (
