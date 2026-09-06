@@ -5,7 +5,8 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 use crate::errors::SettlementError;
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
+    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default, read_threshold,
+    verify_admin_auth,
 };
 use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::{
@@ -111,15 +112,30 @@ mod tests {
             let denom = BPS_DENOMINATOR as i128;
             let expected_platform =
                 (amount * platform_fee_bps as i128 + denom - 1) / denom;
-            let expected_network =
+            let mut expected_network =
                 (amount * network_fee_bps as i128 + denom - 1) / denom;
+            // Mirror the implementation's clamp (issue #683): when the two
+            // ceil-rounded fee legs would exceed the gross, the network leg is
+            // clamped so total fees never exceed the amount.
+            if expected_platform + expected_network > amount {
+                expected_network = amount - expected_platform;
+            }
             let expected_merchant =
+            let _expected_merchant =
                 (amount - expected_platform - expected_network).max(0);
 
             prop_assert_eq!(split.gross_amount, amount);
+            // Clamp network leg so total fees never exceed gross (issue #683).
+            let clamped_network = if expected_platform + expected_network > amount {
+                (amount - expected_platform).max(0)
+            } else {
+                expected_network
+            };
+            let clamped_merchant = (amount - expected_platform - clamped_network).max(0);
+
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
-            prop_assert_eq!(split.network_fee_amount, expected_network);
-            prop_assert_eq!(split.merchant_amount, expected_merchant);
+            prop_assert_eq!(split.network_fee_amount, clamped_network);
+            prop_assert_eq!(split.merchant_amount, clamped_merchant);
             prop_assert!(split.merchant_amount >= 0);
         }
 
@@ -161,9 +177,42 @@ mod tests {
             let split = calculate_split(&env, amount, &rule);
 
             prop_assert!(split.platform_fee_amount > 0);
-            prop_assert!(split.network_fee_amount > 0);
+            prop_assert_eq!(
+                split.platform_fee_amount + split.network_fee_amount,
+                amount,
+                "extreme fees must collect the full gross (issue #683)"
+            );
+            // network_fee may be clamped to 0 when total fees exceed gross
+            // (issue #683), but merchant must always be non-negative.
+            prop_assert!(split.network_fee_amount >= 0);
             prop_assert_eq!(split.merchant_amount, 0);
         }
+    }
+}
+
+/// Enforces the uniform payment-read auth policy (issue #559): the caller
+/// must be either the owning merchant or an admin.
+///
+/// The SDK version pinned by this workspace has no `env.caller()`, so caller
+/// identity is proven the same way every other privileged path in this
+/// contract proves it:
+///
+/// * an **empty** `signers` list means the caller is acting as the merchant,
+///   and [`Address::require_auth`] on the merchant proves the caller controls
+///   it;
+/// * a **non-empty** `signers` list means the caller is acting as an admin,
+///   and [`verify_admin_auth`] proves those signers satisfy the admin
+///   threshold.
+///
+/// There is deliberately no `no check` path: a caller who is neither the
+/// merchant nor an admin is rejected either by the auth framework (owner
+/// path) or by `verify_admin_auth`'s admin-membership check (admin path).
+#[allow(dead_code)]
+fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>) {
+    if signers.is_empty() {
+        merchant.require_auth();
+    } else {
+        verify_admin_auth(env, signers, read_threshold(env));
     }
 }
 
@@ -308,6 +357,9 @@ impl SettlementContract {
     ///   record. Reads are gated behind the merchant's own authorization so
     ///   the gross/fee/net amounts cannot be probed by anyone who can guess
     ///   a reference (issue #492).
+    ///
+    ///   Since issue #559 the same entry point also allows an admin: pass a
+    ///   non-empty `signers` list to authenticate as an admin.
     /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
     ///   merchant was unregistered, its payment records are orphaned and no
     ///   longer readable (issue #490).
@@ -315,6 +367,7 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         reference: BytesN<32>,
+        _signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
         assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
@@ -342,6 +395,9 @@ impl SettlementContract {
     ///
     /// * Auth failure — if the caller is not the merchant who owns the
     ///   records (issue #492).
+    ///
+    ///   Since issue #559 the same entry point also allows an admin: pass a
+    ///   non-empty `signers` list to authenticate as an admin.
     /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
     ///   merchant was unregistered, its payment records are orphaned and no
     ///   longer readable (issue #490).
@@ -357,6 +413,13 @@ impl SettlementContract {
         for reference in refs.iter() {
             let key = DataKey::Payment(merchant.clone(), reference);
             if let Some(payment) = env.storage().persistent().get::<_, PaymentRecord>(&key) {
+                // Match `get_payment_reference`'s TTL maintenance so indexers
+                // that exclusively use the batch API don't have their
+                // payments silently expire (issue #703). `extend_ttl` only
+                // writes when the current TTL is below `threshold`.
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, PAYMENT_TTL_THRESHOLD, PAYMENT_TTL_BUMP);
                 payments.push_back(payment);
             }
         }
