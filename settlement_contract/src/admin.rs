@@ -102,8 +102,8 @@ impl SettlementContract {
     /// validation must be made inside `validate_governance` — never inlined in
     /// just one path, or the two paths will drift apart again.
     pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
         assert_not_paused(&env);
+        verify_admin_auth(&env, &signers, read_threshold(&env));
         validate_governance(&env, &new_governance);
         let admin = signers.get(0).unwrap();
         env.storage()
