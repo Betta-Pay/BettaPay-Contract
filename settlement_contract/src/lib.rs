@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
@@ -123,6 +124,11 @@
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
 //! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
+//!
+//! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
+//! governance: pausing while already paused panics with `AlreadyPaused`, and
+//! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
+//! `unpaused` event is only ever emitted on an actual state transition.
 //!
 //! ## Event Convention
 //!
