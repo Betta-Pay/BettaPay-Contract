@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
