@@ -401,6 +401,7 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&reset_admins.get(0).unwrap(), &operation);
     client.execute(&a1, &operation);
     client.execute(&initial_admins, &operation);
     client.execute(&initial_admins.get(0).unwrap().clone(), &operation);
@@ -642,6 +643,23 @@ fn test_execute_uniform_auth_all_variants() {
     env.set_auths(&[]);
     let dummy_executor = Address::generate(&env);
 
+    client.execute(&admins.get(0).unwrap(), &op_update_governance);
+    assert_eq!(client.get_governance(), new_gov);
+
+    client.execute(&admins.get(0).unwrap(), &op_cancel_recovery);
+    assert!(client.try_execute_recovery().is_err());
+
+    client.execute(&admins.get(0).unwrap(), &op_transfer_admin);
+    assert_eq!(client.get_admin(), new_admins);
+    assert_eq!(client.get_threshold(), 1);
+
+    client.execute(&admins.get(0).unwrap(), &op_register_merchant);
+    assert!(client.is_merchant_registered(&merchant));
+
+    client.execute(&admins.get(0).unwrap(), &op_unregister_merchant);
+    assert!(!client.is_merchant_registered(&merchant2));
+
+    client.execute(&admins.get(0).unwrap(), &op_set_settlement_rule);
     client.execute(&dummy_executor, &op_update_governance);
     assert_eq!(client.get_governance(), new_gov);
 
@@ -685,7 +703,14 @@ fn test_execute_uniform_auth_all_variants() {
     );
     assert_eq!(stored_rule.auto_settle, rule.auto_settle);
 
+    client.execute(&admins.get(0).unwrap(), &op_clear_settlement_rule);
+    assert!(client.get_settlement_rule(&merchant4).is_none());
+
+    client.execute(&admins.get(0).unwrap(), &op_set_default_rule);
     client.execute(&dummy_executor, &op_clear_settlement_rule);
+    assert!(client.get_settlement_rule(&merchant4).is_none());
+
+    client.execute(&dummy_executor, &op_set_default_rule);
     assert!(client.get_settlement_rule(&merchant4).is_none());
 
     client.execute(&dummy_executor, &op_set_default_rule);
@@ -707,6 +732,7 @@ fn test_execute_uniform_auth_all_variants() {
     // `upgrade` path) does not probe `supports_interface`. So this arm
     // succeeds — and succeeding with caller-auth mocking disabled is the
     // proof that it has no auth gate either.
+    client.execute(&admins.get(0).unwrap(), &op_upgrade);
     client.execute(&dummy_executor, &op_upgrade);
     client.execute(&Address::generate(&env), &op_upgrade);
 }
@@ -730,6 +756,7 @@ fn scheduled_cancel_recovery_executes_without_caller_auth() {
     // No caller auth is mocked: the old primary-admin `require_auth` would
     // fail here with `Unauthorized`.
     env.set_auths(&[]);
+    client.execute(&admins.get(0).unwrap(), &op);
     let dummy_executor = Address::generate(&env);
     client.execute(&dummy_executor, &op);
     client.execute(&Address::generate(&env), &op);

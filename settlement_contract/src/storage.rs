@@ -1,3 +1,4 @@
+use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
 use soroban_sdk::{panic_with_error, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
@@ -183,14 +184,25 @@ pub(crate) fn validate_nonzero_address(
     }
 }
 
+/// Returns whether a merchant has been registered **without** touching TTL.
+///
+/// This is the TTL-neutral read used by public query entry points so that a
+/// read-only check never mutates storage.
+pub(crate) fn is_merchant_registered_read(env: &Env, merchant: Address) -> bool {
+    let key = DataKey::Merchant(merchant);
+    env.storage().persistent().has(&key)
+}
+
+/// Returns whether a merchant has been registered and keeps the marker entry warm in storage.
 /// Panics with [`SettlementError::PaymentOrphaned`] when the merchant's
 /// payment records are no longer readable.
 ///
 /// Policy (issue #490): unregistering a merchant orphans its payment
-/// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone that
-/// survives re-registration, and a merchant that was never registered has no
-/// readable history either. A payment read therefore requires both a live
-/// merchant marker and no tombstone.
+/// records. `unregister_merchant` writes an `ArchivedMerchant` tombstone while
+/// the merchant is unregistered, and a merchant that was never registered has
+/// no readable history either. A payment read therefore requires both a live
+/// merchant marker and no tombstone. Re-registration clears the tombstone
+/// (issue #685), so a re-registered merchant's records become readable again.
 pub(crate) fn assert_payments_readable(env: &Env, merchant: &Address) {
     let registered = is_merchant_registered_internal(env, merchant.clone());
     let archived = env
@@ -240,6 +252,13 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
 
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, and finally using the bootstrap fallback.
+///
+/// This is a **pure resolution** function — it does NOT emit events.
+/// Callers that need to signal an unconfigured deployment (e.g. mutating
+/// entry points such as `store_payment_reference` or `set_settlement_rule`)
+/// must check whether the returned rule equals [`BOOTSTRAP_DEFAULT_RULE`]
+/// and emit `bootstrap_fallback` explicitly. Read-only paths (e.g.
+/// `calculate_fee_split`) must not emit events.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
@@ -301,32 +320,45 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
 /// unexpected error value — is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] instead of silently collapsing to
 /// `None`.
+///
+/// # Settlement timing fields (issue #484)
+///
+/// Governance provides protocol-level fee ceilings only. The resulting
+/// `SettlementRule` **always** has `settlement_delay_ledger: 0` (immediate
+/// settlement) and `auto_settle: false` (no automatic settlement). These
+/// values are intentionally fixed by design:
+///
+/// - Settlement timing is a per-merchant or admin-configured operational
+///   concern, not a protocol-wide governance policy.
+/// - The bootstrap default uses the same values (`0` / `false`), so
+///   merchants without any rule see consistent behavior.
+/// - If governance-controlled settlement timing is needed in the future,
+///   extend `GovFeeConfig` and this function in a coordinated upgrade.
+///
+/// See also: [`GovFeeConfig`][crate::GovFeeConfig].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
-    let args: Vec<Val> = Vec::new(env);
-    match env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
+    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
-        args,
+        Vec::new(env),
     ) {
-        // Governance returned a populated fee config — convert to a rule.
-        Ok(Ok(Some(config))) => {
-            let rule = SettlementRule {
-                platform_fee_bps: config.platform_fee_bps,
-                network_fee_bps: config.network_fee_bps,
-                settlement_delay_ledger: 0,
-                auto_settle: false,
-            };
-            if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-                panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-            }
-            Some(rule)
-        }
-        // Governance has no fee config set yet — fall through to bootstrap.
-        Ok(Ok(None)) => None,
-        // Governance call failed (contract error or host error).
+        Ok(Ok(val)) => val,
         _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let config = try_read_governance_fee_config(env, raw_val)?;
+
+    let rule = SettlementRule {
+        platform_fee_bps: config.platform_fee_bps,
+        network_fee_bps: config.network_fee_bps,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
+        panic_with_error!(env, SettlementError::InvalidSettlementDelay);
     }
+    Some(rule)
 }
 
 /// Reads the minimum payment amount from the governance contract's system
@@ -338,6 +370,7 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         return crate::MIN_PAYMENT_AMOUNT;
     };
     let mut args = Vec::<Val>::new(env);
+    args.push_back(Symbol::new(env, "min_payment").into_val(env));
     args.push_back(Symbol::new(env, "min_payment").to_val());
     match env.try_invoke_contract::<Option<i128>, SettlementError>(
         &governance,
@@ -356,6 +389,73 @@ pub(crate) fn assert_not_paused(env: &Env) {
     }
 }
 
+/// Validates the raw return value from governance's `get_fee_config` as a
+/// properly-shaped `GovFeeConfig` (a Soroban `#[contracttype]` struct encoded
+/// as a map keyed by field name).
+///
+/// Returns:
+/// - `Some(GovFeeConfig)` when the raw value is a map with both required fields
+///   (`platform_fee_bps` and `network_fee_bps`).
+/// - `None` when the raw value is `Void` (governance has no config set yet).
+///
+/// Panics with [`SettlementError::GovernanceCallFailed`] when the governance
+/// contract returned a malformed config (issue #483):
+/// - A map with fewer or more than 2 entries (e.g. a 1-field config that omits
+///   `network_fee_bps`).
+/// - A map that is missing either required key.
+/// - A value whose fields are not `u32`.
+///
+/// # Why this function exists
+///
+/// `try_invoke_contract::<Option<GovFeeConfig>, SettlementError>` deserialises
+/// the return value into `Option<GovFeeConfig>` in the **calling** contract's
+/// guest code. If the governance contract returned a struct with a different
+/// shape (e.g. 1 field instead of 2), the host-side `map_unpack_to_slice`
+/// panics and the panic is **not** caught by `try_invoke_contract`'s
+/// `Result`-based error handling — it propagates as an opaque host trap
+/// ("escalating error to panic") rather than surfacing as the typed
+/// `GovernanceCallFailed` error.
+///
+/// This function avoids that path by:
+/// 1. Calling `try_invoke_contract::<Val, SettlementError>` to get the raw
+///    `Val` return value without triggering typed deserialisation.
+/// 2. Converting the raw `Val` to `Map<Symbol, Val>` (safe: returns `Err` for
+///    non-map values like `Void`).
+/// 3. Validating the map structure (entry count, required keys, field types)
+///    before constructing `GovFeeConfig`.
+fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfig> {
+    // A Void return means governance has no fee config set yet.
+    // Map::try_from_val safely returns Err for non-map values.
+    let map: Map<Symbol, Val> = match Map::try_from_val(env, &raw_val) {
+        Ok(m) => m,
+        Err(_) => return None,
+    };
+
+    // Issue #483: assert exactly 2 fields before reading.
+    // A governance returning a single-field config (e.g. only platform_fee_bps)
+    // must be rejected rather than silently skipping the network-fee ceiling.
+    if map.len() != 2 {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+
+    let platform_fee_bps = match map.get(Symbol::new(env, "platform_fee_bps")) {
+        Some(val) => u32::try_from_val(env, &val)
+            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
+        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let network_fee_bps = match map.get(Symbol::new(env, "network_fee_bps")) {
+        Some(val) => u32::try_from_val(env, &val)
+            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
+        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    Some(GovFeeConfig {
+        platform_fee_bps,
+        network_fee_bps,
+    })
+}
+
 /// Reads the governance GovFeeConfig via cross-contract call and validates that
 /// the settlement rule fees do not exceed governance's configured ceilings.
 ///
@@ -367,19 +467,19 @@ pub(crate) fn assert_not_paused(env: &Env) {
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
-    let result = env.try_invoke_contract::<Option<GovFeeConfig>, SettlementError>(
+    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         Vec::new(env),
-    );
-
-    let fee_config = match result {
-        // Governance returned a populated fee config — check fee ceilings.
-        Ok(Ok(Some(cfg))) => cfg,
-        // Governance has no fee config set — no ceiling to enforce.
-        Ok(Ok(None)) => return,
-        // Governance call failed (contract error or host error).
+    ) {
+        Ok(Ok(val)) => val,
         _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
+    };
+
+    let fee_config = match try_read_governance_fee_config(env, raw_val) {
+        Some(cfg) => cfg,
+        // Governance has no fee config set — no ceiling to enforce.
+        None => return,
     };
 
     if rule.platform_fee_bps > fee_config.platform_fee_bps {

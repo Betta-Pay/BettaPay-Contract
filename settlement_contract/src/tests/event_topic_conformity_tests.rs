@@ -287,7 +287,13 @@ fn scheduled_operation_events_identify_the_executor() {
     assert_eq!(actor, Some(executor));
 }
 
+/// The fee hot path falls back to the protocol bootstrap rule when no
+/// merchant rule, default rule, or governance fee config is set — without
+/// emitting a `bootstrap_fallback` event on every payment (issue #691). The
+/// resolved rule is exactly the canonical [`BOOTSTRAP_DEFAULT_RULE`].
 #[test]
+fn bootstrap_fallback_resolves_without_emitting_event() {
+    let (env, client, admins, merchant) = setup();
 fn bootstrap_fallback_uses_canonical_topic() {
     let (_env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
@@ -317,6 +323,26 @@ fn bootstrap_fallback_uses_canonical_topic() {
     assert_eq!(split.platform_fee_amount, 10);
     assert_eq!(split.network_fee_amount, 1);
     assert_eq!(split.merchant_amount, 989);
+}
+
+/// Regression test for issue #485: read-only rule resolution must NOT
+/// emit bootstrap_fallback. Only mutating entry points should signal an
+/// unconfigured deployment.
+#[test]
+fn read_path_does_not_emit_bootstrap_fallback() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // No merchant rule, no default rule, and MockGovernance's get_fee_config
+    // always returns None — calculate_fee_split resolves to bootstrap but
+    // must NOT emit bootstrap_fallback because it is a read-only path.
+    let before = env.events().all().len();
+    client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "read-only calculate_fee_split must not emit bootstrap_fallback"
+    );
 }
 
 #[test]

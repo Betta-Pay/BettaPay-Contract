@@ -50,7 +50,15 @@ impl SettlementContract {
         }
         // Gate initialization to the deployer to prevent front-running (issue #684).
         deployer.require_auth();
+        if env.storage().instance().has(&DataKey::Initializing) {
+            panic_with_error!(&env, SettlementError::AlreadyInitialized);
+        }
         validate_admins_and_threshold(&env, &admins, threshold);
+
+        // Mark init as in-progress before any external call so that a
+        // self-recursive governance contract cannot reenter this function.
+        env.storage().instance().set(&DataKey::Initializing, &());
+
         validate_governance(&env, &governance);
         validate_nonzero_address(
             &env,
@@ -68,6 +76,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+
+        // Init is complete — remove the in-progress marker.
+        env.storage().instance().remove(&DataKey::Initializing);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
@@ -618,6 +629,7 @@ impl SettlementContract {
             env,
             &merchant,
         );
+        let _admin = read_admin(env);
 
         let admin = read_admin(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
@@ -740,6 +752,20 @@ impl SettlementContract {
             .persistent()
             .get::<_, SettlementRule>(&DataKey::Rule(merchant.clone()))
             .unwrap_or_else(|| read_rule_or_default(env, merchant.clone()));
+
+        // Signal an unconfigured deployment when the resolved rule is the
+        // bootstrap default (issue #485). Pure read paths must not emit this
+        // event — only mutating entry points do so.
+        if prev.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+            && prev.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
+            && prev.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
+            && prev.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
+        {
+            env.events().publish(
+                (Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT),),
+                BOOTSTRAP_DEFAULT_RULE,
+            );
+        }
 
         let key = DataKey::Rule(merchant.clone());
         env.storage().persistent().set(&key, &rule);
