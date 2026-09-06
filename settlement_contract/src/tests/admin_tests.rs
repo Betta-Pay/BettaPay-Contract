@@ -158,6 +158,15 @@ fn transfer_admin_rejected_for_non_admin() {
     );
 }
 
+// Issue #475: transfer_admin to the identical admin set must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #316)")]
+fn rejects_same_admin_transfer() {
+    let (_env, client, admins, _merchant) = setup();
+    let threshold = client.get_threshold();
+    client.transfer_admin(&admins, &admins, &threshold);
+}
+
 #[test]
 fn emits_event_on_admin_transfer() {
     let (env, client, admins, _merchant) = setup();

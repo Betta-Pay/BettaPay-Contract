@@ -19,7 +19,8 @@ use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
+    SCHEDULED_OP_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -208,6 +209,13 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         validate_admins_and_threshold(&env, &new_admins, new_threshold);
 
+        let old_admins = read_admins(&env);
+        let old_threshold = read_threshold(&env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(&env, SettlementError::SameAdmin);
+        }
+
+        let old_admin = storage::primary_admin(&old_admins).unwrap();
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
             if is_merchant_registered_and_bump_ttl(&env, new_admins.get(i).unwrap()) {
@@ -378,7 +386,7 @@ impl SettlementContract {
         );
         env.storage()
             .persistent()
-            .extend_ttl(&key, 17280 * 14, 17280 * 30);
+            .extend_ttl(&key, SCHEDULED_OP_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP);
 
         env.events().publish(
             (Symbol::new(&env, events::OP_SCHEDULED_EVENT), op_hash),
@@ -537,6 +545,17 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
+    fn _transfer_admin(env: &Env, new_admins: Vec<Address>, new_threshold: u32) {
+        validate_admins_and_threshold(env, &new_admins, new_threshold);
+
+        let old_admins = read_admins(env);
+        let old_threshold = read_threshold(env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(env, SettlementError::SameAdmin);
+        }
+
+        let old_admin = storage::primary_admin(&old_admins).unwrap();
+    fn _transfer_admin(env: &Env, executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
     fn _transfer_admin(env: &Env, _executor: &Address, new_admins: Vec<Address>, new_threshold: u32) {
         let old_admin = read_admin(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
