@@ -115,7 +115,7 @@
                   ]
                 },
                 {
-                  "u32": 6
+                  "u32": 0
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
@@ -259,7 +259,7 @@
                       ]
                     },
                     {
-                      "u32": 6
+                      "u32": 0
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"

@@ -21,14 +21,19 @@ pub struct AdminTransferred {
 /// In-flight recovery operation. Lives between `initiate_recovery` and a
 /// successful `execute_recovery` (or a `cancel_recovery`).
 ///
-/// Both contracts use exactly this shape; the struct is encoded by field name
-/// so any historical instance written with a copy of this struct in
-/// `governance_contract` remains readable via `bettapay_common`.
+/// `initiated_by` records the address that started this specific recovery -
+/// the recovery address that authenticated at initiation time (issue #560) -
+/// so `cancel_recovery` can validate the cancellation against it and
+/// off-chain consumers can audit who initiated. Both contracts use exactly
+/// this shape; the struct is encoded by field name so any historical
+/// instance written with a copy of this struct in `governance_contract`
+/// remains readable via `bettapay_common`.
 #[derive(Clone)]
 #[contracttype]
 pub struct PendingRecovery {
     pub new_admin: Address,
     pub execute_after: u64,
+    pub initiated_by: Address,
 }
 
 // Event-topic registry.
@@ -190,10 +195,13 @@ pub fn emit_recovery_initiated(
 /// Emits the `recovery_cancelled` event.
 ///
 /// Topics: `(Symbol("recovery_cancelled"),)`
-/// Data:    `admin_address`
-pub fn emit_recovery_cancelled(env: &Env, admin: &Address) {
-    env.events()
-        .publish((Symbol::new(env, RECOVERY_CANCELLED_EVENT),), admin.clone());
+/// Data:    `canceller` - the address that cancelled the recovery: an admin,
+///          or the initiator cancelling its own recovery (issue #560).
+pub fn emit_recovery_cancelled(env: &Env, canceller: &Address) {
+    env.events().publish(
+        (Symbol::new(env, RECOVERY_CANCELLED_EVENT),),
+        canceller.clone(),
+    );
 }
 
 /// Emits the `recovery_executed` event.
@@ -268,6 +276,7 @@ mod tests {
         let payload = PendingRecovery {
             new_admin,
             execute_after: 123,
+            initiated_by: Address::generate(&env),
         };
 
         let val: Val = payload.try_into_val(&env).unwrap();
@@ -275,6 +284,7 @@ mod tests {
 
         assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
         assert!(fields.contains_key(Symbol::new(&env, "execute_after")));
-        assert_eq!(fields.len(), 2);
+        assert!(fields.contains_key(Symbol::new(&env, "initiated_by")));
+        assert_eq!(fields.len(), 3);
     }
 }

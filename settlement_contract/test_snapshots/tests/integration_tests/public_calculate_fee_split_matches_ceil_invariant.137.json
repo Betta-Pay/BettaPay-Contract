@@ -158,6 +158,30 @@
           },
           "sub_invocations": []
         }
+      ],
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5",
+              "function_name": "register_merchant",
+              "args": [
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                    }
+                  ]
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
       ]
     ],
     [
@@ -191,7 +215,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 3601
+                        "u32": 1776
                       }
                     },
                     {
@@ -199,7 +223,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2901
+                        "u32": 4168
                       }
                     },
                     {
@@ -433,7 +457,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 4270020994084947596
+                "nonce": 4837995959683129791
               }
             },
             "durability": "temporary"
@@ -448,7 +472,7 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 4270020994084947596
+                    "nonce": 4837995959683129791
                   }
                 },
                 "durability": "temporary",
@@ -466,7 +490,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 4837995959683129791
+                "nonce": 8370022561469687789
               }
             },
             "durability": "temporary"
@@ -481,7 +505,40 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
+                    "nonce": 8370022561469687789
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 4270020994084947596
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 4270020994084947596
                   }
                 },
                 "durability": "temporary",
@@ -598,7 +655,7 @@
                                 "symbol": "network_fee_bps"
                               },
                               "val": {
-                                "u32": 3601
+                                "u32": 1776
                               }
                             },
                             {
@@ -606,7 +663,7 @@
                                 "symbol": "platform_fee_bps"
                               },
                               "val": {
-                                "u32": 2901
+                                "u32": 4168
                               }
                             },
                             {
@@ -654,6 +711,18 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
                         }
                       },
                       {
@@ -1009,7 +1078,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 3601
+                        "u32": 1776
                       }
                     },
                     {
@@ -1017,7 +1086,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2901
+                        "u32": 4168
                       }
                     },
                     {
@@ -1150,7 +1219,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 3601
+                        "u32": 1776
                       }
                     },
                     {
@@ -1158,7 +1227,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2901
+                        "u32": 4168
                       }
                     },
                     {
@@ -1225,7 +1294,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 395587422
+                    "lo": 970304434
                   }
                 }
               ]
@@ -1306,7 +1375,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 395587422
+                      "lo": 970304434
                     }
                   }
                 },
@@ -1317,7 +1386,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 138376479
+                      "lo": 393555477
                     }
                   }
                 },
@@ -1328,7 +1397,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 142451031
+                      "lo": 172326068
                     }
                   }
                 },
@@ -1339,7 +1408,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 114759912
+                      "lo": 404422889
                     }
                   }
                 }

@@ -50,6 +50,8 @@ pub const TTL_THRESHOLD_LEDGERS: u32 = LEDGERS_PER_DAY * 14;
 pub const TTL_BUMP_LEDGERS: u32 = LEDGERS_PER_DAY * 30;
 
 /// Cooldown between `initiate_recovery` and `execute_recovery`: seven days,
-/// expressed in seconds. Both contracts use the same delay window so they can
-/// share a single definition.
+/// expressed in seconds. Scheduled settlement administrative operations use a
+/// delay of at least this long. This ordering is part of the threat model:
+/// recovery must be able to veto compromised-admin upgrades and admin
+/// transfers before they execute.
 pub const RECOVERY_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;

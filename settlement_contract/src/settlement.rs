@@ -111,6 +111,9 @@ impl SettlementContract {
         if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
         }
+        if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
+            panic_with_error!(&env, SettlementError::InvalidFeeBps);
+        }
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
         }
@@ -155,5 +158,18 @@ impl SettlementContract {
         } else {
             None
         }
+    }
+
+    /// Returns the effective settlement rule for a merchant, applying the full
+    /// resolution chain: merchant-specific rule → global default → governance
+    /// fee config → bootstrap fallback.
+    ///
+    /// Unlike [`get_settlement_rule`](Self::get_settlement_rule) (which returns
+    /// `None` when no merchant-specific rule is stored) and [`get_default_rule`](Self::get_default_rule) (which returns `None` when
+    /// no global default is stored), this method always returns a rule — it
+    /// follows the same resolution that the write and payment paths use
+    /// internally.
+    pub fn get_effective_rule(env: Env, merchant: Address) -> SettlementRule {
+        read_rule_or_default(&env, merchant)
     }
 }

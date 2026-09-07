@@ -7,11 +7,18 @@
 //!   when no merchant-specific or default rule is set).
 //! - Write path: `validate_fee_against_governance` (reached via
 //!   `set_settlement_rule` / `set_default_rule`).
+//!
+//! Issue #483: Malformed governance configs (e.g. a 1-field config that omits
+//! `network_fee_bps`) must be rejected rather than silently skipping the
+//! network-fee ceiling.
 
 use crate::types::DataKey;
 use crate::*;
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env};
+use governance_contract::{
+    FeeConfig as GovFeeConfig, GovernanceContract, GovernanceContractClient,
+};
+use soroban_sdk::testutils::{Address as _, Events};
+use soroban_sdk::{Address, Env, FromVal, Symbol};
 
 // ---------------------------------------------------------------------------
 // Failing governance stub — lives in its own module to avoid symbol collisions
@@ -38,6 +45,28 @@ mod panicking_gov {
 }
 
 use panicking_gov::PanickingGovernance;
+
+// A second failing-governance stub that returns a *typed error* rather than
+// trapping. This exercises the `Ok(Err(_))` branch of `try_invoke_contract`
+// (a contract that deliberately rejects the read), as opposed to the trap
+// branch exercised by `PanickingGovernance`.
+mod erroring_gov {
+    use crate::errors::SettlementError;
+    use crate::GovFeeConfig;
+    use soroban_sdk::{contract, contractimpl, Env};
+
+    /// A governance stub whose `get_fee_config` returns a typed error.
+    #[contract]
+    pub struct ErroringGovernance;
+
+    #[contractimpl]
+    impl ErroringGovernance {
+        #[allow(unused_variables)]
+        pub fn get_fee_config(env: Env) -> Result<Option<GovFeeConfig>, SettlementError> {
+            Err(SettlementError::GovernanceCallFailed)
+        }
+    }
+}
 
 /// Helper: directly injects a governance address into the settlement contract's
 /// instance storage, bypassing `validate_governance` (which would itself call
@@ -261,6 +290,7 @@ fn init_succeeds_with_panicking_governance() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // init must succeed directly with panicking_gov without cross-calling it
     let deployer = Address::generate(&env);
@@ -291,6 +321,7 @@ fn update_governance_succeeds_with_panicking_governance() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
+    let deployer = Address::generate(&env);
 
     let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &empty_gov, &recovery);
@@ -312,6 +343,7 @@ fn init_succeeds_with_reentrant_governance_and_prevents_double_init() {
 
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
 
     // Configure target for potential reentrancy callback
     env.invoke_contract::<()>(
@@ -360,9 +392,9 @@ fn read_path_governance_valid_config_used() {
     let gov_client = GovernanceContractClient::new(&env, &gov_id);
     let gov_admin = Address::generate(&env);
     let recovery = Address::generate(&env);
-    let deployer = Address::generate(&env);
+    let gov_deployer = Address::generate(&env);
     gov_client.init(
-        &deployer,
+        &gov_deployer,
         &soroban_sdk::vec![&env, gov_admin.clone()],
         &1,
         &recovery,
@@ -397,13 +429,20 @@ fn read_path_governance_valid_config_used() {
     assert_eq!(split.merchant_amount, 9_700);
 }
 
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the
+/// fallback chain resolves to the protocol bootstrap defaults without
+/// surfacing `GovernanceCallFailed` and without emitting a
+/// `BOOTSTRAP_FALLBACK_EVENT` on the hot path (issue #691).
+/// Verifies that when governance has no config set (`Ok(Ok(None))`), the read
+/// path falls back to the bootstrap default and does not emit a fallback event
+/// (issue #691).
 /// Verifies that when governance has no config set (`Ok(Ok(None))`), the fallback
 /// to bootstrap default applies the bootstrap fee values.
 ///
 /// Note: `calculate_fee_split` is a read-only path and does not emit events
 /// (issue #691), so we verify the fee values directly.
 #[test]
-fn read_path_governance_none_emits_bootstrap_fallback_event() {
+fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -424,6 +463,32 @@ fn read_path_governance_none_emits_bootstrap_fallback_event() {
     );
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
+    let amount = 10_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
+    let split = client.calculate_fee_split(&merchant, &amount);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
+
+    // No BOOTSTRAP_FALLBACK_EVENT on the hot path (issue #691).
+    let events = env.events().all();
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() {
+            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+            assert_ne!(
+                sym,
+                Symbol::new(&env, bettapay_common::events::BOOTSTRAP_FALLBACK_EVENT),
+                "bootstrap_fallback must not be emitted when falling back on the hot path"
+            );
+        }
+    }
     // Bootstrap default: 100 bps platform, 5 bps network.
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);

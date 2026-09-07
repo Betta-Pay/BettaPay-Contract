@@ -33,3 +33,6 @@ identity/
 # MiMoCode
 .mimocode/
 .mimocode
+
+# Dependencies
+node_modules/

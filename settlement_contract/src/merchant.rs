@@ -4,7 +4,7 @@ use bettapay_common::events;
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_internal, read_fallback_rule, read_threshold,
+    assert_not_paused, is_merchant_registered_read, read_fallback_rule, read_threshold,
     validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
@@ -19,19 +19,13 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
-    /// * [`EmptyAddress`](SettlementError::EmptyAddress) — if the provided merchant address is empty.
     /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if the provided merchant address is the zero address.
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     pub fn register_merchant(env: Env, signers: Vec<Address>, merchant: Address) {
         assert_not_paused(&env);
 
-        validate_nonzero_address(
-            &env,
-            &merchant,
-            SettlementError::EmptyAddress,
-            SettlementError::ZeroAddress,
-        );
+        validate_nonzero_address(&env, &merchant, SettlementError::ZeroAddress);
 
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
@@ -44,6 +38,12 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidAdmin);
             }
         }
+
+        // The merchant must consent to its own registration — admin auth alone
+        // is not proof the merchant address is controlled by the party being
+        // registered, and would otherwise let an admin register arbitrary or
+        // squatted addresses as merchants.
+        merchant.require_auth();
 
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
@@ -88,10 +88,10 @@ impl SettlementContract {
         env.storage().persistent().remove(&key);
 
         // Orphan the merchant's payment history: an ArchivedMerchant tombstone
-        // makes every existing payment record unreadable for the rest of its
-        // TTL (issue #490). The tombstone survives re-registration, so a
-        // re-registered merchant cannot resurrect records from an earlier
-        // registration either.
+        // makes every existing payment record unreadable for as long as the
+        // merchant stays unregistered (issue #490). Re-registration clears the
+        // tombstone (issue #685) so a re-registered merchant can read its new
+        // records again.
         let archived_key = DataKey::ArchivedMerchant(merchant.clone());
         env.storage().persistent().set(&archived_key, &());
         env.storage().persistent().extend_ttl(
@@ -131,6 +131,6 @@ impl SettlementContract {
         if !env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, SettlementError::NotInitialized);
         }
-        is_merchant_registered_internal(&env, merchant)
+        is_merchant_registered_read(&env, merchant)
     }
 }

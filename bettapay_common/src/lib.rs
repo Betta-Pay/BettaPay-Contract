@@ -9,11 +9,16 @@
 //!
 //! - [`constants`] — protocol-wide numeric constants (basis-point denominators,
 //!   fee bounds, TTL helpers, recovery delay).
-//! - [`storage`] — common storage helpers (`read_admin`, `is_paused`,
-//!   `is_zero_address`) and the [`CommonDataKey`] enum that owns the keys
-//!   shared by every contract's instance storage.
+//! - [`storage`] — common storage helpers (`is_paused`, `set_paused`,
+//!   `is_zero_address`) and the [`CommonDataKey`] enum, the single
+//!   declaration of the key shapes (`Paused`, `RecoveryAddress`,
+//!   `PendingRecovery`, `Threshold`) every contract writes into its own,
+//!   separate instance storage — see [`storage`]'s doc comment for what
+//!   "storage separation" means here.
 //! - [`events`] — shared event shapes (such as [`events::AdminTransferred`] and
 //!   [`events::PendingRecovery`]) and the canonical event-name strings.
+//! - [`upgrade`] — the Wasm upgrade probe (`probe_supports_interface`) that
+//!   every upgrade entry point must run before swapping the executable.
 //! - [`error_codes`] — the canonical numeric error-code registry. Every
 //!   contract's `#[contracterror]` enum must use these constants as
 //!   discriminants for shared error concepts, and stay within its reserved
@@ -36,3 +41,4 @@ pub mod error_codes;
 pub mod events;
 pub mod storage;
 pub mod types;
+pub mod upgrade;

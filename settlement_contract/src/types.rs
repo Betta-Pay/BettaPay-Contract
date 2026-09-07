@@ -65,6 +65,19 @@ pub struct PaymentRecord {
 ///
 /// This type exists solely for decoding cross-contract calls from governance.
 /// It is never written to settlement's own storage.
+///
+/// **Design note (issue #484):** Governance provides protocol-level fee
+/// ceilings only (`platform_fee_bps`, `network_fee_bps`). Settlement timing
+/// parameters (`settlement_delay_ledger`, `auto_settle`) are intentionally
+/// **not** part of the governance fee config. These are per-merchant or
+/// admin-configured operational concerns, not protocol-wide governance
+/// policy. When a governance rule is resolved in
+/// [`read_governance_fee_rule`][crate::storage::read_governance_fee_rule],
+/// `settlement_delay_ledger` is fixed at `0` (immediate settlement) and
+/// `auto_settle` is fixed at `false` (no automatic settlement). This
+/// matches the bootstrap default. If protocol-level settlement timing
+/// governance is needed in the future, extend this struct and the
+/// governance contract's `FeeConfig` in a coordinated upgrade.
 #[derive(Clone)]
 #[contracttype]
 pub struct GovFeeConfig {
@@ -89,10 +102,13 @@ pub struct ScheduledOp {
     pub execute_at: u64,
 }
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+// RecoveryAddress, PendingRecovery, Paused, and Threshold live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
-// contract's own storage without a migration.
+// contract's own storage without a migration, and for what "storage
+// separation" means for a key type shared this way. Admin stays local:
+// this contract stores it as a multisig `Vec<Address>` under its own
+// `DataKey::Admin`, which CommonDataKey does not own.
 
 #[derive(Clone)]
 #[contracttype]
@@ -118,6 +134,10 @@ pub enum Operation {
 pub(crate) enum DataKey {
     /// Instance — singleton, read on every mutating call.
     Admin,
+    /// Instance — set during `init` before any external call to prevent
+    /// reentrant re-initialisation through a self-recursive governance contract.
+    /// Removed once init completes.
+    Initializing,
     /// Instance — singleton address, rarely changes.
     Governance,
     /// Persistent — one per merchant, many entries.
@@ -142,4 +162,8 @@ pub(crate) enum DataKey {
     /// Instance — stored at `init` to gate initialization to the deployer
     /// and prevent front-running (issue #684).
     Deployer,
+    /// Instance-storage schema version (u32) written at `init`. Baseline for
+    /// the first storage migration, mirroring governance_contract's
+    /// `DataKey::SchemaVersion` (issue #507, issue #704).
+    SchemaVersion,
 }

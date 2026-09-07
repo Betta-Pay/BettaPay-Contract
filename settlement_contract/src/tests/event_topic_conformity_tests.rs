@@ -246,7 +246,7 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
 
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&admins.get(0).unwrap(), &operation);
+    client.execute(&admins.get(0).unwrap().clone(), &operation);
     assert_eq!(
         last_topic(&env),
         Symbol::new(&env, events::OP_EXECUTED_EVENT)
@@ -286,20 +286,51 @@ fn scheduled_operation_events_identify_the_executor() {
     assert_eq!(actor, Some(executor));
 }
 
+/// The fee hot path falls back to the protocol bootstrap rule when no
+/// merchant rule, default rule, or governance fee config is set — without
+/// emitting a `bootstrap_fallback` event on every payment (issue #691). The
+/// resolved rule is exactly the canonical [`BOOTSTRAP_DEFAULT_RULE`].
 #[test]
-fn bootstrap_fallback_uses_canonical_topic() {
-    let (_env, client, admins, merchant) = setup();
+fn bootstrap_fallback_resolves_without_emitting_event() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let amount = 1_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
+    let before = env.events().all().len();
+    let split = client.calculate_fee_split(&merchant, &amount);
+
+    // Event silence: the hot path must not emit a bootstrap_fallback event.
+    assert_eq!(env.events().all().len(), before);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
+}
+
+/// Regression test for issue #485: read-only rule resolution must NOT
+/// emit bootstrap_fallback. Only mutating entry points should signal an
+/// unconfigured deployment.
+#[test]
+fn read_path_does_not_emit_bootstrap_fallback() {
+    let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
     // No merchant rule, no default rule, and MockGovernance's get_fee_config
-    // always returns None, so calculate_fee_split falls through to the
-    // bootstrap fallback rule. calculate_fee_split is a read-only path and
-    // does not emit events (issue #691), so we verify the fee values
-    // instead.
-    let split = client.calculate_fee_split(&merchant, &1_000);
-    assert_eq!(split.platform_fee_amount, 10);
-    assert_eq!(split.network_fee_amount, 1);
-    assert_eq!(split.merchant_amount, 989);
+    // always returns None — calculate_fee_split resolves to bootstrap but
+    // must NOT emit bootstrap_fallback because it is a read-only path.
+    let before = env.events().all().len();
+    client.calculate_fee_split(&merchant, &1_000);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "read-only calculate_fee_split must not emit bootstrap_fallback"
+    );
 }
 
 #[test]

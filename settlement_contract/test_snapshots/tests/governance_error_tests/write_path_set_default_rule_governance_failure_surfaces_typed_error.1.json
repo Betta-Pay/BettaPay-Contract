@@ -261,6 +261,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Threshold"
                             }
                           ]
@@ -510,7 +522,7 @@
               }
             ],
             "data": {
-              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#153)'"
+              "string": "caught panic 'governance trap' from contract function 'Symbol(obj#169)'"
             }
           }
         }
