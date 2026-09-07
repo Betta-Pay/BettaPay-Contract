@@ -89,7 +89,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 4026
+                        "u32": 876
                       }
                     },
                     {
@@ -97,7 +97,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2439
+                        "u32": 1012
                       }
                     }
                   ]
@@ -253,7 +253,7 @@
                                 "symbol": "network_fee_bps"
                               },
                               "val": {
-                                "u32": 4026
+                                "u32": 876
                               }
                             },
                             {
@@ -261,7 +261,7 @@
                                 "symbol": "platform_fee_bps"
                               },
                               "val": {
-                                "u32": 2439
+                                "u32": 1012
                               }
                             }
                           ]
@@ -488,7 +488,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 4026
+                        "u32": 876
                       }
                     },
                     {
@@ -496,7 +496,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2439
+                        "u32": 1012
                       }
                     }
                   ]
@@ -532,7 +532,7 @@
                         "symbol": "network_fee_bps"
                       },
                       "val": {
-                        "u32": 4026
+                        "u32": 876
                       }
                     },
                     {
@@ -540,7 +540,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2439
+                        "u32": 1012
                       }
                     }
                   ]
@@ -619,7 +619,7 @@
                     "symbol": "network_fee_bps"
                   },
                   "val": {
-                    "u32": 4026
+                    "u32": 876
                   }
                 },
                 {
@@ -627,7 +627,7 @@
                     "symbol": "platform_fee_bps"
                   },
                   "val": {
-                    "u32": 2439
+                    "u32": 1012
                   }
                 }
               ]

@@ -27,7 +27,7 @@
                   ]
                 },
                 {
-                  "u32": 2
+                  "u32": 1
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -60,7 +60,7 @@
                   ]
                 },
                 {
-                  "u32": 2
+                  "u32": 1
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -93,7 +93,7 @@
                   ]
                 },
                 {
-                  "u32": 2
+                  "u32": 1
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -270,7 +270,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 2
+                          "u32": 1
                         }
                       }
                     ]
@@ -374,7 +374,7 @@
                   ]
                 },
                 {
-                  "u32": 2
+                  "u32": 1
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -467,7 +467,7 @@
               }
             ],
             "data": {
-              "u32": 2
+              "u32": 1
             }
           }
         }

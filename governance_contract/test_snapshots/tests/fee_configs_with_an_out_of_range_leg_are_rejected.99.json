@@ -391,7 +391,7 @@
                         "symbol": "platform_fee_bps"
                       },
                       "val": {
-                        "u32": 2507
+                        "u32": 1498
                       }
                     }
                   ]
@@ -534,7 +534,7 @@
                             "symbol": "platform_fee_bps"
                           },
                           "val": {
-                            "u32": 2507
+                            "u32": 1498
                           }
                         }
                       ]

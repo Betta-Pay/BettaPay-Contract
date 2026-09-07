@@ -25,11 +25,7 @@ impl SettlementContract {
     pub fn register_merchant(env: Env, signers: Vec<Address>, merchant: Address) {
         assert_not_paused(&env);
 
-        validate_nonzero_address(
-            &env,
-            &merchant,
-            SettlementError::ZeroAddress,
-        );
+        validate_nonzero_address(&env, &merchant, SettlementError::ZeroAddress);
 
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
