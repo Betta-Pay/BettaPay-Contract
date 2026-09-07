@@ -1126,7 +1126,6 @@ mod tests {
     // Issue #471: the same len > threshold setup succeeds once every proposed
     // admin has authenticated, and all of them are stored.
     #[test]
-    #[ignore = "snapshot needs update after AlreadyPaused fix"]
     fn init_accepts_all_admins_authenticated_when_threshold_below_len() {
         let env = Env::default();
 
@@ -1134,16 +1133,21 @@ mod tests {
         let admin_b = Address::generate(&env);
         let admins = vec![&env, admin_a.clone(), admin_b.clone()];
         let recovery = Address::generate(&env);
+        let deployer = Address::generate(&env);
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
 
         let invoke = MockAuthInvoke {
             contract: &contract_id,
             fn_name: "init",
-            args: (admins.clone(), 1u32, &recovery).into_val(&env),
+            args: (deployer.clone(), admins.clone(), 1u32, &recovery).into_val(&env),
             sub_invokes: &[],
         };
         env.mock_auths(&[
+            MockAuth {
+                address: &deployer,
+                invoke: &invoke,
+            },
             MockAuth {
                 address: &admin_a,
                 invoke: &invoke,
@@ -1154,7 +1158,6 @@ mod tests {
             },
         ]);
 
-        let deployer = Address::generate(&env);
         client.init(&deployer, &admins, &1, &recovery);
         assert_eq!(client.get_admin(), admins);
         assert_eq!(client.get_threshold(), 1);
