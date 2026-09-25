@@ -334,6 +334,73 @@ fn read_path_does_not_emit_bootstrap_fallback() {
 }
 
 #[test]
+fn cancel_recovery_execute_emits_op_executed() {
+    let (env, client, admins, _merchant) = setup();
+
+    // A pending recovery is required before CancelRecovery can execute.
+    let recovery_target = Address::generate(&env);
+    client.initiate_recovery(&recovery_target);
+
+    let op = Operation::CancelRecovery;
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let executor = Address::generate(&env);
+    env.set_auths(&[]);
+    client.execute(&executor, &op);
+
+    assert_eq!(
+        last_topic(&env),
+        Symbol::new(&env, events::OP_EXECUTED_EVENT),
+        "CancelRecovery execute must emit op_executed as its last event"
+    );
+}
+
+#[test]
+fn rule_updated_carries_prev_and_new() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let old_rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let new_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    // Set initial rule so the second call has a known prev.
+    client.set_settlement_rule(&admins, &merchant, &old_rule);
+    // Update to new_rule; the event must carry old_rule as prev.
+    client.set_settlement_rule(&admins, &merchant, &new_rule);
+
+    let events = env.events().all();
+    let mut payload = None;
+    for i in 0..events.len() {
+        let (_contract, topics, data) = events.get(i).unwrap();
+        if !topics.is_empty()
+            && Symbol::from_val(&env, &topics.get(0).unwrap())
+                == Symbol::new(&env, events::SETTLEMENT_RULE_UPDATED_EVENT)
+        {
+            payload = Some(data);
+        }
+    }
+    let data = payload.expect("settlement_rule_updated event must have been emitted");
+    let (_executor, prev, new): (Address, SettlementRule, SettlementRule) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(prev.platform_fee_bps, old_rule.platform_fee_bps);
+    assert_eq!(prev.network_fee_bps, old_rule.network_fee_bps);
+    assert_eq!(new.platform_fee_bps, new_rule.platform_fee_bps);
+    assert_eq!(new.network_fee_bps, new_rule.network_fee_bps);
+}
+
+#[test]
 fn clear_settlement_rule_emits_only_one_event() {
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
