@@ -578,3 +578,99 @@ fn scheduled_cancel_recovery_executes_without_caller_auth() {
     // The pending recovery is gone.
     assert!(client.try_execute_recovery().is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Issue #824: Recovery happy-path delay test with timestamp warp
+// ---------------------------------------------------------------------------
+
+/// Verifies the recovery happy path: `execute_recovery` fails before the
+/// 7-day delay has elapsed and succeeds exactly at the boundary.
+///
+/// Two timestamps are probed:
+/// 1. `RECOVERY_DELAY_SECONDS - 1` — one second before expiry → must panic
+///    with `RecoveryDelayActive` (#9).
+/// 2. `RECOVERY_DELAY_SECONDS` — exactly at the expiry boundary → must
+///    succeed and install the new admin.
+#[test]
+fn recovery_execute_succeeds_exactly_at_delay_boundary() {
+    let (env, client, _admins, _) = setup();
+    let new_admin = Address::generate(&env);
+
+    client.initiate_recovery(&new_admin);
+
+    // One second before the delay expires: execute_recovery must be refused.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS - 1);
+    assert!(
+        client.try_execute_recovery().is_err(),
+        "execute_recovery must fail before the delay has elapsed"
+    );
+
+    // Advance by the final second to reach the exact expiry boundary.
+    env.ledger().with_mut(|ledger| ledger.timestamp += 1);
+    client.execute_recovery();
+
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, new_admin],
+        "execute_recovery at the boundary must install the new admin"
+    );
+    assert_eq!(client.get_threshold(), 1);
+
+    // The pending record is consumed: a second execute_recovery must fail.
+    assert!(
+        client.try_execute_recovery().is_err(),
+        "pending recovery must be consumed after a successful execute"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #820: Execute-before-timelock rejection test
+// ---------------------------------------------------------------------------
+
+/// Verifies that `execute` is rejected with `ExecutionNotReady` (#10) at every
+/// point before the scheduled operation's delay has fully elapsed.
+///
+/// Three timestamps are probed to isolate the enforcement boundary:
+/// 1. `t = 0` (immediately after scheduling) — must be rejected.
+/// 2. `t = DEFAULT_TIMELOCK_DELAY_SECONDS - 1` (one second before expiry) — must
+///    still be rejected.
+/// 3. The operation is cancelled after the boundary checks so storage is left
+///    clean; this confirms the rejection did not consume the scheduled entry.
+#[test]
+fn execute_before_timelock_is_rejected_with_execution_not_ready() {
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // Immediately after scheduling: no time has passed.
+    let err_immediate = client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .unwrap_err();
+    assert_eq!(
+        err_immediate,
+        Ok(soroban_sdk::Error::from_contract_error(
+            crate::SettlementError::ExecutionNotReady as u32
+        )),
+        "execute at t=0 must return ExecutionNotReady"
+    );
+
+    // One second before the delay expires.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS - 1);
+    let err_early = client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .unwrap_err();
+    assert_eq!(
+        err_early,
+        Ok(soroban_sdk::Error::from_contract_error(
+            crate::SettlementError::ExecutionNotReady as u32
+        )),
+        "execute one second before expiry must return ExecutionNotReady"
+    );
+
+    // The scheduled entry must still be present: cancel succeeds.
+    client.cancel(&admins, &operation);
+    assert!(!client.is_merchant_registered(&merchant));
+}
