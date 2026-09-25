@@ -2235,4 +2235,88 @@ mod tests {
             "the admin path must still be able to cancel a pending recovery"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Zero-value fee config rejection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn zero_fee_config_rejected() {
+        let (_env, client, admins, _recovery) = setup();
+        let cfg = FeeConfig {
+            platform_fee_bps: 0,
+            network_fee_bps: 100,
+        };
+        assert!(
+            client.try_set_fee_config(&admins, &cfg).is_err(),
+            "FeeConfig with platform_fee_bps=0 must be rejected with InvalidFeeBps"
+        );
+    }
+
+    #[test]
+    fn min_fee_config_accepted() {
+        let (_env, client, admins, _recovery) = setup();
+        let cfg = FeeConfig {
+            platform_fee_bps: 5,
+            network_fee_bps: 5,
+        };
+        assert!(
+            client.try_set_fee_config(&admins, &cfg).is_ok(),
+            "FeeConfig {{5, 5}} at MIN_FEE_BPS must succeed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-anchor rejection (asset == anchor)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn self_anchor_rejected() {
+        let (env, client, admins, _recovery) = setup();
+        let asset = Address::generate(&env);
+        assert!(
+            client.try_upsert_anchor(&admins, &asset, &asset).is_err(),
+            "upsert_anchor with asset==anchor must fail"
+        );
+    }
+
+    #[test]
+    fn distinct_anchor_accepted() {
+        let (env, client, admins, _recovery) = setup();
+        let asset = Address::generate(&env);
+        let anchor = Address::generate(&env);
+        assert!(
+            client.try_upsert_anchor(&admins, &asset, &anchor).is_ok(),
+            "upsert_anchor with distinct asset and anchor must succeed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Negative system param rejection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn negative_system_param_rejected() {
+        let (env, client, admins, _recovery) = setup();
+        let key = Symbol::new(&env, "min_payment");
+        assert!(
+            client
+                .try_update_system_param(&admins, &key, &-1)
+                .is_err(),
+            "update_system_param with value -1 must fail with InvalidParamValue"
+        );
+    }
+
+    #[test]
+    fn non_negative_system_param_accepted() {
+        let (env, client, admins, _recovery) = setup();
+        let key = Symbol::new(&env, "min_payment");
+        assert!(
+            client
+                .try_update_system_param(&admins, &key, &0)
+                .is_ok(),
+            "update_system_param with value 0 must succeed"
+        );
+        assert_eq!(client.get_system_param(&key), Some(0));
+    }
 }
