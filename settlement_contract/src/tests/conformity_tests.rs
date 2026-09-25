@@ -12,6 +12,12 @@
 use crate::errors::SettlementError;
 use governance_contract::GovernanceError;
 
+use crate::*;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, BytesN, Env};
+
+use super::{register_governance, setup};
+
 fn governance_codes() -> [(&'static str, u32); 17] {
     [
         (
@@ -173,6 +179,72 @@ fn governance_and_settlement_error_codes_never_collide() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Zero-reference rejection (issue: Add all-zero reference rejection test)
+// ---------------------------------------------------------------------------
+
+/// An all-zero 32-byte reference is reserved and must be rejected with
+/// `InvalidPaymentReference`. A non-zero reference must succeed.
+#[test]
+fn zero_ref_store_fails_invalid_payment_reference() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let zero_ref = BytesN::from_array(&env, &[0u8; 32]);
+    let result = client.try_store_payment_reference(&merchant, &zero_ref, &1_000);
+    assert!(
+        matches!(
+            result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(307)))
+        ),
+        "all-zero reference must fail with InvalidPaymentReference (307)"
+    );
+
+    let nonzero_ref = BytesN::from_array(&env, &[1u8; 32]);
+    client.store_payment_reference(&merchant, &nonzero_ref, &1_000);
+}
+
+// ---------------------------------------------------------------------------
+// Batch-too-large boundary (issue: Add batch-too-large boundary test at 100 vs 101)
+// ---------------------------------------------------------------------------
+
+/// Exactly 100 refs is within the cap and must succeed; 101 must fail with
+/// `BatchTooLarge`.
+#[test]
+fn batch_at_cap_succeeds_and_above_cap_fails() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Build 100 distinct refs and store them.
+    let mut refs_100 = soroban_sdk::Vec::new(&env);
+    for i in 0u8..100 {
+        let mut bytes = [0u8; 32];
+        bytes[31] = i;
+        bytes[0] = 1; // ensure non-zero
+        let reference = BytesN::from_array(&env, &bytes);
+        client.store_payment_reference(&merchant, &reference, &1_000);
+        refs_100.push_back(reference);
+    }
+
+    // 100 refs — must succeed.
+    client.get_payments(&merchant, &refs_100);
+
+    // Build a 101-element vec by duplicating the last entry (get_payments
+    // accepts duplicates; we only need to exceed the batch cap).
+    let extra = refs_100.get(0).unwrap();
+    let mut refs_101 = refs_100.clone();
+    refs_101.push_back(extra);
+
+    let result = client.try_get_payments(&merchant, &refs_101);
+    assert!(
+        matches!(
+            result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(314)))
+        ),
+        "101-element batch must fail with BatchTooLarge (314)"
+    );
 }
 
 #[test]
