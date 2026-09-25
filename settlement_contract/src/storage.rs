@@ -330,14 +330,7 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
 /// See also: [`GovFeeConfig`][crate::GovFeeConfig].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
-    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
-        &governance,
-        &Symbol::new(env, "get_fee_config"),
-        Vec::new(env),
-    ) {
-        Ok(Ok(val)) => val,
-        _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
-    };
+    let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let config = try_read_governance_fee_config(env, raw_val)?;
 
@@ -377,6 +370,24 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
 pub(crate) fn assert_not_paused(env: &Env) {
     if storage::is_paused(env) {
         panic_with_error!(env, SettlementError::Paused);
+    }
+}
+
+/// Invokes the governance contract's `get_fee_config` entry point and returns
+/// the raw [`Val`] it produces.
+///
+/// Both [`read_governance_fee_rule`] and [`validate_fee_against_governance`]
+/// need this call; extracting it here removes the duplication and keeps the
+/// error-handling policy (`GovernanceCallFailed` on any non-`Ok(Ok(_))`
+/// result) in one place.
+fn invoke_governance_get_fee_config(env: &Env, governance: &Address) -> Val {
+    match env.try_invoke_contract::<Val, SettlementError>(
+        governance,
+        &Symbol::new(env, "get_fee_config"),
+        Vec::new(env),
+    ) {
+        Ok(Ok(val)) => val,
+        _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
     }
 }
 
@@ -458,14 +469,7 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
-    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
-        &governance,
-        &Symbol::new(env, "get_fee_config"),
-        Vec::new(env),
-    ) {
-        Ok(Ok(val)) => val,
-        _ => panic_with_error!(env, SettlementError::GovernanceCallFailed),
-    };
+    let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let fee_config = match try_read_governance_fee_config(env, raw_val) {
         Some(cfg) => cfg,
