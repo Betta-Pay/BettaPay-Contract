@@ -87,3 +87,70 @@ in this repository (`settlement_contract`, `governance_contract`, `scripts/`).
 Vulnerabilities discovered in third-party dependencies used by this project
 should also be reported here so we can coordinate an upstream fix or a local
 mitigation.
+
+---
+
+## Incident Runbook: Governance Trap
+
+### Overview
+
+A governance trap occurs when the configured governance contract is broken,
+mis-deployed, or returns an unexpected error, causing every mutating entry
+point in `settlement_contract` to abort with `GovernanceCallFailed`.  Admin
+writes (fee-rule updates, merchant registration, pausing) become impossible
+until the trap is resolved.
+
+### Symptoms
+
+- On-chain transaction invoking any mutating entry point returns a contract
+  error whose `SettlementError` code corresponds to `GovernanceCallFailed`.
+- `update_governance`, `set_settlement_rule`, `set_default_rule`, and similar
+  admin calls all fail; read-only calls such as `calculate_fee_split` still
+  succeed because they do not invoke governance.
+- Monitoring dashboards for the governance contract show panics or missing
+  `get_fee_config` export.
+
+### Mitigation
+
+1. **Identify the broken governance contract.**  Read the on-chain
+   `DataKey::Governance` value from `settlement_contract` storage to confirm
+   which address is misconfigured.
+
+2. **Fix or replace the governance contract.**  If the contract can be patched
+   in place, deploy the fix and verify `get_fee_config` returns a valid
+   `GovFeeConfig`.  If it cannot, deploy a new governance contract that exports
+   `get_fee_config` correctly.
+
+3. **Update governance address via the recovery path.**  Because the multisig
+   admin write is blocked, use the recovery mechanism:
+   - Invoke `initiate_recovery` with the new-governance deployer address.
+   - After the recovery timelock elapses, invoke `execute_recovery` to complete
+     the admin transfer to an address that can call `update_governance`.
+   - Alternatively, schedule `Operation::UpdateGovernance(new_address)` via the
+     timelock path from a still-functional admin key and execute it after the
+     delay.
+
+4. **Verify recovery.**  Call `get_governance()` on-chain and confirm it returns
+   the corrected address.  Then perform a dry-run of `calculate_fee_split` and a
+   test `set_default_rule` transaction to confirm the trap is cleared.
+
+### Verification Steps
+
+```bash
+# 1. Confirm governance address stored in the contract.
+soroban contract read --id <settlement_contract_id> --key Governance
+
+# 2. Probe the governance contract directly.
+soroban contract invoke --id <governance_contract_id> -- get_fee_config
+
+# 3. After updating governance, confirm the new address is stored.
+soroban contract read --id <settlement_contract_id> --key Governance
+
+# 4. Smoke-test a read-only path — should succeed even during the trap.
+soroban contract invoke --id <settlement_contract_id> -- calculate_fee_split \
+  --merchant <merchant_address> --amount 1000000
+
+# 5. After resolving the trap, verify a mutating call succeeds.
+soroban contract invoke --id <settlement_contract_id> -- set_default_rule \
+  --admins '[<admin1>]' --rule '{"platform_fee_bps":100,"network_fee_bps":20,...}'
+```
