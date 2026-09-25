@@ -418,3 +418,50 @@ fn cancel_recovery_by_admin_still_succeeds() {
         "the admin path must still be able to cancel a pending recovery"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #823: Recovery veto blocks a scheduled upgrade
+// ---------------------------------------------------------------------------
+
+/// Verifies that a pending recovery vetoes a scheduled `Upgrade` operation
+/// even after the upgrade's timelock delay has elapsed.
+///
+/// The veto policy (issue #501): once `initiate_recovery` is called, `execute`
+/// rejects every `Operation` variant except `CancelRecovery` until the pending
+/// recovery is resolved. This test pins that policy specifically for the
+/// `Upgrade` variant, which is a high-value target during a key-compromise
+/// scenario.
+#[test]
+fn recovery_veto_blocks_scheduled_upgrade() {
+    use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+
+    // Upload an empty Wasm so the test host accepts the hash without needing a
+    // real contract binary; the upgrade is never applied because the veto fires
+    // first.
+    let empty_wasm = soroban_sdk::Bytes::from_slice(&env, &[]);
+    let empty_hash = env.deployer().upload_contract_wasm(empty_wasm);
+    let op = Operation::Upgrade(empty_hash);
+
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // Advance past the timelock delay so the upgrade would ordinarily be
+    // executable, then initiate a recovery in the same block.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.initiate_recovery(&Address::generate(&env));
+
+    // The upgrade's delay has elapsed, but the pending recovery must veto it.
+    assert!(
+        client.try_execute(&admins.get(0).unwrap(), &op).is_err(),
+        "execute must be vetoed by a pending recovery even after the timelock delay"
+    );
+
+    // Cancelling the recovery lifts the veto — the upgrade must now execute.
+    client.cancel_recovery(&admins);
+    client.execute(&admins.get(0).unwrap(), &op);
+}
