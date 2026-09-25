@@ -619,6 +619,10 @@ impl SettlementContract {
     }
 
     fn _upgrade(env: &Env, executor: &Address, new_wasm_hash: BytesN<32>) {
+        assert_not_paused(env);
+        if !probe_supports_interface(env, &new_wasm_hash, crate::SUPPORTED_INTERFACE_VERSION) {
+            panic_with_error!(env, SettlementError::InvalidWasmInterface);
+        }
         env.events().publish(
             (
                 Symbol::new(env, events::CONTRACT_UPGRADED_EVENT),

@@ -32,6 +32,14 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
+//! ## Payment Reads
+//!
+//! Single-record payment reads are authorized as either the owning merchant
+//! or an admin. Pass an empty `signers` vector to use the merchant path, which
+//! requires the merchant's authorization. Pass a non-empty admin signer vector
+//! to use the admin path, which requires the configured signature threshold.
+//! A payment reference identifies a record; it does not grant read access.
+//!
 //! ## Settlement Boundary (Off-Chain Execution)
 //!
 //! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a
