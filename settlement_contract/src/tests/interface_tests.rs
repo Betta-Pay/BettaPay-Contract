@@ -12,7 +12,10 @@
 //! and reflected here.
 
 use crate::*;
-use soroban_sdk::Env;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, BytesN, Env};
+
+use super::{register_governance, setup};
 
 // ---------------------------------------------------------------------------
 // supports_interface
@@ -72,4 +75,70 @@ fn supports_interface_returns_false_for_large_sentinel() {
         !client.supports_interface(&u32::MAX),
         "supports_interface must return false for a large out-of-range version",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Pause matrix: upgrade exempt, payment blocked (issue: Add pause-allows-upgrade
+// test; Add pause-blocks-payment test)
+// ---------------------------------------------------------------------------
+
+/// While the contract is paused, `upgrade` must NOT be blocked by the pause
+/// guard (Paused = 5). It may fail for other reasons (e.g. interface check),
+/// but the error must not be `Paused`. `store_payment_reference` in the same
+/// paused state must be blocked with `Paused`.
+#[test]
+fn pause_allows_upgrade_and_blocks_payment() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.pause(&admins);
+
+    // Upload empty bytes — produces a hash for a wasm with no exports.
+    // upgrade must fail with InvalidWasmInterface (13), not Paused (5).
+    let empty_wasm = soroban_sdk::Bytes::from_slice(&env, &[]);
+    let bad_hash = env.deployer().upload_contract_wasm(empty_wasm);
+    let upgrade_result = client.try_upgrade(&admins, &bad_hash);
+    match &upgrade_result {
+        Err(Ok(e)) => {
+            assert_ne!(
+                *e,
+                soroban_sdk::Error::from_contract_error(5),
+                "upgrade must not be blocked by Paused (5) while paused"
+            );
+        }
+        Ok(_) => {}
+        Err(Err(_)) => {}
+    }
+
+    // store_payment_reference must be blocked with Paused (5).
+    let reference = BytesN::from_array(&env, &[2u8; 32]);
+    let pay_result = client.try_store_payment_reference(&merchant, &reference, &1_000);
+    assert!(
+        matches!(
+            pay_result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(5)))
+        ),
+        "store_payment_reference must fail with Paused (5) while paused"
+    );
+}
+
+/// Paused contract blocks `store_payment_reference` with `Paused`; after
+/// unpause the same call must succeed.
+#[test]
+fn pause_blocks_payment_and_unpaused_succeeds() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.pause(&admins);
+
+    let reference = BytesN::from_array(&env, &[3u8; 32]);
+    let result = client.try_store_payment_reference(&merchant, &reference, &1_000);
+    assert!(
+        matches!(
+            result,
+            Err(Ok(soroban_sdk::Error::from_contract_error(5)))
+        ),
+        "store_payment_reference must fail with Paused (5) while paused"
+    );
+
+    client.unpause(&admins);
+    client.store_payment_reference(&merchant, &reference, &1_000);
 }
