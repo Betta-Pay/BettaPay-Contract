@@ -25,7 +25,7 @@
 //!
 //! | Helper | What it does |
 //! |---|---|
-//! | [`is_paused`] | Reads the flag; bumps instance TTL |
+//! | [`is_paused`] | Reads the flag (no TTL bump) |
 //! | [`set_paused`] | Writes the flag (raw; no event) |
 //! | [`apply_pause`] | Writes `true` **and** emits `paused` event |
 //! | [`apply_unpause`] | Writes `false` **and** emits `unpaused` event |
@@ -63,18 +63,14 @@ pub enum CommonDataKey {
 
 /// Returns `true` if the contract is currently paused.
 ///
-/// Bumps the instance TTL on every call, the same way [`read_admin`] does.
-/// Soroban's instance storage is a single ledger entry shared by every
-/// instance key (`Admin`, `Paused`, `RecoveryAddress`, ...), so in practice
-/// any instance read on a live contract keeps the whole entry — including
-/// the pause flag — warm. But a contract path that checks `is_paused`
-/// without also touching another instance key (or one that's simply quiet
-/// for a long stretch while paused) had no guaranteed keep-alive of its
-/// own, and a missing entry silently reads back as `unpaused` via
-/// `unwrap_or(false)` below rather than failing loudly. Bumping here removes
-/// that dependency on call order.
+/// This is a plain read: it does **not** bump the instance TTL. Every
+/// mutating entry-point calls this via its `assert_not_paused` guard, so
+/// bumping here would extend the instance TTL on every mutating call in the
+/// contract, adding gas to paths that have nothing to do with keep-alive.
+/// Callers that specifically need to keep the instance entry warm (e.g. a
+/// path that only ever reads `is_paused` and no other instance key) should
+/// call [`bump_instance_ttl`] themselves.
 pub fn is_paused(env: &Env) -> bool {
-    bump_instance_ttl(env);
     env.storage()
         .instance()
         .get(&CommonDataKey::Paused)
@@ -146,6 +142,13 @@ pub fn primary_admin(admins: &Vec<Address>) -> Option<Address> {
 /// (`Address`'s `PartialEq` delegates to the host's `obj_cmp`) with no
 /// per-call `String` allocation on the hot path.
 pub fn is_zero_address(env: &Env, address: &Address) -> bool {
+    // Soroban contract invocations don't persist Rust statics across calls,
+    // so the zero `Address` can't be cached beyond this single call; this is
+    // already the cheaper of the two directions (see doc comment above): one
+    // `Address::from_string` parse plus one `obj_cmp` per call, versus
+    // re-deriving a `String` from the caller-supplied address every time. A
+    // `Symbol`-based sentinel is a possible future alternative if this cost
+    // ever shows up as a measured hotspot.
     let zero_address = Address::from_string(&String::from_str(
         env,
         "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",

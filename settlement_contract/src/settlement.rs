@@ -28,8 +28,6 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        validate_fee_against_governance(&env, &rule);
-
         if !is_merchant_registered_and_bump_ttl(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
@@ -48,6 +46,12 @@ impl SettlementContract {
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
         }
+
+        // Local range checks run before the cross-contract governance ceiling
+        // check (issue #799): they're free, so obviously invalid input is
+        // rejected without paying for a round-trip into the governance
+        // contract first.
+        validate_fee_against_governance(&env, &rule);
 
         let prev = env
             .storage()
