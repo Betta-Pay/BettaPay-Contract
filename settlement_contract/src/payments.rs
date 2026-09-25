@@ -207,7 +207,6 @@ mod tests {
 /// There is deliberately no `no check` path: a caller who is neither the
 /// merchant nor an admin is rejected either by the auth framework (owner
 /// path) or by `verify_admin_auth`'s admin-membership check (admin path).
-#[allow(dead_code)]
 fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>) {
     if signers.is_empty() {
         merchant.require_auth();
@@ -358,8 +357,10 @@ impl SettlementContract {
     ///
     /// The reference is resolved within the merchant's own namespace, so the
     /// same reference held by a different merchant is not returned.
-    /// This read is public: the 32-byte payment reference is the lookup
-    /// capability used by indexers and composing contracts.
+    /// Pass an empty `signers` vector to authorize as the merchant, or a
+    /// non-empty vector of admin signers to authorize through the configured
+    /// admin threshold. The reference identifies the record but does not grant
+    /// access by itself.
     ///
     /// # Panics
     ///
@@ -368,8 +369,8 @@ impl SettlementContract {
     ///   the gross/fee/net amounts cannot be probed by anyone who can guess
     ///   a reference (issue #492).
     ///
-    ///   Since issue #559 the same entry point also allows an admin: pass a
-    ///   non-empty `signers` list to authenticate as an admin.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if the caller is
+    ///   neither the merchant nor an authorized admin signer set.
     /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
     ///   merchant was unregistered, its payment records are orphaned and no
     ///   longer readable (issue #490).
@@ -377,9 +378,10 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         reference: BytesN<32>,
-        _signers: Vec<Address>,
+        signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
         assert_payments_readable(&env, &merchant);
+        assert_read_authorized(&env, &merchant, &signers);
         let key = DataKey::Payment(merchant, reference);
         let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
         if record.is_some() {
@@ -436,5 +438,42 @@ impl SettlementContract {
             }
         }
         payments
+    }
+}
+
+#[cfg(test)]
+mod read_authorization_tests {
+    use super::SettlementContractClient;
+    use crate::tests::setup;
+    use soroban_sdk::{BytesN, Error};
+
+    #[test]
+    fn duplicate_admin_signers_rejected_on_read() {
+        let (env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+        let reference = BytesN::from_array(&env, &[1; 32]);
+        client.store_payment_reference(&merchant, &reference, &1_000);
+        let admin = admins.get(0).unwrap();
+        let duplicate_signers = soroban_sdk::vec![&env, admin.clone(), admin];
+
+        assert_eq!(
+            client
+                .try_get_payment_reference(&merchant, &reference, &duplicate_signers)
+                .unwrap_err(),
+            Ok(Error::from_contract_error(3))
+        );
+    }
+
+    #[test]
+    fn one_admin_signer_satisfies_threshold_one_on_read() {
+        let (env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+        let reference = BytesN::from_array(&env, &[2; 32]);
+        client.store_payment_reference(&merchant, &reference, &1_000);
+
+        assert!(client
+            .try_get_payment_reference(&merchant, &reference, &admins)
+            .unwrap()
+            .is_some());
     }
 }
