@@ -296,11 +296,14 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
         .instance()
         .get::<_, SettlementRule>(&default_key)
     {
+        // fallback: default rule
         return rule;
     }
     if let Some(rule) = read_governance_fee_rule(env) {
+        // fallback: governance fee config
         return rule;
     }
+    // fallback: bootstrap default (no default rule or governance fee config set)
     BOOTSTRAP_DEFAULT_RULE
 }
 
