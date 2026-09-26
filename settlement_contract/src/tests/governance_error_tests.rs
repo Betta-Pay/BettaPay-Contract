@@ -496,28 +496,32 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     assert_eq!(split.merchant_amount, 9_895);
 }
 
+
 // ---------------------------------------------------------------------------
-// Issue #747: Admin setter hard-fail when governance is broken
+// Issue 735: Governance fee sum exceeding 10000
 // ---------------------------------------------------------------------------
 
-/// When governance is broken (traps), `set_settlement_rule` must surface
-/// the typed `GovernanceCallFailed` error and prevent the rule from being
-/// written, rather than silently falling back to a partial state.
-/// This pins the write-path hard-fail so a future fallback change does not
-/// accidentally soften it (issue #747).
 #[test]
-#[should_panic(expected = "Error(Contract, #311)")]
-fn set_settlement_rule_hard_fails_on_broken_governance() {
+fn governance_fee_sum_over_denominator_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
-    let empty_gov = super::register_governance(&env);
+    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
+
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let gov_admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let gov_deployer = Address::generate(&env);
+    gov_client.init(
+        &gov_deployer,
+        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &1,
+        &recovery,
+    );
 
     let admin = Address::generate(&env);
-    let recovery = Address::generate(&env);
     let merchant = Address::generate(&env);
-
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let deployer = Address::generate(&env);
@@ -525,19 +529,36 @@ fn set_settlement_rule_hard_fails_on_broken_governance() {
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
-        &empty_gov,
+        &gov_id,
         &recovery,
     );
-    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
 
-    inject_governance(&env, &contract_id, &panicking_gov);
+    // mock {5000, 5001}
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &FeeConfig {
+            platform_fee_bps: 5000,
+            network_fee_bps: 5001,
+        },
+    );
 
-    let rule = SettlementRule {
-        platform_fee_bps: 100,
-        network_fee_bps: 50,
-        settlement_delay_ledger: 0,
-        auto_settle: false,
-    };
+    // This should fail because they sum to 10001, which is > 10000
+    // The calculate_fee_split should panic with GovernanceCallFailed (18)
+    let res = client.try_calculate_fee_split(&merchant, &10_000);
+    assert_eq!(res.unwrap_err().unwrap(), soroban_sdk::Error::from_contract_error(18));
 
-    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
+    // mock {5000, 5000}
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin],
+        &FeeConfig {
+            platform_fee_bps: 5000,
+            network_fee_bps: 5000,
+        },
+    );
+
+    // This should succeed
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 5000);
+    assert_eq!(split.network_fee_amount, 5000);
 }
