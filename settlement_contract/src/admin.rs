@@ -390,6 +390,11 @@ impl SettlementContract {
 
     /// Schedules an administrative operation to be executed after a timelock.
     ///
+    /// The entry is created with a 30-day TTL bump ([`SCHEDULED_OP_TTL_BUMP`]),
+    /// which comfortably covers the minimum 7-day timelock delay
+    /// ([`DEFAULT_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
+    /// operation remains intact and executable when `execute_at` is reached.
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -851,5 +856,55 @@ impl SettlementContract {
             (Symbol::new(env, events::DEFAULT_RULE_UPDATED_EVENT),),
             (executor, prev, new_rule),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup;
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    use soroban_sdk::testutils::{Address as _, Ledger};
+
+    #[test]
+    fn scheduled_op_survives_until_execute_at() {
+        let (env, client, admins, _merchant) = setup();
+        let new_admin = Address::generate(&env);
+        let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+        let operation = Operation::TransferAdmin(new_admins.clone(), 1);
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+        let key = DataKey::ScheduledOperation(op_hash);
+
+        // Ensure the contract instance stays alive across the 7-day ledger advancement
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .extend_ttl(SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_BUMP);
+        });
+
+        // Advance 7 days (both timestamp and sequence number)
+        let ledgers_7d = 7 * crate::LEDGERS_PER_DAY;
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+            ledger.sequence_number += ledgers_7d;
+        });
+
+        // The op entry's 30-day initial TTL bump must keep it alive at execute_at
+        let remaining_ttl = env.as_contract(&client.address, || {
+            assert!(env.storage().persistent().has(&key));
+            env.storage().persistent().get_ttl(&key)
+        });
+        assert!(
+            remaining_ttl >= SCHEDULED_OP_TTL_BUMP - ledgers_7d,
+            "scheduled operation TTL must remain intact at execute_at"
+        );
+
+        // Execution succeeds at execute_at with TTL intact
+        client.execute(&admins.get(0).unwrap(), &operation);
+        assert_eq!(client.get_admin(), new_admins);
     }
 }
