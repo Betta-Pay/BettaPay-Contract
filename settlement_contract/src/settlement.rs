@@ -103,8 +103,6 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        validate_fee_against_governance(&env, &new_rule);
-
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
         {
             panic_with_error!(&env, SettlementError::InvalidFeeBps);
@@ -121,6 +119,12 @@ impl SettlementContract {
         if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
         }
+
+        // Local range checks run before the cross-contract governance ceiling
+        // check (issue #803): they're free, so obviously invalid input is
+        // rejected without paying for a round-trip into the governance
+        // contract first.
+        validate_fee_against_governance(&env, &new_rule);
 
         let prev = env
             .storage()
