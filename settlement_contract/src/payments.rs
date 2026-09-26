@@ -83,7 +83,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
         .checked_add(network_fee_amount)
         .is_none_or(|total| total > amount);
     if fees_exceed_gross {
-        network_fee_amount = (amount - platform_fee_amount).max(0);
+        network_fee_amount = amount.checked_sub(platform_fee_amount).unwrap_or(0).max(0);
     }
 
     let merchant_amount = amount
@@ -341,7 +341,8 @@ impl SettlementContract {
     /// * [`InvalidPaymentReference`](SettlementError::InvalidPaymentReference) — if `reference` is all zeros.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
     /// * [`DuplicatePaymentReference`](SettlementError::DuplicatePaymentReference) — if the reference already exists for this merchant.
-    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`.
+    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
+    ///   for either fee leg or for the combined platform + network fee rate.
     ///
     /// ## Emitted Event: `payment_stored`
     ///
@@ -457,7 +458,8 @@ impl SettlementContract {
     ///
     /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not registered.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
-    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`.
+    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
+    ///   for either fee leg or for the combined platform + network fee rate.
     pub fn calculate_fee_split(env: Env, merchant: Address, amount: i128) -> FeeSplit {
         if !is_merchant_registered_internal(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
@@ -577,6 +579,29 @@ mod read_authorization_tests {
         assert!(matches!(
             client.try_get_payment_reference(&merchant, &reference, &duplicate_signers),
             Err(Ok(e)) if e == Error::from_contract_error(3)
+        ));
+    }
+
+    #[test]
+    fn calculate_fee_split_rejects_fee_sum_overflow_with_amount_overflow() {
+        let (_env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+        client.set_settlement_rule(
+            &admins,
+            &merchant,
+            &crate::types::SettlementRule {
+                platform_fee_bps: 5_000,
+                network_fee_bps: 5_000,
+                settlement_delay_ledger: 0,
+                auto_settle: false,
+            },
+        );
+
+        // Each 5000 bps leg fits in i128, but the combined 10000 bps does not.
+        let amount = i128::MAX / 7_500;
+        assert!(matches!(
+            client.try_calculate_fee_split(&merchant, &amount),
+            Err(Ok(e)) if e == Error::from_contract_error(310)
         ));
     }
 
