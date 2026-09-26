@@ -32,6 +32,22 @@ impl SettlementContract {
 
     /// Initialize the contract with the given admin address.
     ///
+    /// # Auth matrix
+    ///
+    /// Every address in `admins` must call `require_auth` unconditionally,
+    /// even when `threshold < admins.len()` (issue #471).  This is intentional:
+    /// unanimous consent at init time prevents a compromised co-signer from
+    /// being silently installed without the knowledge of the remaining admins.
+    /// Callers must therefore collect signatures from the full `admins` vec,
+    /// not just a `threshold`-sized subset.
+    ///
+    /// | Signer            | Required at init | Required at runtime ops |
+    /// |-------------------|-----------------|------------------------|
+    /// | `deployer`        | yes (front-run guard) | no                |
+    /// | each `admins[i]`  | yes (all of them)     | `threshold` of them |
+    /// | `governance`      | no                    | no (read-only addr) |
+    /// | `recovery_address`| no                    | no (read-only addr) |
+    ///
     /// # Panics
     ///
     /// * [`AlreadyInitialized`](SettlementError::AlreadyInitialized) — if the contract has already been initialized.
@@ -63,6 +79,7 @@ impl SettlementContract {
             &recovery_address,
             SettlementError::InvalidRecoveryAddress,
         );
+        // All admins must authorize at init (unanimous), not just threshold-many (issue #471).
         for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
         }
