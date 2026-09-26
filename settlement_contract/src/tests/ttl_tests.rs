@@ -8,15 +8,18 @@
 //! entry's lifetime does not depend on which particular instance read
 //! happens to occur.
 
-use soroban_sdk::testutils::storage::Instance as _;
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, BytesN, Env, Error};
 
 use bettapay_common::events::PendingRecovery;
 use bettapay_common::storage::CommonDataKey;
 
 use crate::storage::{read_pending_recovery, read_threshold};
-use crate::{READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD};
+use crate::types::DataKey;
+use crate::{
+    SettlementError, MERCHANT_TTL_BUMP, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD,
+};
 
 use super::setup;
 
@@ -95,6 +98,68 @@ fn read_pending_recovery_bumps_instance_ttl() {
         assert_eq!(
             ttl_after, READ_INSTANCE_TTL_BUMP,
             "read_pending_recovery did not bump the instance TTL to the read-bump floor"
+        );
+    });
+}
+
+#[test]
+fn tombstone_survives_payment_read_attempts() {
+    let (env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+    let reference = BytesN::from_array(&env, &[1; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+
+    // Unregistering the merchant writes the ArchivedMerchant tombstone and bumps its TTL
+    client.unregister_merchant(&admins, &merchant);
+
+    let tombstone_key = DataKey::ArchivedMerchant(merchant.clone());
+
+    // Assert tombstone TTL was bumped on unregister
+    env.as_contract(&client.address, || {
+        assert!(env.storage().persistent().has(&tombstone_key));
+        let ttl = env.storage().persistent().get_ttl(&tombstone_key);
+        assert_eq!(
+            ttl, MERCHANT_TTL_BUMP,
+            "tombstone TTL must be bumped to MERCHANT_TTL_BUMP on unregister"
+        );
+    });
+
+    // Advance sequence number slightly
+    env.ledger().with_mut(|l| l.sequence_number += 100);
+
+    // Single-record payment read attempt must fail with PaymentOrphaned
+    let single_read =
+        client.try_get_payment_reference(&merchant, &reference, &soroban_sdk::Vec::new(&env));
+    assert!(
+        matches!(
+            single_read,
+            Err(Ok(e)) if e == Error::from_contract_error(SettlementError::PaymentOrphaned as u32)
+        ),
+        "payment read for orphaned merchant must fail with PaymentOrphaned"
+    );
+
+    // Batch payment read attempt must also fail with PaymentOrphaned
+    let batch_read =
+        client.try_get_payments(&merchant, &soroban_sdk::vec![&env, reference.clone()]);
+    assert!(
+        matches!(
+            batch_read,
+            Err(Ok(e)) if e == Error::from_contract_error(SettlementError::PaymentOrphaned as u32)
+        ),
+        "batch payment read for orphaned merchant must fail with PaymentOrphaned"
+    );
+
+    // Assert tombstone persists and remains present in storage across payment-read attempts
+    env.as_contract(&client.address, || {
+        assert!(
+            env.storage().persistent().has(&tombstone_key),
+            "tombstone must persist in storage across payment-read attempts"
+        );
+        let remaining_ttl = env.storage().persistent().get_ttl(&tombstone_key);
+        assert!(
+            remaining_ttl > 0,
+            "tombstone TTL must remain valid across payment-read attempts"
         );
     });
 }

@@ -10,11 +10,11 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
-    read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
-    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
-    validate_nonzero_address, verify_admin_auth, write_admins,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
+    read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
+    read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -274,7 +274,7 @@ impl SettlementContract {
         let old_admin = storage::primary_admin(&old_admins).unwrap();
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
-            if is_merchant_registered_and_bump_ttl(&env, new_admins.get(i).unwrap()) {
+            if is_merchant_registered_internal(&env, new_admins.get(i).unwrap()) {
                 panic_with_error!(&env, SettlementError::InvalidAdmin);
             }
         }
@@ -389,6 +389,11 @@ impl SettlementContract {
     }
 
     /// Schedules an administrative operation to be executed after a timelock.
+    ///
+    /// The entry is created with a 30-day TTL bump ([`SCHEDULED_OP_TTL_BUMP`]),
+    /// which comfortably covers the minimum 7-day timelock delay
+    /// ([`DEFAULT_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
+    /// operation remains intact and executable when `execute_at` is reached.
     ///
     /// # Panics
     ///
@@ -620,7 +625,7 @@ impl SettlementContract {
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
-            if is_merchant_registered_and_bump_ttl(env, new_admins.get(i).unwrap()) {
+            if is_merchant_registered_internal(env, new_admins.get(i).unwrap()) {
                 panic_with_error!(env, SettlementError::InvalidAdmin);
             }
         }
@@ -851,5 +856,55 @@ impl SettlementContract {
             (Symbol::new(env, events::DEFAULT_RULE_UPDATED_EVENT),),
             (executor, prev, new_rule),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup;
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    use soroban_sdk::testutils::{Address as _, Ledger};
+
+    #[test]
+    fn scheduled_op_survives_until_execute_at() {
+        let (env, client, admins, _merchant) = setup();
+        let new_admin = Address::generate(&env);
+        let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+        let operation = Operation::TransferAdmin(new_admins.clone(), 1);
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+        let key = DataKey::ScheduledOperation(op_hash);
+
+        // Ensure the contract instance stays alive across the 7-day ledger advancement
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .extend_ttl(SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_BUMP);
+        });
+
+        // Advance 7 days (both timestamp and sequence number)
+        let ledgers_7d = 7 * crate::LEDGERS_PER_DAY;
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+            ledger.sequence_number += ledgers_7d;
+        });
+
+        // The op entry's 30-day initial TTL bump must keep it alive at execute_at
+        let remaining_ttl = env.as_contract(&client.address, || {
+            assert!(env.storage().persistent().has(&key));
+            env.storage().persistent().get_ttl(&key)
+        });
+        assert!(
+            remaining_ttl >= SCHEDULED_OP_TTL_BUMP - ledgers_7d,
+            "scheduled operation TTL must remain intact at execute_at"
+        );
+
+        // Execution succeeds at execute_at with TTL intact
+        client.execute(&admins.get(0).unwrap(), &operation);
+        assert_eq!(client.get_admin(), new_admins);
     }
 }
