@@ -455,6 +455,20 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
         None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
     };
 
+    use bettapay_common::constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS};
+    if platform_fee_bps < MIN_FEE_BPS || platform_fee_bps > MAX_FEE_BPS {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+    if network_fee_bps < MIN_FEE_BPS || network_fee_bps > MAX_FEE_BPS {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+    if platform_fee_bps + network_fee_bps > BPS_DENOMINATOR {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+    if platform_fee_bps == 0 || network_fee_bps == 0 {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+
     Some(GovFeeConfig {
         platform_fee_bps,
         network_fee_bps,
