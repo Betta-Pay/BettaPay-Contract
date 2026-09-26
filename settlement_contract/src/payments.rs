@@ -15,16 +15,6 @@ use crate::{
     PAYMENT_TTL_THRESHOLD,
 };
 
-/// Checked form of [`Bps::calculate_fee_ceil`]: returns `None` instead of
-/// trapping when `amount * bps + (BPS_DENOMINATOR - 1)` overflows `i128`.
-fn checked_fee_ceil(amount: i128, bps: Bps) -> Option<i128> {
-    let denom = BPS_DENOMINATOR as i128;
-    amount
-        .checked_mul(bps.as_i128())
-        .and_then(|numerator| numerator.checked_add(denom - 1))
-        .map(|numerator| numerator / denom)
-}
-
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
 ///
 /// # Known edge case: clamping merchant amount
@@ -70,9 +60,11 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     // Standard integer division (`/`) truncates fractions toward zero, causing precision loss and under-collecting fees.
     // To prevent fee under-collection, ceiling division is simulated by adding `BPS_DENOMINATOR - 1` to the numerator.
     // Edge case: For small amounts, ceil rounding can force fees to 1 unit even when the basis points represent a tiny fraction.
-    let platform_fee_amount = checked_fee_ceil(amount, platform_bps)
+    let platform_fee_amount = platform_bps
+        .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
-    let mut network_fee_amount = checked_fee_ceil(amount, network_bps)
+    let mut network_fee_amount = network_bps
+        .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
 
     // Ceil-rounded fees can sum to more than the gross for tiny amounts with
@@ -137,24 +129,27 @@ mod tests {
     }
 
     #[test]
-    fn checked_fee_ceil_matches_unchecked_helper_in_range() {
-        for (amount, bps) in [
-            (1i128, 1u32),
-            (199, 100),
-            (10_000, 250),
-            (1_000_000_007, 9_999),
+    fn calculate_fee_ceil_matches_expected_values() {
+        for (amount, bps, expected) in [
+            (1i128, 1u32, 1i128),
+            (199, 100, 2),
+            (10_000, 250, 250),
+            (1_000_000_007, 9_999, 999_900_007),
         ] {
-            assert_eq!(
-                checked_fee_ceil(amount, Bps::new(bps)),
-                Some(Bps::new(bps).calculate_fee_ceil(amount)),
-            );
+            assert_eq!(Bps::new(bps).calculate_fee_ceil(amount), Some(expected));
         }
     }
 
     #[test]
-    fn checked_fee_ceil_returns_none_on_overflow() {
-        assert_eq!(checked_fee_ceil(i128::MAX, Bps::new(BPS_DENOMINATOR)), None);
-        assert_eq!(checked_fee_ceil(i128::MAX, Bps::new(1)), None);
+    fn zero_bps_fee_is_some_zero() {
+        assert_eq!(Bps::new(0).calculate_fee_ceil(0), Some(0));
+        assert_eq!(Bps::new(0).calculate_fee_ceil(i128::MAX), Some(0));
+    }
+
+    #[test]
+    fn calculate_fee_ceil_returns_none_on_overflow() {
+        assert_eq!(Bps::new(BPS_DENOMINATOR).calculate_fee_ceil(i128::MAX), None);
+        assert_eq!(Bps::new(1).calculate_fee_ceil(i128::MAX), None);
     }
 
     #[test]

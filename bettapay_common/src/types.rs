@@ -38,13 +38,18 @@ impl Bps {
     /// Calculates ceil-rounded fee amount for a given gross amount:
     /// `ceil(amount * bps / BPS_DENOMINATOR) = (amount * bps + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR`.
     ///
-    /// **Over-collection bound:** ceil rounding over-collects by at most 1 base unit per leg.
-    /// `MIN_PAYMENT_AMOUNT = 100` caps the worst-case distortion at 1% (1 unit on a 100-unit payment).
-    /// Callers are responsible for clamping the merchant remainder to zero when combined fees
-    /// exceed the gross amount (see the fee-split clamp in `settlement_contract`).
-    pub fn calculate_fee_ceil(self, amount: i128) -> i128 {
+    /// Uses checked arithmetic throughout: returns `None` when the intermediate
+    /// `amount * bps + (BPS_DENOMINATOR - 1)` would overflow `i128`, so callers
+    /// can map the condition to a typed `AmountOverflow` error instead of
+    /// trapping with a host arithmetic-overflow panic.
+    ///
+    /// A zero basis-point rate returns `Some(0)` for any amount.
+    pub fn calculate_fee_ceil(self, amount: i128) -> Option<i128> {
         let denom = BPS_DENOMINATOR as i128;
-        (amount * self.as_i128() + denom - 1) / denom
+        amount
+            .checked_mul(self.as_i128())?
+            .checked_add(denom - 1)?
+            .checked_div(denom)
     }
 }
 

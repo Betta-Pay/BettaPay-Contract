@@ -1212,7 +1212,9 @@ fn bps_newtype_conversions_and_arithmetic_helpers_work() {
     assert_eq!(bps.as_i128(), 250i128);
 
     let fee_amount = bps.calculate_fee_ceil(10_000);
-    assert_eq!(fee_amount, 250);
+    assert_eq!(fee_amount, Some(250));
+    // Zero-fee is still an exact, non-overflowing result.
+    assert_eq!(Bps::new(0).calculate_fee_ceil(10_000), Some(0));
 
     let rule = SettlementRule {
         platform_fee_bps: 150,
