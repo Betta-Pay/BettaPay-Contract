@@ -936,13 +936,14 @@ fn stranger_cannot_read_payment_records_or_bump_ttl() {
 
     // A stranger explicitly presented as an admin is rejected with Unauthorized.
     let invalid_admins = soroban_sdk::vec![&env, stranger];
-    assert_eq!(
-        settle_client
-            .try_get_payment_reference(&merchant, &reference, &invalid_admins)
-            .unwrap_err(),
-        Ok(soroban_sdk::Error::from_contract_error(
-            SettlementError::Unauthorized as u32
-        ))
+    assert!(
+        matches!(
+            settle_client.try_get_payment_reference(&merchant, &reference, &invalid_admins),
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(
+                SettlementError::Unauthorized as u32
+            )
+        ),
+        "a non-admin signer must be rejected with Unauthorized"
     );
 }
 

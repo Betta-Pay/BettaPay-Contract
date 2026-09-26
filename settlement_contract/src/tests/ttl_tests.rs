@@ -140,8 +140,11 @@ fn tombstone_survives_payment_read_attempts() {
     );
 
     // Batch payment read attempt must also fail with PaymentOrphaned
-    let batch_read =
-        client.try_get_payments(&merchant, &soroban_sdk::vec![&env, reference.clone()]);
+    let batch_read = client.try_get_payments(
+        &merchant,
+        &soroban_sdk::vec![&env, reference.clone()],
+        &soroban_sdk::vec![&env],
+    );
     assert!(
         matches!(
             batch_read,

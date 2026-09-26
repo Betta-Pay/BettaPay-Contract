@@ -99,6 +99,13 @@
 //! [`GovernanceContract::get_system_param`], which also refreshes the
 //! persistent-entry TTL.
 //!
+//! One key is special-cased: `bypass_gov_fees` (issue #743) is the settlement
+//! fee circuit-breaker and only accepts `0` or `1`. Setting `1` makes
+//! settlement skip this contract's `get_fee_config` and fall through to its
+//! bootstrap default, decoupling payments from a broken fee config without a
+//! contract upgrade. Any other value is rejected with
+//! [`GovernanceError::InvalidParamValue`].
+//!
 //! ## Error Codes
 //!
 //! | Code | Variant | Meaning |
@@ -197,6 +204,15 @@ const ANCHOR_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
 const ANCHOR_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 const SYSTEM_PARAM_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
 const SYSTEM_PARAM_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
+
+/// System-parameter key for the settlement fee circuit-breaker (issue #743).
+///
+/// The value is a boolean flag: `1` tells settlement to skip governance's
+/// `get_fee_config` and fall through to its bootstrap default; `0` (and the
+/// unset default) preserves the existing behaviour. It exists so operations
+/// can decouple settlement from a broken governance fee config without a
+/// contract upgrade. `update_system_param` restricts it to 0/1.
+const BYPASS_GOV_FEES_PARAM: &str = "bypass_gov_fees";
 
 // Instance-storage TTL policy for short-lived reads of non-`Admin` entries
 // (`RecoveryAddress` here). Deliberately shorter than the 14/30 day policy
@@ -668,6 +684,14 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
         if value < 0 {
+            panic_with_error!(&env, GovernanceError::InvalidParamValue);
+        }
+
+        // Issue #743: the fee circuit-breaker is a boolean, not a magnitude.
+        // Restrict it to 0/1 so a stray value cannot be silently read as "on"
+        // (settlement treats exactly 1 as enabled) or confused with a future
+        // multi-valued parameter of the same name.
+        if key == Symbol::new(&env, BYPASS_GOV_FEES_PARAM) && value > 1 {
             panic_with_error!(&env, GovernanceError::InvalidParamValue);
         }
 
@@ -2314,5 +2338,45 @@ mod tests {
             "update_system_param with value 0 must succeed"
         );
         assert_eq!(client.get_system_param(&key), Some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #743: bypass_gov_fees circuit-breaker is a 0/1 flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bypass_gov_fees_accepts_zero_and_one() {
+        let (env, client, admins, _recovery) = setup();
+        let key = Symbol::new(&env, "bypass_gov_fees");
+
+        client.update_system_param(&admins, &key, &1);
+        assert_eq!(client.get_system_param(&key), Some(1));
+
+        client.update_system_param(&admins, &key, &0);
+        assert_eq!(client.get_system_param(&key), Some(0));
+    }
+
+    #[test]
+    fn bypass_gov_fees_rejects_values_above_one() {
+        let (env, client, admins, _recovery) = setup();
+        let key = Symbol::new(&env, "bypass_gov_fees");
+
+        assert!(
+            client.try_update_system_param(&admins, &key, &2).is_err(),
+            "bypass_gov_fees above 1 must fail with InvalidParamValue"
+        );
+        assert_eq!(
+            client.get_system_param(&key),
+            None,
+            "a rejected flag must not be stored"
+        );
+    }
+
+    #[test]
+    fn other_system_params_are_not_restricted_to_boolean_values() {
+        let (env, client, admins, _recovery) = setup();
+        let key = Symbol::new(&env, "max_settle");
+        client.update_system_param(&admins, &key, &1440);
+        assert_eq!(client.get_system_param(&key), Some(1440));
     }
 }

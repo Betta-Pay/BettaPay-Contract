@@ -229,7 +229,7 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     }
 
     // 100 refs — must succeed.
-    client.get_payments(&merchant, &refs_100);
+    client.get_payments(&merchant, &refs_100, &soroban_sdk::vec![&env]);
 
     // Build a 101-element vec by duplicating the last entry (get_payments
     // accepts duplicates; we only need to exceed the batch cap).
@@ -237,7 +237,7 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     let mut refs_101 = refs_100.clone();
     refs_101.push_back(extra);
 
-    let result = client.try_get_payments(&merchant, &refs_101);
+    let result = client.try_get_payments(&merchant, &refs_101, &soroban_sdk::vec![&env]);
     assert!(
         matches!(
             result,
@@ -377,7 +377,12 @@ fn store_payment_gas_snapshot() {
 
     assert!(cpu > 0, "CPU instruction count must be positive");
     assert!(mem > 0, "Memory byte count must be positive");
-    assert!(cpu < 1_500_000, "CPU instructions ({cpu}) exceeded baseline bound");
-    assert!(mem < 300_000, "Memory bytes ({mem}) exceeded baseline bound");
+    assert!(
+        cpu < 1_500_000,
+        "CPU instructions ({cpu}) exceeded baseline bound"
+    );
+    assert!(
+        mem < 300_000,
+        "Memory bytes ({mem}) exceeded baseline bound"
+    );
 }
-
