@@ -26,7 +26,7 @@ use soroban_sdk::{Address, Env, FromVal, Symbol};
 // `get_fee_config`.
 // ---------------------------------------------------------------------------
 
-mod panicking_gov {
+pub mod panicking_gov {
     use crate::GovFeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
 
@@ -494,4 +494,50 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
     assert_eq!(split.merchant_amount, 9_895);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #747: Admin setter hard-fail when governance is broken
+// ---------------------------------------------------------------------------
+
+/// When governance is broken (traps), `set_settlement_rule` must surface
+/// the typed `GovernanceCallFailed` error and prevent the rule from being
+/// written, rather than silently falling back to a partial state.
+/// This pins the write-path hard-fail so a future fallback change does not
+/// accidentally soften it (issue #747).
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn set_settlement_rule_hard_fails_on_broken_governance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+
+    inject_governance(&env, &contract_id, &panicking_gov);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
 }

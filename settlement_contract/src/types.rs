@@ -166,4 +166,9 @@ pub(crate) enum DataKey {
     /// the first storage migration, mirroring governance_contract's
     /// `DataKey::SchemaVersion` (issue #507, issue #704).
     SchemaVersion,
+    /// Instance — caches the last-good governance fee config to reduce
+    /// cross-contract call failures and gas overhead (issue #744).
+    /// Stores `Option<SettlementRule>` where `None` means no successful
+    /// governance fetch has occurred yet.
+    CachedGovRule,
 }

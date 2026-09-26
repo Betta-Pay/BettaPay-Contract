@@ -330,9 +330,29 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
 /// - If governance-controlled settlement timing is needed in the future,
 ///   extend `GovFeeConfig` and this function in a coordinated upgrade.
 ///
+/// # Gas budget for governance round-trip (issue #745)
+///
+/// The `try_invoke_contract` call to `get_fee_config` consumes approximately
+/// 50,000-100,000 CPU instructions depending on governance complexity. Callers
+/// should budget ~10-20% overhead beyond the base settlement compute (fees,
+/// storage reads/writes) when governance is wired and active.
+///
 /// See also: [`GovFeeConfig`][crate::GovFeeConfig].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
+
+    // Attempt to fetch last-good cached config first (issue #744)
+    if let Some(cached_rule) = env
+        .storage()
+        .instance()
+        .get::<_, Option<SettlementRule>>(&DataKey::CachedGovRule)
+    {
+        if let Some(rule) = cached_rule {
+            // Cache hit — use the last successful config
+            return Some(rule);
+        }
+    }
+
     let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let config = try_read_governance_fee_config(env, raw_val)?;
@@ -346,6 +366,12 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
         panic_with_error!(env, SettlementError::InvalidSettlementDelay);
     }
+
+    // Cache the successful config for fallback on next governance failure (issue #744)
+    env.storage()
+        .instance()
+        .set(&DataKey::CachedGovRule, &Some(rule.clone()));
+
     Some(rule)
 }
 
