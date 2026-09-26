@@ -481,6 +481,12 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
         None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
     };
 
+    use bettapay_common::constants::BPS_DENOMINATOR;
+    let sum = platform_fee_bps.checked_add(network_fee_bps).unwrap_or(u32::MAX);
+    if sum > BPS_DENOMINATOR {
+        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    }
+
     Some(GovFeeConfig {
         platform_fee_bps,
         network_fee_bps,
