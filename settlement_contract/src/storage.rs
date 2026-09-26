@@ -502,6 +502,8 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 ///
 /// Any call failure (contract trap or host error) is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
+/// Governance `get_fee_config` return is UNTRUSTED cross-contract input.
+/// Must satisfy MIN_FEE_BPS..=MAX_FEE_BPS and sum <= BPS_DENOMINATOR.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
     let raw_val = invoke_governance_get_fee_config(env, &governance);
@@ -512,10 +514,8 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
         None => return,
     };
 
-    if rule.platform_fee_bps > fee_config.platform_fee_bps {
-        panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
-    }
-    if rule.network_fee_bps > fee_config.network_fee_bps {
+    if rule.platform_fee_bps > fee_config.platform_fee_bps || rule.network_fee_bps > fee_config.network_fee_bps {
+        env.events().publish((Symbol::new(env, "fee_ceiling_rejected"), rule.platform_fee_bps), rule.network_fee_bps);
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }
