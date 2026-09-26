@@ -32,6 +32,32 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
+//! ## Storage Key Ownership (issue #772)
+//!
+//! Which ledger each key lives in, and how long it lives:
+//!
+//! | `DataKey` variant            | Ledger type | TTL policy |
+//! |------------------------------|-------------|------------|
+//! | `Admin`                      | Instance (singleton multisig `Vec<Address>`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `Initializing`               | Instance (ephemeral init guard) | No TTL management; set at the start of `init`, removed when `init` completes |
+//! | `Governance`                 | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `Deployer`                   | Instance (set once at `init`) | Instance TTL; written once to gate init to the deployer, never expires independently of the instance |
+//! | `SchemaVersion`              | Instance (singleton `u32`) | Instance TTL; written at `init`, advanced by `migrate` |
+//! | `DefaultRule`                | Instance (singleton `SettlementRule`) | Instance TTL; lives as long as the contract instance, cannot expire independently |
+//! | `Merchant(Address)`          | Persistent (one entry per merchant) | `MERCHANT_TTL_THRESHOLD` / `MERCHANT_TTL_BUMP` (14d / 30d); bumped only on merchant- or admin-authed writes, never on public reads |
+//! | `Rule(Address)`              | Persistent (one entry per merchant override) | `RULE_TTL_THRESHOLD` / `RULE_TTL_BUMP` (14d / 30d); bumped on rule writes and reads |
+//! | `ArchivedMerchant(Address)`  | Persistent (tombstone) | Persistent TTL; written on `unregister_merchant`, survives re-registration guard until cleared on re-register |
+//! | `Payment(Address, BytesN<32>)` | Persistent (one entry per merchant + reference, high volume) | `PAYMENT_TTL_THRESHOLD` / `PAYMENT_TTL_BUMP` (14d / 30d); bumped on store and on payment reads |
+//! | `ScheduledOperation(BytesN<32>)` | Persistent (one entry per scheduled op hash) | `SCHEDULED_OP_TTL_THRESHOLD` / `SCHEDULED_OP_TTL_BUMP` (14d / 30d); removed on `execute` / `cancel` |
+//! | `CommonDataKey::Threshold`   | Instance (multisig threshold `u32`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `CommonDataKey::RecoveryAddress` | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `CommonDataKey::PendingRecovery` | Instance (optional in-flight recovery) | Instance TTL; removed on `execute_recovery` / `cancel_recovery` / timelocked `CancelRecovery` |
+//! | `CommonDataKey::Paused`      | Instance (pause flag) | Instance TTL; lives as long as the contract instance |
+//!
+//! Rule of thumb: instance keys are singletons tied to the contract instance
+//! lifetime (no independent expiry); persistent keys are per-entity records
+//! that must be kept warm with `extend_ttl` or they are evicted.
+//!
 //! ## Payment Reads
 //!
 //! Single-record payment reads are authorized as either the owning merchant
@@ -226,6 +252,17 @@ pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
 
 /// Maximum number of payments that can be retrieved in a single batch lookup
 pub const MAX_PAYMENTS_BATCH: u32 = 100;
+
+/// Maximum number of payment records that may be stored per merchant.
+///
+/// Rationale: payment entries live in persistent storage (`DataKey::Payment`)
+/// and each entry accrues rent via TTL extension, so an unbounded per-merchant
+/// history would let a single merchant bloat ledger state without bound.
+/// A single named cap gives tests and docs one canonical value to assert
+/// against. Enforcement (rejecting `store_payment_reference` past this cap)
+/// is intentionally left to a separate standalone change (issue #775 scope:
+/// constant plus docs only, no enforcement logic here).
+pub const MAX_PAYMENTS_PER_MERCHANT: u32 = 10_000;
 
 /// Approximate ledgers per day on Stellar (~5s per ledger).
 pub(crate) const LEDGERS_PER_DAY: u32 = 17280;
