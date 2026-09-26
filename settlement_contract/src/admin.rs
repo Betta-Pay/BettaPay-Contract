@@ -653,6 +653,10 @@ impl SettlementContract {
     }
 
     fn _upgrade(env: &Env, executor: &Address, new_wasm_hash: BytesN<32>) {
+        if new_wasm_hash == soroban_sdk::BytesN::from_array(env, &[0;32]) {
+            panic_with_error!(env, SettlementError::InvalidWasmInterface);
+        }
+
         assert_not_paused(env);
         if !probe_supports_interface(env, &new_wasm_hash, crate::SUPPORTED_INTERFACE_VERSION) {
             panic_with_error!(env, SettlementError::InvalidWasmInterface);
