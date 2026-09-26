@@ -142,3 +142,49 @@ fn pause_blocks_payment_and_unpaused_succeeds() {
     client.unpause(&admins);
     client.store_payment_reference(&merchant, &reference, &1_000);
 }
+
+
+// ---------------------------------------------------------------------------
+// Issue 728: Upgrade parity test matrix direct vs timelocked
+// ---------------------------------------------------------------------------
+
+#[test]
+fn upgrade_paths_agree_on_interface_check() {
+    let (env, client, admins, _merchant) = setup();
+
+    let good_wasm = soroban_sdk::Bytes::from_slice(
+        &env,
+        include_bytes!("../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"),
+    );
+    let good_hash = env.deployer().upload_contract_wasm(good_wasm);
+
+    let empty_wasm = soroban_sdk::Bytes::from_slice(&env, &[]);
+    let bad_hash = env.deployer().upload_contract_wasm(empty_wasm);
+
+    // Test direct
+    let direct_good = client.try_upgrade(&admins, &good_hash);
+    let direct_bad = client.try_upgrade(&admins, &bad_hash);
+
+    // Test timelocked
+    // Schedule and execute a good upgrade
+    let good_op = crate::types::Operation::Upgrade(good_hash.clone());
+    client.schedule(&admins, &good_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger().with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let executor = Address::generate(&env);
+    
+    // We expect try_execute to match direct
+    let timelocked_good = client.try_execute(&executor, &good_op);
+
+    // Reset env to avoid AlreadyExecuted or we just schedule a new one
+    let bad_op = crate::types::Operation::Upgrade(bad_hash.clone());
+    client.schedule(&admins, &bad_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    
+    // execution fails
+    let timelocked_bad = client.try_execute(&executor, &bad_op);
+
+    assert_eq!(direct_good.is_ok(), timelocked_good.is_ok());
+    
+    // bad upgrade fails
+    assert_eq!(direct_bad.is_ok(), timelocked_bad.is_ok());
+    assert!(direct_bad.is_err());
+}
