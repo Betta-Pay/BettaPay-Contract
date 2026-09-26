@@ -31,7 +31,7 @@ use soroban_sdk::{Address, Env, FromVal, Symbol};
 // `get_fee_config`.
 // ---------------------------------------------------------------------------
 
-mod panicking_gov {
+pub mod panicking_gov {
     use crate::GovFeeConfig;
     use soroban_sdk::{contract, contractimpl, Env};
 

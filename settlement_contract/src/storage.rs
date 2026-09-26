@@ -369,6 +369,13 @@ fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
 /// - If governance-controlled settlement timing is needed in the future,
 ///   extend `GovFeeConfig` and this function in a coordinated upgrade.
 ///
+/// # Gas budget for governance round-trip (issue #745)
+///
+/// The `try_invoke_contract` call to `get_fee_config` consumes approximately
+/// 50,000-100,000 CPU instructions depending on governance complexity. Callers
+/// should budget ~10-20% overhead beyond the base settlement compute (fees,
+/// storage reads/writes) when governance is wired and active.
+///
 /// See also: [`GovFeeConfig`][crate::GovFeeConfig].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
@@ -399,6 +406,12 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
         panic_with_error!(env, SettlementError::InvalidSettlementDelay);
     }
+
+    // Cache the successful config for fallback on next governance failure (issue #744)
+    env.storage()
+        .instance()
+        .set(&DataKey::CachedGovRule, &Some(rule.clone()));
+
     Some(rule)
 }
 
@@ -561,10 +574,8 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
         None => return,
     };
 
-    if rule.platform_fee_bps > fee_config.platform_fee_bps {
-        panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
-    }
-    if rule.network_fee_bps > fee_config.network_fee_bps {
+    if rule.platform_fee_bps > fee_config.platform_fee_bps || rule.network_fee_bps > fee_config.network_fee_bps {
+        env.events().publish((Symbol::new(env, "fee_ceiling_rejected"), rule.platform_fee_bps), rule.network_fee_bps);
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }
