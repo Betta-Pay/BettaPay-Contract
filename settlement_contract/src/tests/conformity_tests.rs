@@ -269,7 +269,7 @@ fn min_payment_boundary_99_fails_100_succeeds() {
     assert!(
         matches!(
             result_99,
-            Err(Ok(soroban_sdk::Error::from_contract_error(313)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(313)
         ),
         "amount 99 must fail with AmountTooSmall (313)"
     );
