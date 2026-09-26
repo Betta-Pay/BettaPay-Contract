@@ -247,6 +247,41 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// MIN_PAYMENT_AMOUNT dust boundary (issue #787)
+// ---------------------------------------------------------------------------
+
+/// Amount 99 is one stroop below the dust floor and must fail with
+/// `AmountTooSmall` (313); amount 100 is exactly at the floor and must
+/// succeed.  Pins `MIN_PAYMENT_AMOUNT == 100` at this boundary so any
+/// accidental change to the constant is caught immediately.
+#[test]
+fn min_payment_boundary_99_fails_100_succeeds() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference_99 = BytesN::from_array(&env, &{
+        let mut b = [0u8; 32];
+        b[0] = 0x99;
+        b
+    });
+    let result_99 = client.try_store_payment_reference(&merchant, &reference_99, &99i128);
+    assert!(
+        matches!(
+            result_99,
+            Err(Ok(soroban_sdk::Error::from_contract_error(313)))
+        ),
+        "amount 99 must fail with AmountTooSmall (313)"
+    );
+
+    let reference_100 = BytesN::from_array(&env, &{
+        let mut b = [0u8; 32];
+        b[0] = 0xaa;
+        b
+    });
+    client.store_payment_reference(&merchant, &reference_100, &100i128);
+}
+
 #[test]
 fn contract_specific_codes_stay_in_their_reserved_range() {
     bettapay_common::error_codes::assert_no_code_collisions(
