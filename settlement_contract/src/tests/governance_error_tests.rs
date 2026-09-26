@@ -562,3 +562,48 @@ fn governance_fee_sum_over_denominator_rejected() {
     assert_eq!(split.platform_fee_amount, 5000);
     assert_eq!(split.network_fee_amount, 5000);
 }
+
+#[test]
+fn governance_max_fees_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
+
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let gov_admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let gov_deployer = Address::generate(&env);
+    gov_client.init(
+        &gov_deployer,
+        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &1,
+        &recovery,
+    );
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &gov_id,
+        &recovery,
+    );
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &FeeConfig {
+            platform_fee_bps: u32::MAX,
+            network_fee_bps: 0,
+        },
+    );
+
+    let res = client.try_calculate_fee_split(&merchant, &10_000);
+    assert_eq!(res.unwrap_err().unwrap(), soroban_sdk::Error::from_contract_error(18));
+}
