@@ -500,8 +500,8 @@ impl SettlementContract {
         reference: BytesN<32>,
         signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
-        assert_payments_readable(&env, &merchant);
         assert_read_authorized(&env, &merchant, &signers);
+        assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
         let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
         if record.is_some() {
@@ -520,8 +520,9 @@ impl SettlementContract {
     ///
     /// References are resolved within the merchant's own namespace and the
     /// returned vector contains only records that exist.
-    /// This read is public so indexers and composing contracts can verify
-    /// known payment references without a merchant signature.
+    /// Pass an empty `signers` vector to authorize as the merchant, or a
+    /// non-empty vector of admin signers to authorize through the configured
+    /// admin threshold.
     ///
     /// # Panics
     ///
@@ -535,7 +536,13 @@ impl SettlementContract {
     ///   longer readable (issue #490).
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
-    pub fn get_payments(env: Env, merchant: Address, refs: Vec<BytesN<32>>) -> Vec<PaymentRecord> {
+    pub fn get_payments(
+        env: Env,
+        merchant: Address,
+        refs: Vec<BytesN<32>>,
+        signers: Vec<Address>,
+    ) -> Vec<PaymentRecord> {
+        assert_read_authorized(&env, &merchant, &signers);
         assert_payments_readable(&env, &merchant);
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(env, SettlementError::BatchTooLarge);
