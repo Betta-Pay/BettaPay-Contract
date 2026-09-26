@@ -472,6 +472,20 @@ impl SettlementContract {
         calculate_split(&env, amount, &rule)
     }
 
+    /// Remove a payment reference after the configured admin threshold has
+    /// authorized the operation. Removing a missing record is intentionally a
+    /// no-op so maintenance callers can safely retry cleanup work.
+    pub fn prune_payment(
+        env: Env,
+        signers: Vec<Address>,
+        merchant: Address,
+        reference: BytesN<32>,
+    ) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Payment(merchant, reference));
+    }
     /// Retrieve a payment record for a merchant by its reference, extending
     /// the storage TTL if found.
     ///
