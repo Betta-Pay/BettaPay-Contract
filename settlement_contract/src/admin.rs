@@ -10,11 +10,11 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, read_admin, read_admins,
-    read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
-    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
-    validate_nonzero_address, verify_admin_auth, write_admins,
+    assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
+    read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
+    read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
@@ -274,7 +274,7 @@ impl SettlementContract {
         let old_admin = storage::primary_admin(&old_admins).unwrap();
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
-            if is_merchant_registered_and_bump_ttl(&env, new_admins.get(i).unwrap()) {
+            if is_merchant_registered_internal(&env, new_admins.get(i).unwrap()) {
                 panic_with_error!(&env, SettlementError::InvalidAdmin);
             }
         }
@@ -390,6 +390,11 @@ impl SettlementContract {
 
     /// Schedules an administrative operation to be executed after a timelock.
     ///
+    /// The entry is created with a 30-day TTL bump ([`SCHEDULED_OP_TTL_BUMP`]),
+    /// which comfortably covers the minimum 7-day timelock delay
+    /// ([`DEFAULT_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
+    /// operation remains intact and executable when `execute_at` is reached.
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
@@ -403,6 +408,18 @@ impl SettlementContract {
 
         if execute_in < DEFAULT_TIMELOCK_DELAY_SECONDS {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
+
+        // Validate scheduled operation bounds at schedule time (issues #810, #811)
+        if let Operation::TransferAdmin(new_admins, t) = &operation {
+            if *t == 0 || *t > new_admins.len() {
+                panic_with_error!(&env, SettlementError::InvalidThreshold);
+            }
+        }
+        if let Operation::SetSettlementRule(_, r) = &operation {
+            if r.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
+                panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
+            }
         }
 
         let operation_xdr = operation.clone().to_xdr(&env);
@@ -620,7 +637,7 @@ impl SettlementContract {
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
-            if is_merchant_registered_and_bump_ttl(env, new_admins.get(i).unwrap()) {
+            if is_merchant_registered_internal(env, new_admins.get(i).unwrap()) {
                 panic_with_error!(env, SettlementError::InvalidAdmin);
             }
         }
@@ -651,6 +668,15 @@ impl SettlementContract {
     }
 
     /// Internal method to register a merchant.
+    ///
+    /// # Merchant auth policy note (issue #809)
+    ///
+    /// The direct registration path ([`register_merchant`](crate::merchant::SettlementContract::register_merchant))
+    /// requires `merchant.require_auth()` to ensure explicit merchant consent.
+    /// In contrast, this timelocked execution path deliberately does not require
+    /// merchant authorization because `execute` is permissionless once the
+    /// timelock delay has elapsed. This gap is documented as an accepted risk
+    /// pending a protocol-wide policy decision.
     ///
     /// # Panics
     ///
@@ -850,6 +876,105 @@ impl SettlementContract {
         env.events().publish(
             (Symbol::new(env, events::DEFAULT_RULE_UPDATED_EVENT),),
             (executor, prev, new_rule),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup;
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    use soroban_sdk::testutils::{Address as _, Ledger};
+
+    #[test]
+    fn scheduled_op_survives_until_execute_at() {
+        let (env, client, admins, _merchant) = setup();
+        let new_admin = Address::generate(&env);
+        let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+        let operation = Operation::TransferAdmin(new_admins.clone(), 1);
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+        let key = DataKey::ScheduledOperation(op_hash);
+
+        // Ensure the contract instance stays alive across the 7-day ledger advancement
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .extend_ttl(SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_BUMP);
+        });
+
+        // Advance 7 days (both timestamp and sequence number)
+        let ledgers_7d = 7 * crate::LEDGERS_PER_DAY;
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+            ledger.sequence_number += ledgers_7d;
+        });
+
+        // The op entry's 30-day initial TTL bump must keep it alive at execute_at
+        let remaining_ttl = env.as_contract(&client.address, || {
+            assert!(env.storage().persistent().has(&key));
+            env.storage().persistent().get_ttl(&key)
+        });
+        assert!(
+            remaining_ttl >= SCHEDULED_OP_TTL_BUMP - ledgers_7d,
+            "scheduled operation TTL must remain intact at execute_at"
+        );
+
+        // Execution succeeds at execute_at with TTL intact
+        client.execute(&admins.get(0).unwrap(), &operation);
+        assert_eq!(client.get_admin(), new_admins);
+    }
+
+    #[test]
+    fn timelocked_register_skips_merchant_auth() {
+        let (env, client, admins, _merchant) = setup();
+        let new_merchant = Address::generate(&env);
+        let operation = Operation::RegisterMerchant(new_merchant.clone());
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        // Advance 7 days
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        // Clear mock auths so any require_auth fails
+        env.set_auths(&[]);
+        let executor = Address::generate(&env);
+
+        // Execution succeeds without merchant auth, documenting the gap (issue #809)
+        client.execute(&executor, &operation);
+        assert!(client.is_merchant_registered(&new_merchant));
+    }
+
+    #[test]
+    fn cannot_schedule_transfer_admin_with_zero_threshold() {
+        let (env, client, admins, _merchant) = setup();
+        let new_admin = Address::generate(&env);
+        let new_admins = soroban_sdk::vec![&env, new_admin];
+        let operation = Operation::TransferAdmin(new_admins, 0);
+
+        let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::InvalidThreshold.into()
+        );
+    }
+
+    #[test]
+    fn cannot_schedule_set_settlement_rule_with_invalid_delay() {
+        let (env, client, admins, merchant) = setup();
+        let mut invalid_rule = BOOTSTRAP_DEFAULT_RULE;
+        invalid_rule.settlement_delay_ledger = MAX_SETTLEMENT_DELAY_LEDGER + 1;
+        let operation = Operation::SetSettlementRule(merchant, invalid_rule);
+
+        let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::InvalidSettlementDelay.into()
         );
     }
 }

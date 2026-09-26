@@ -75,7 +75,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
         .checked_add(network_fee_amount)
         .is_none_or(|total| total > amount);
     if fees_exceed_gross {
-        network_fee_amount = (amount - platform_fee_amount).max(0);
+        network_fee_amount = amount.checked_sub(platform_fee_amount).unwrap_or(0).max(0);
     }
 
     let merchant_amount = amount
@@ -336,7 +336,8 @@ impl SettlementContract {
     /// * [`InvalidPaymentReference`](SettlementError::InvalidPaymentReference) — if `reference` is all zeros.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
     /// * [`DuplicatePaymentReference`](SettlementError::DuplicatePaymentReference) — if the reference already exists for this merchant.
-    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`.
+    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
+    ///   for either fee leg or for the combined platform + network fee rate.
     ///
     /// ## Emitted Event: `payment_stored`
     ///
@@ -452,7 +453,8 @@ impl SettlementContract {
     ///
     /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not registered.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
-    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`.
+    /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
+    ///   for either fee leg or for the combined platform + network fee rate.
     pub fn calculate_fee_split(env: Env, merchant: Address, amount: i128) -> FeeSplit {
         if !is_merchant_registered_internal(&env, merchant.clone()) {
             panic_with_error!(&env, SettlementError::MerchantMissing);
@@ -465,6 +467,20 @@ impl SettlementContract {
         calculate_split(&env, amount, &rule)
     }
 
+    /// Remove a payment reference after the configured admin threshold has
+    /// authorized the operation. Removing a missing record is intentionally a
+    /// no-op so maintenance callers can safely retry cleanup work.
+    pub fn prune_payment(
+        env: Env,
+        signers: Vec<Address>,
+        merchant: Address,
+        reference: BytesN<32>,
+    ) {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Payment(merchant, reference));
+    }
     /// Retrieve a payment record for a merchant by its reference, extending
     /// the storage TTL if found.
     ///
@@ -493,8 +509,8 @@ impl SettlementContract {
         reference: BytesN<32>,
         signers: Vec<Address>,
     ) -> Option<PaymentRecord> {
-        assert_payments_readable(&env, &merchant);
         assert_read_authorized(&env, &merchant, &signers);
+        assert_payments_readable(&env, &merchant);
         let key = DataKey::Payment(merchant, reference);
         let record: Option<PaymentRecord> = env.storage().persistent().get(&key);
         if record.is_some() {
@@ -513,8 +529,9 @@ impl SettlementContract {
     ///
     /// References are resolved within the merchant's own namespace and the
     /// returned vector contains only records that exist.
-    /// This read is public so indexers and composing contracts can verify
-    /// known payment references without a merchant signature.
+    /// Pass an empty `signers` vector to authorize as the merchant, or a
+    /// non-empty vector of admin signers to authorize through the configured
+    /// admin threshold.
     ///
     /// # Panics
     ///
@@ -528,7 +545,13 @@ impl SettlementContract {
     ///   longer readable (issue #490).
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
-    pub fn get_payments(env: Env, merchant: Address, refs: Vec<BytesN<32>>) -> Vec<PaymentRecord> {
+    pub fn get_payments(
+        env: Env,
+        merchant: Address,
+        refs: Vec<BytesN<32>>,
+        signers: Vec<Address>,
+    ) -> Vec<PaymentRecord> {
+        assert_read_authorized(&env, &merchant, &signers);
         assert_payments_readable(&env, &merchant);
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(env, SettlementError::BatchTooLarge);
@@ -572,6 +595,29 @@ mod read_authorization_tests {
         assert!(matches!(
             client.try_get_payment_reference(&merchant, &reference, &duplicate_signers),
             Err(Ok(e)) if e == Error::from_contract_error(3)
+        ));
+    }
+
+    #[test]
+    fn calculate_fee_split_rejects_fee_sum_overflow_with_amount_overflow() {
+        let (_env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+        client.set_settlement_rule(
+            &admins,
+            &merchant,
+            &crate::types::SettlementRule {
+                platform_fee_bps: 5_000,
+                network_fee_bps: 5_000,
+                settlement_delay_ledger: 0,
+                auto_settle: false,
+            },
+        );
+
+        // Each 5000 bps leg fits in i128, but the combined 10000 bps does not.
+        let amount = i128::MAX / 7_500;
+        assert!(matches!(
+            client.try_calculate_fee_split(&merchant, &amount),
+            Err(Ok(e)) if e == Error::from_contract_error(310)
         ));
     }
 

@@ -269,7 +269,7 @@ fn min_payment_boundary_99_fails_100_succeeds() {
     assert!(
         matches!(
             result_99,
-            Err(Ok(soroban_sdk::Error::from_contract_error(313)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(313)
         ),
         "amount 99 must fail with AmountTooSmall (313)"
     );
@@ -340,3 +340,44 @@ fn bloat_bench_stores_1000_sequential_payments() {
     // rent-cost inspection; reaching this line proves no trap occurred.
     env.budget().print();
 }
+
+// ---------------------------------------------------------------------------
+// Gas snapshot: store_payment_reference baseline (issue #801)
+// ---------------------------------------------------------------------------
+
+/// Gas snapshot test for `store_payment_reference` with a local merchant rule.
+///
+/// Records the host resource consumption (CPU instructions and memory bytes)
+/// for storing a payment reference under a local rule to establish a baseline
+/// and guard against silent gas regressions.
+#[test]
+fn store_payment_gas_snapshot() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 10,
+        auto_settle: true,
+    };
+    client.set_settlement_rule(&admins, &merchant, &rule);
+
+    let reference = BytesN::from_array(&env, &[7u8; 32]);
+    let amount = 10_000i128;
+
+    env.budget().reset_unlimited();
+
+    client.store_payment_reference(&merchant, &reference, &amount);
+
+    let cpu = env.budget().cpu_instruction_cost();
+    let mem = env.budget().memory_bytes_cost();
+
+    env.budget().print();
+
+    assert!(cpu > 0, "CPU instruction count must be positive");
+    assert!(mem > 0, "Memory byte count must be positive");
+    assert!(cpu < 1_500_000, "CPU instructions ({cpu}) exceeded baseline bound");
+    assert!(mem < 300_000, "Memory bytes ({mem}) exceeded baseline bound");
+}
+

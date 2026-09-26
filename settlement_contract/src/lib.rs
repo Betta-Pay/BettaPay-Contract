@@ -299,10 +299,12 @@ pub(crate) const SUPPORTED_INTERFACE_VERSION: u32 = 1;
 /// governance_contract's `CURRENT_SCHEMA_VERSION` (issue #507, issue #704).
 pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-// Settlement-specific TTL policy for short-lived reads of admin / governance /
-// recovery addresses. Deliberately shorter than the protocol defaults so that
-// an inactive instance-side entry can still be evicted in days rather than
-// weeks — see ADR 003 for the rationale.
+/// 50k/100k per ADR-003: inactive instance entries evictable in days, not weeks.
+///
+/// Settlement-specific TTL policy for short-lived reads of admin / governance /
+/// recovery addresses. Deliberately shorter than the protocol defaults so that
+/// an inactive instance-side entry can still be evicted in days rather than
+/// weeks — see ADR 003 for the rationale.
 pub(crate) const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
 pub(crate) const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 
