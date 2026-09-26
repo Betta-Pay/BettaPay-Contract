@@ -753,9 +753,6 @@ impl SettlementContract {
         if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
             panic_with_error!(env, SettlementError::InvalidSettlementDelay);
         }
-        if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
-            panic_with_error!(env, SettlementError::MerchantMissing);
-        }
 
         let prev = env
             .storage()
