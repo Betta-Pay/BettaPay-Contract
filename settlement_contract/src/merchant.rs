@@ -134,3 +134,28 @@ impl SettlementContract {
         is_merchant_registered_read(&env, merchant)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn cannot_register_admin_as_merchant() {
+        let (env, client, admins, _merchant) = setup();
+        let admin = admins.get(0).unwrap();
+
+        // Registering an active admin as a merchant must fail with InvalidAdmin
+        let result = client.try_register_merchant(&admins, &admin);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::InvalidAdmin.into()
+        );
+
+        // Registering a non-admin address still succeeds
+        let non_admin = Address::generate(&env);
+        client.register_merchant(&admins, &non_admin);
+        assert!(client.is_merchant_registered(&non_admin));
+    }
+}

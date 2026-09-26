@@ -410,6 +410,18 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
+        // Validate scheduled operation bounds at schedule time (issues #810, #811)
+        if let Operation::TransferAdmin(new_admins, t) = &operation {
+            if *t == 0 || *t > new_admins.len() {
+                panic_with_error!(&env, SettlementError::InvalidThreshold);
+            }
+        }
+        if let Operation::SetSettlementRule(_, r) = &operation {
+            if r.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
+                panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
+            }
+        }
+
         let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
@@ -656,6 +668,15 @@ impl SettlementContract {
     }
 
     /// Internal method to register a merchant.
+    ///
+    /// # Merchant auth policy note (issue #809)
+    ///
+    /// The direct registration path ([`register_merchant`](crate::merchant::SettlementContract::register_merchant))
+    /// requires `merchant.require_auth()` to ensure explicit merchant consent.
+    /// In contrast, this timelocked execution path deliberately does not require
+    /// merchant authorization because `execute` is permissionless once the
+    /// timelock delay has elapsed. This gap is documented as an accepted risk
+    /// pending a protocol-wide policy decision.
     ///
     /// # Panics
     ///
@@ -906,5 +927,54 @@ mod tests {
         // Execution succeeds at execute_at with TTL intact
         client.execute(&admins.get(0).unwrap(), &operation);
         assert_eq!(client.get_admin(), new_admins);
+    }
+
+    #[test]
+    fn timelocked_register_skips_merchant_auth() {
+        let (env, client, admins, _merchant) = setup();
+        let new_merchant = Address::generate(&env);
+        let operation = Operation::RegisterMerchant(new_merchant.clone());
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        // Advance 7 days
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        // Clear mock auths so any require_auth fails
+        env.set_auths(&[]);
+        let executor = Address::generate(&env);
+
+        // Execution succeeds without merchant auth, documenting the gap (issue #809)
+        client.execute(&executor, &operation);
+        assert!(client.is_merchant_registered(&new_merchant));
+    }
+
+    #[test]
+    fn cannot_schedule_transfer_admin_with_zero_threshold() {
+        let (env, client, admins, _merchant) = setup();
+        let new_admin = Address::generate(&env);
+        let new_admins = soroban_sdk::vec![&env, new_admin];
+        let operation = Operation::TransferAdmin(new_admins, 0);
+
+        let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::InvalidThreshold.into()
+        );
+    }
+
+    #[test]
+    fn cannot_schedule_set_settlement_rule_with_invalid_delay() {
+        let (env, client, admins, merchant) = setup();
+        let mut invalid_rule = BOOTSTRAP_DEFAULT_RULE;
+        invalid_rule.settlement_delay_ledger = MAX_SETTLEMENT_DELAY_LEDGER + 1;
+        let operation = Operation::SetSettlementRule(merchant, invalid_rule);
+
+        let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::InvalidSettlementDelay.into()
+        );
     }
 }
