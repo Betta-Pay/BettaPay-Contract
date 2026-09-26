@@ -13,6 +13,15 @@ use crate::{
     RULE_TTL_THRESHOLD,
 };
 
+/// Governance system-parameter key for the fee circuit-breaker (issue #743).
+///
+/// Settlement reads this before consulting governance's fee config. A value of
+/// exactly `1` means "bypass": skip the `get_fee_config` call and fall through
+/// to the bootstrap default, so a broken fee config cannot block payments.
+/// Anything else — unset, `0`, a trap, or a malformed value — leaves today's
+/// behaviour untouched (default 0).
+const BYPASS_GOV_FEES_PARAM: &str = "bypass_gov_fees";
+
 pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
@@ -307,14 +316,44 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
     BOOTSTRAP_DEFAULT_RULE
 }
 
+/// Reads governance's `bypass_gov_fees` circuit-breaker flag (issue #743).
+///
+/// Returns `true` only when governance answers with exactly `1`. This is
+/// deliberately fail-safe: an unset parameter, a `0`, a governance address that
+/// does not expose `get_system_param`, or any trap/typed error all return
+/// `false`, preserving the pre-existing behaviour where settlement consults the
+/// governance fee config.
+fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
+    let mut args = Vec::<Val>::new(env);
+    args.push_back(Symbol::new(env, BYPASS_GOV_FEES_PARAM).into_val(env));
+    match env.try_invoke_contract::<Option<i128>, SettlementError>(
+        governance,
+        &Symbol::new(env, "get_system_param"),
+        args,
+    ) {
+        Ok(Ok(Some(value))) => value == 1,
+        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => false,
+    }
+}
+
 /// Attempts to read fee BPS from the configured governance contract.
 ///
-/// Returns `None` when governance has no fee configuration yet (the governance
-/// contract returned `Ok(Ok(None))`), so callers continue down the fallback
-/// chain to bootstrap.  Any other failure — contract trap, host error, or
-/// unexpected error value — is surfaced as the typed
-/// [`SettlementError::GovernanceCallFailed`] instead of silently collapsing to
-/// `None`.
+/// Returns `None` in either of these cases, so callers continue down the
+/// fallback chain to [`BOOTSTRAP_DEFAULT_RULE`]:
+/// - Governance has no fee configuration yet (`Ok(Ok(None))`).
+/// - The `get_fee_config` call fails — a contract trap, a typed error, or a
+///   host error (issue #741). The payment path degrades gracefully: a broken
+///   governance contract must not brick fallback payments.
+///
+/// The bypass circuit-breaker (issue #743) is checked first: when governance's
+/// `bypass_gov_fees` system parameter is `1`, this returns `None` without
+/// calling `get_fee_config` at all.
+///
+/// A malformed config (a map that is not exactly the two required `u32`
+/// fields) still panics with [`SettlementError::GovernanceCallFailed`] rather
+/// than falling back — silently skipping a configured fee ceiling is worse
+/// than failing loudly (issue #483). Admin writes keep hard-failing on any
+/// governance call failure via [`validate_fee_against_governance`] (issue #742).
 ///
 /// # Settlement timing fields (issue #484)
 ///
@@ -341,19 +380,20 @@ pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
 
-    // Attempt to fetch last-good cached config first (issue #744)
-    if let Some(cached_rule) = env
-        .storage()
-        .instance()
-        .get::<_, Option<SettlementRule>>(&DataKey::CachedGovRule)
-    {
-        if let Some(rule) = cached_rule {
-            // Cache hit — use the last successful config
-            return Some(rule);
-        }
+    // Issue #743: circuit-breaker before the fee-config cross-contract call.
+    if governance_bypass_enabled(env, &governance) {
+        return None;
     }
 
-    let raw_val = invoke_governance_get_fee_config(env, &governance);
+    // Issue #741: the read/payment path degrades to bootstrap on any failure.
+    let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
+        &governance,
+        &Symbol::new(env, "get_fee_config"),
+        Vec::new(env),
+    ) {
+        Ok(Ok(val)) => val,
+        Ok(Err(_)) | Err(_) => return None,
+    };
 
     let config = try_read_governance_fee_config(env, raw_val)?;
 
@@ -420,23 +460,67 @@ fn invoke_governance_get_fee_config(env: &Env, governance: &Address) -> Val {
     }
 }
 
+/// Classifies the raw `get_fee_config` value without panicking, so the shape
+/// rules can be exercised directly (see the proptest at the bottom of this
+/// file). [`try_read_governance_fee_config`] is the panicking wrapper used by
+/// the contract.
+///
+/// - `Ok(Some(config))` — a map with exactly the two required `u32` fields.
+/// - `Ok(None)` — `Void` or any non-map value (governance has no config yet).
+/// - `Err(GovernanceCallFailed)` — a malformed map: not exactly 2 entries, a
+///   missing required key, or a field that is not `u32` (issue #483).
+fn classify_governance_fee_config(
+    env: &Env,
+    raw_val: Val,
+) -> Result<Option<GovFeeConfig>, SettlementError> {
+    // A Void return means governance has no fee config set yet.
+    // Map::try_from_val safely returns Err for non-map values.
+    let map: Map<Symbol, Val> = match Map::try_from_val(env, &raw_val) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+
+    // Issue #483: assert exactly 2 fields before reading.
+    // A governance returning a single-field config (e.g. only platform_fee_bps)
+    // must be rejected rather than silently skipping the network-fee ceiling.
+    if map.len() != 2 {
+        return Err(SettlementError::GovernanceCallFailed);
+    }
+
+    let platform_fee_bps = match map.get(Symbol::new(env, "platform_fee_bps")) {
+        Some(val) => {
+            u32::try_from_val(env, &val).map_err(|_| SettlementError::GovernanceCallFailed)?
+        }
+        None => return Err(SettlementError::GovernanceCallFailed),
+    };
+
+    let network_fee_bps = match map.get(Symbol::new(env, "network_fee_bps")) {
+        Some(val) => {
+            u32::try_from_val(env, &val).map_err(|_| SettlementError::GovernanceCallFailed)?
+        }
+        None => return Err(SettlementError::GovernanceCallFailed),
+    };
+
+    Ok(Some(GovFeeConfig {
+        platform_fee_bps,
+        network_fee_bps,
+    }))
+}
+
 /// Validates the raw return value from governance's `get_fee_config` as a
 /// properly-shaped `GovFeeConfig` (a Soroban `#[contracttype]` struct encoded
-/// as a map keyed by field name).
+/// as a map keyed by field name), panicking on a malformed one.
 ///
-/// Returns:
-/// - `Some(GovFeeConfig)` when the raw value is a map with both required fields
-///   (`platform_fee_bps` and `network_fee_bps`).
-/// - `None` when the raw value is `Void` (governance has no config set yet).
+/// Returns `Some` when the raw value is a map with both required fields
+/// (`platform_fee_bps` and `network_fee_bps`), and `None` when it is `Void`
+/// (governance has no config set yet).
 ///
 /// Panics with [`SettlementError::GovernanceCallFailed`] when the governance
-/// contract returned a malformed config (issue #483):
-/// - A map with fewer or more than 2 entries (e.g. a 1-field config that omits
-///   `network_fee_bps`).
-/// - A map that is missing either required key.
-/// - A value whose fields are not `u32`.
+/// contract returned a malformed config (issue #483): a map with fewer or more
+/// than 2 entries, a map missing either required key, or a field that is not
+/// `u32`.
 ///
-/// # Why this function exists
+/// # Why the shape is validated by hand
 ///
 /// `try_invoke_contract::<Option<GovFeeConfig>, SettlementError>` deserialises
 /// the return value into `Option<GovFeeConfig>` in the **calling** contract's
@@ -447,7 +531,7 @@ fn invoke_governance_get_fee_config(env: &Env, governance: &Address) -> Val {
 /// ("escalating error to panic") rather than surfacing as the typed
 /// `GovernanceCallFailed` error.
 ///
-/// This function avoids that path by:
+/// This avoids that path by:
 /// 1. Calling `try_invoke_contract::<Val, SettlementError>` to get the raw
 ///    `Val` return value without triggering typed deserialisation.
 /// 2. Converting the raw `Val` to `Map<Symbol, Val>` (safe: returns `Err` for
@@ -455,42 +539,10 @@ fn invoke_governance_get_fee_config(env: &Env, governance: &Address) -> Val {
 /// 3. Validating the map structure (entry count, required keys, field types)
 ///    before constructing `GovFeeConfig`.
 fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfig> {
-    // A Void return means governance has no fee config set yet.
-    // Map::try_from_val safely returns Err for non-map values.
-    let map: Map<Symbol, Val> = match Map::try_from_val(env, &raw_val) {
-        Ok(m) => m,
-        Err(_) => return None,
-    };
-
-    // Issue #483: assert exactly 2 fields before reading.
-    // A governance returning a single-field config (e.g. only platform_fee_bps)
-    // must be rejected rather than silently skipping the network-fee ceiling.
-    if map.len() != 2 {
-        panic_with_error!(env, SettlementError::GovernanceCallFailed);
+    match classify_governance_fee_config(env, raw_val) {
+        Ok(config) => config,
+        Err(error) => panic_with_error!(env, error),
     }
-
-    let platform_fee_bps = match map.get(Symbol::new(env, "platform_fee_bps")) {
-        Some(val) => u32::try_from_val(env, &val)
-            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
-        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
-    };
-
-    let network_fee_bps = match map.get(Symbol::new(env, "network_fee_bps")) {
-        Some(val) => u32::try_from_val(env, &val)
-            .unwrap_or_else(|_| panic_with_error!(env, SettlementError::GovernanceCallFailed)),
-        None => panic_with_error!(env, SettlementError::GovernanceCallFailed),
-    };
-
-    use bettapay_common::constants::BPS_DENOMINATOR;
-    let sum = platform_fee_bps.checked_add(network_fee_bps).unwrap_or(u32::MAX);
-    if sum > BPS_DENOMINATOR {
-        panic_with_error!(env, SettlementError::GovernanceCallFailed);
-    }
-
-    Some(GovFeeConfig {
-        platform_fee_bps,
-        network_fee_bps,
-    })
 }
 
 /// Reads the governance GovFeeConfig via cross-contract call and validates that
@@ -502,8 +554,16 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 ///
 /// Any call failure (contract trap or host error) is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
-/// Governance `get_fee_config` return is UNTRUSTED cross-contract input.
-/// Must satisfy MIN_FEE_BPS..=MAX_FEE_BPS and sum <= BPS_DENOMINATOR.
+///
+/// # Hard-fail is intentional here (issue #742)
+///
+/// This is the **write** path (`set_settlement_rule` / `set_default_rule` and
+/// their scheduled variants). Unlike the read path, which degrades to the
+/// bootstrap default when governance is unreachable (issue #741), an admin
+/// write must never silently accept a fee configuration that governance might
+/// reject once it recovers. So a trap keeps raising `GovernanceCallFailed`
+/// instead of returning early. The asymmetry is deliberate: reads fail open,
+/// writes fail loud.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
     let raw_val = invoke_governance_get_fee_config(env, &governance);
@@ -517,5 +577,127 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     if rule.platform_fee_bps > fee_config.platform_fee_bps || rule.network_fee_bps > fee_config.network_fee_bps {
         env.events().publish((Symbol::new(env, "fee_ceiling_rejected"), rule.platform_fee_bps), rule.network_fee_bps);
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
+    }
+}
+
+#[cfg(test)]
+mod governance_fee_config_shape_tests {
+    //! Issue #740: property coverage for the shape of governance's fee config.
+    //!
+    //! Fixed-shape tests cannot cover the space of malformed maps (0, 1, 3 or 4
+    //! entries, wrong keys, wrong field types). This fuzzes that space and
+    //! asserts one rule: a map is accepted only when it has exactly the two
+    //! required keys with `u32` values. Anything else is rejected with
+    //! `GovernanceCallFailed`; a non-map value still means "no config".
+
+    use super::classify_governance_fee_config;
+    use crate::errors::SettlementError;
+    use proptest::prelude::*;
+    use soroban_sdk::{Env, IntoVal, Map, Symbol, Val};
+
+    const FIELD_KEYS: [&str; 4] = [
+        "platform_fee_bps",
+        "network_fee_bps",
+        "extra_one",
+        "extra_two",
+    ];
+
+    fn raw_map(env: &Env, fields: &[(usize, u32)]) -> Val {
+        let mut map: Map<Symbol, Val> = Map::new(env);
+        for (index, value) in fields {
+            let _ = map.set(Symbol::new(env, FIELD_KEYS[*index]), (*value).into_val(env));
+        }
+        map.into_val(env)
+    }
+
+    proptest! {
+        /// Any subset of the four keys (0..=4 present), arbitrary `u32`
+        /// values: only the exact two-required-key map is accepted.
+        #[test]
+        fn only_two_required_u32_fields_are_accepted(
+            layout in (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()),
+            platform in any::<u32>(),
+            network in any::<u32>(),
+        ) {
+            let env = Env::default();
+            let present = [layout.0, layout.1, layout.2, layout.3];
+            let count = present.iter().filter(|is_present| **is_present).count();
+
+            // Collect the present fields into a fixed buffer; no heap needed.
+            let mut fields = [(0usize, 0u32); 4];
+            let mut cursor = 0usize;
+            for (index, is_present) in present.iter().enumerate() {
+                if *is_present {
+                    let value = match index {
+                        0 => platform,
+                        1 => network,
+                        _ => 0,
+                    };
+                    fields[cursor] = (index, value);
+                    cursor += 1;
+                }
+            }
+
+            let result =
+                classify_governance_fee_config(&env, raw_map(&env, &fields[..cursor]));
+            let well_formed = count == 2 && present[0] && present[1];
+
+            match result {
+                Ok(Some(config)) => {
+                    prop_assert!(well_formed, "layout {:?} must not be accepted", present);
+                    prop_assert_eq!(config.platform_fee_bps, platform);
+                    prop_assert_eq!(config.network_fee_bps, network);
+                }
+                Ok(None) => prop_assert!(false, "a map value is never treated as no-config"),
+                Err(error) => {
+                    prop_assert!(
+                        !well_formed,
+                        "well-formed layout {:?} must be accepted",
+                        present
+                    );
+                    prop_assert!(matches!(error, SettlementError::GovernanceCallFailed));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_map_value_means_no_config() {
+        let env = Env::default();
+        assert!(matches!(
+            classify_governance_fee_config(&env, 5u32.into_val(&env)),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn non_u32_field_value_is_rejected() {
+        let env = Env::default();
+        let mut map: Map<Symbol, Val> = Map::new(&env);
+        // Numerically in range, but the wrong Soroban type (I128, not U32).
+        let _ = map.set(
+            Symbol::new(&env, "platform_fee_bps"),
+            250i128.into_val(&env),
+        );
+        let _ = map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
+        assert!(matches!(
+            classify_governance_fee_config(&env, map.into_val(&env)),
+            Err(SettlementError::GovernanceCallFailed)
+        ));
+    }
+
+    #[test]
+    fn value_wider_than_u32_is_rejected() {
+        let env = Env::default();
+        let mut map: Map<Symbol, Val> = Map::new(&env);
+        let _ = map.set(
+            Symbol::new(&env, "platform_fee_bps"),
+            (u32::MAX as u64 + 1).into_val(&env),
+        );
+        let _ = map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
+        assert!(matches!(
+            classify_governance_fee_config(&env, map.into_val(&env)),
+            Err(SettlementError::GovernanceCallFailed)
+        ));
     }
 }

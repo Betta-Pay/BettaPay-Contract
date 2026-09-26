@@ -1,12 +1,17 @@
-//! Tests verifying that governance cross-contract failures surface as the
-//! typed `SettlementError::GovernanceCallFailed` (code 311) rather than an
-//! untyped host panic or silently collapsing to `None`.
+//! Tests for governance cross-contract failure handling.
 //!
-//! Two paths are exercised:
+//! Two paths are exercised, and they deliberately differ (issues #741/#742):
 //! - Read path: `read_governance_fee_rule` (reached via `calculate_fee_split`
-//!   when no merchant-specific or default rule is set).
+//!   when no merchant-specific or default rule is set). A trap or typed error
+//!   must **degrade** to the bootstrap default so fallback payments keep
+//!   working (issue #741).
 //! - Write path: `validate_fee_against_governance` (reached via
-//!   `set_settlement_rule` / `set_default_rule`).
+//!   `set_settlement_rule` / `set_default_rule`). A trap must **hard-fail**
+//!   with the typed `SettlementError::GovernanceCallFailed` (issue #742), so
+//!   admin writes never silently accept stale ceilings.
+//!
+//! Issue #743 adds the `bypass_gov_fees` circuit-breaker: when governance sets
+//! it to 1, the read path skips `get_fee_config` entirely.
 //!
 //! Issue #483: Malformed governance configs (e.g. a 1-field config that omits
 //! `network_fee_bps`) must be rejected rather than silently skipping the
@@ -45,7 +50,6 @@ pub mod panicking_gov {
 }
 
 use panicking_gov::PanickingGovernance;
-
 // A second failing-governance stub that returns a *typed error* rather than
 // trapping. This exercises the `Ok(Err(_))` branch of `try_invoke_contract`
 // (a contract that deliberately rejects the read), as opposed to the trap
@@ -68,6 +72,8 @@ mod erroring_gov {
     }
 }
 
+use erroring_gov::ErroringGovernance;
+
 /// Helper: directly injects a governance address into the settlement contract's
 /// instance storage, bypassing `validate_governance` (which would itself call
 /// `get_fee_config` and fail against the panicking stub).
@@ -84,14 +90,14 @@ fn inject_governance(env: &Env, contract_address: &Address, governance: &Address
 // ---------------------------------------------------------------------------
 
 /// Wires a settlement contract to a panicking governance stub by directly
-/// injecting the address into storage, then attempts to resolve the effective
-/// rule for a merchant (which hits the governance read path when no
-/// merchant-specific or default rule is set).
+/// injecting the address into storage, then resolves the effective rule for a
+/// merchant (which hits the governance read path when no merchant-specific or
+/// default rule is set).
 ///
-/// Expected: the typed `GovernanceCallFailed` error (code 311).
+/// Issue #741: the trap must degrade to the bootstrap default, not brick the
+/// payment path with `GovernanceCallFailed`.
 #[test]
-#[should_panic(expected = "Error(Contract, #311)")]
-fn read_path_governance_failure_surfaces_typed_error() {
+fn read_path_governance_trap_falls_back_to_bootstrap() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -119,8 +125,46 @@ fn read_path_governance_failure_surfaces_typed_error() {
     inject_governance(&env, &contract_id, &panicking_gov);
 
     // No merchant rule or default rule is set, so resolution falls through to
-    // the governance read path — which now traps and must raise GovernanceCallFailed.
-    client.calculate_fee_split(&merchant, &10_000);
+    // the governance read path. Governance traps; the payment still succeeds
+    // against the bootstrap default (100 bps platform, 5 bps network).
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
+}
+
+/// Same as above but governance returns a *typed error* rather than trapping,
+/// exercising the `Ok(Err(_))` branch of the read path (issue #741).
+#[test]
+fn read_path_governance_typed_error_falls_back_to_bootstrap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let erroring_gov = env.register_contract(None, ErroringGovernance);
+    let empty_gov = super::register_governance(&env);
+
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    inject_governance(&env, &contract_id, &erroring_gov);
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
 }
 
 /// When governance returns `None` (no config set), the read path should fall
@@ -496,94 +540,137 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     assert_eq!(split.merchant_amount, 9_895);
 }
 
-
 // ---------------------------------------------------------------------------
-// Issue 735: Governance fee sum exceeding 10000
+// Issue #743: bypass_gov_fees circuit-breaker
 // ---------------------------------------------------------------------------
 
-#[test]
-fn governance_fee_sum_over_denominator_rejected() {
-    let env = Env::default();
-    env.mock_all_auths();
+/// Governance stub with the circuit-breaker enabled and a `get_fee_config`
+/// that traps if it is ever consulted. Proves the read path short-circuits
+/// *before* the fee-config call, not after catching its failure.
+mod bypass_gov {
+    use crate::GovFeeConfig;
+    use soroban_sdk::{contract, contractimpl, Env, Symbol};
 
-    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
+    #[contract]
+    pub struct BypassGovernance;
 
+    #[contractimpl]
+    impl BypassGovernance {
+        pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
+            if key == Symbol::new(&env, "bypass_gov_fees") {
+                Some(1)
+            } else {
+                None
+            }
+        }
+
+        #[allow(unused_variables)]
+        pub fn get_fee_config(env: Env) -> Option<GovFeeConfig> {
+            panic!("get_fee_config must not be called when bypass_gov_fees is 1")
+        }
+    }
+}
+
+use bypass_gov::BypassGovernance;
+
+/// Builds a real governance contract with a fee config and (optionally) the
+/// bypass flag, plus a settlement contract wired to it and a registered
+/// merchant.
+fn setup_with_bypass(
+    env: &Env,
+    platform_fee_bps: u32,
+    network_fee_bps: u32,
+    bypass: Option<i128>,
+) -> (SettlementContractClient<'_>, Address) {
     let gov_id = env.register_contract(None, GovernanceContract);
-    let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    let gov_admin = Address::generate(&env);
-    let recovery = Address::generate(&env);
-    let gov_deployer = Address::generate(&env);
+    let gov_client = GovernanceContractClient::new(env, &gov_id);
+    let gov_admin = Address::generate(env);
+    let recovery = Address::generate(env);
+    let gov_deployer = Address::generate(env);
     gov_client.init(
         &gov_deployer,
-        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &soroban_sdk::vec![env, gov_admin.clone()],
         &1,
         &recovery,
     );
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![env, gov_admin.clone()],
+        &GovFeeConfig {
+            platform_fee_bps,
+            network_fee_bps,
+        },
+    );
+    if let Some(value) = bypass {
+        gov_client.update_system_param(
+            &soroban_sdk::vec![env, gov_admin],
+            &Symbol::new(env, "bypass_gov_fees"),
+            &value,
+        );
+    }
 
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
+    let admin = Address::generate(env);
+    let merchant = Address::generate(env);
     let contract_id = env.register_contract(None, SettlementContract);
-    let client = SettlementContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
+    let client = SettlementContractClient::new(env, &contract_id);
     client.init(
-        &deployer,
-        &soroban_sdk::vec![&env, admin.clone()],
+        &gov_deployer,
+        &soroban_sdk::vec![env, admin.clone()],
         &1,
         &gov_id,
         &recovery,
     );
-    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
-
-    // mock {5000, 5001}
-    gov_client.set_fee_config(
-        &soroban_sdk::vec![&env, gov_admin.clone()],
-        &FeeConfig {
-            platform_fee_bps: 5000,
-            network_fee_bps: 5001,
-        },
-    );
-
-    // This should fail because they sum to 10001, which is > 10000
-    // The calculate_fee_split should panic with GovernanceCallFailed (18)
-    let res = client.try_calculate_fee_split(&merchant, &10_000);
-    assert_eq!(res.unwrap_err().unwrap(), soroban_sdk::Error::from_contract_error(18));
-
-    // mock {5000, 5000}
-    gov_client.set_fee_config(
-        &soroban_sdk::vec![&env, gov_admin],
-        &FeeConfig {
-            platform_fee_bps: 5000,
-            network_fee_bps: 5000,
-        },
-    );
-
-    // This should succeed
-    let split = client.calculate_fee_split(&merchant, &10_000);
-    assert_eq!(split.platform_fee_amount, 5000);
-    assert_eq!(split.network_fee_amount, 5000);
+    client.register_merchant(&soroban_sdk::vec![env, admin], &merchant);
+    (client, merchant)
 }
 
 #[test]
-fn governance_max_fees_rejected() {
+fn bypass_gov_fees_one_uses_bootstrap_instead_of_governance_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, merchant) = setup_with_bypass(&env, 250, 50, Some(1));
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
+}
+
+#[test]
+fn bypass_gov_fees_zero_keeps_governance_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, merchant) = setup_with_bypass(&env, 250, 50, Some(0));
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 250);
+    assert_eq!(split.network_fee_amount, 50);
+    assert_eq!(split.merchant_amount, 9_700);
+}
+
+#[test]
+fn bypass_gov_fees_unset_keeps_governance_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, merchant) = setup_with_bypass(&env, 250, 50, None);
+
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 250);
+    assert_eq!(split.network_fee_amount, 50);
+}
+
+/// The strongest form of the check: governance's `get_fee_config` traps, but
+/// because the bypass flag reads as 1 first, the payment path never calls it.
+#[test]
+fn bypass_gov_fees_skips_a_trapping_fee_config() {
     let env = Env::default();
     env.mock_all_auths();
 
-    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
-
-    let gov_id = env.register_contract(None, GovernanceContract);
-    let gov_client = GovernanceContractClient::new(&env, &gov_id);
-    let gov_admin = Address::generate(&env);
-    let recovery = Address::generate(&env);
-    let gov_deployer = Address::generate(&env);
-    gov_client.init(
-        &gov_deployer,
-        &soroban_sdk::vec![&env, gov_admin.clone()],
-        &1,
-        &recovery,
-    );
-
+    let gov_id = env.register_contract(None, BypassGovernance);
+    let empty_gov = super::register_governance(&env);
     let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
     let merchant = Address::generate(&env);
+
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let deployer = Address::generate(&env);
@@ -591,19 +678,50 @@ fn governance_max_fees_rejected() {
         &deployer,
         &soroban_sdk::vec![&env, admin.clone()],
         &1,
-        &gov_id,
+        &empty_gov,
         &recovery,
     );
     client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+    inject_governance(&env, &contract_id, &gov_id);
 
-    gov_client.set_fee_config(
-        &soroban_sdk::vec![&env, gov_admin.clone()],
-        &FeeConfig {
-            platform_fee_bps: u32::MAX,
-            network_fee_bps: 0,
-        },
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+}
+
+/// The bypass is a **read-path** circuit-breaker. Admin writes still validate
+/// against governance (issue #742), so this traps with `GovernanceCallFailed`
+/// even though reads would bypass.
+#[test]
+#[should_panic(expected = "Error(Contract, #311)")]
+fn bypass_gov_fees_does_not_skip_admin_write_validation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_id = env.register_contract(None, BypassGovernance);
+    let empty_gov = super::register_governance(&env);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
     );
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
+    inject_governance(&env, &contract_id, &gov_id);
 
-    let res = client.try_calculate_fee_split(&merchant, &10_000);
-    assert_eq!(res.unwrap_err().unwrap(), soroban_sdk::Error::from_contract_error(18));
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
 }

@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn calculate_fee_ceil_returns_none_on_overflow() {
-        assert_eq!(Bps::new(BPS_DENOMINATOR).calculate_fee_ceil(i128::MAX), None);
+        assert_eq!(
+            Bps::new(BPS_DENOMINATOR).calculate_fee_ceil(i128::MAX),
+            None
+        );
         assert_eq!(Bps::new(1).calculate_fee_ceil(i128::MAX), None);
     }
 
