@@ -357,6 +357,12 @@ impl SettlementContract {
         reference: BytesN<32>,
         amount: i128,
     ) -> FeeSplit {
+        // Validate cheap, non-storage input first (issue #774): an all-zero
+        // reference is always invalid, so reject it before any storage reads
+        // (merchant lookup) or auth checks to avoid wasting gas on invalid input.
+        if reference == BytesN::from_array(&env, &[0; 32]) {
+            panic_with_error!(&env, SettlementError::InvalidPaymentReference);
+        }
         assert_not_paused(&env);
 
         // This whole call only ever commits if `merchant.require_auth()` below
@@ -368,9 +374,6 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::MerchantMissing);
         }
         merchant.require_auth();
-        if reference == BytesN::from_array(&env, &[0; 32]) {
-            panic_with_error!(&env, SettlementError::InvalidPaymentReference);
-        }
         let min_amount = read_min_payment_amount(&env);
         if amount < min_amount {
             panic_with_error!(&env, SettlementError::AmountTooSmall);

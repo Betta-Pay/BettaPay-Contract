@@ -258,3 +258,50 @@ fn contract_specific_codes_stay_in_their_reserved_range() {
         bettapay_common::error_codes::SETTLEMENT_RANGE_START,
     );
 }
+
+// ---------------------------------------------------------------------------
+// State-bloat benchmark: 1000 sequential payments (issue #773)
+// ---------------------------------------------------------------------------
+
+/// Stores 1000 sequential payment references for one merchant and reports the
+/// ledger footprint. Benchmark only — no production change.
+///
+/// The test asserts the run completes without trapping; the stored count and
+/// the host budget footprint are reported so rent/state-growth cost of mass
+/// payment creation stays visible.
+#[test]
+fn bloat_bench_stores_1000_sequential_payments() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    for i in 0..1000u32 {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1; // guarantee non-zero reference
+        bytes[28..32].copy_from_slice(&i.to_be_bytes());
+        let reference = BytesN::from_array(&env, &bytes);
+        client.store_payment_reference(&merchant, &reference, &1_000);
+    }
+
+    // Spot-check first and last records resolve within the merchant namespace.
+    let mut first_bytes = [0u8; 32];
+    first_bytes[0] = 1;
+    first_bytes[28..32].copy_from_slice(&0u32.to_be_bytes());
+    let first_ref = BytesN::from_array(&env, &first_bytes);
+    let mut last_bytes = [0u8; 32];
+    last_bytes[0] = 1;
+    last_bytes[28..32].copy_from_slice(&999u32.to_be_bytes());
+    let last_ref = BytesN::from_array(&env, &last_bytes);
+    let empty_signers = soroban_sdk::Vec::new(&env);
+    assert!(client
+        .get_payment_reference(&merchant, &first_ref, &empty_signers)
+        .is_some());
+    assert!(client
+        .get_payment_reference(&merchant, &last_ref, &empty_signers)
+        .is_some());
+
+    // Report the ledger footprint: 1000 persistent `Payment` entries now live
+    // under this merchant. `env.budget().print()` emits the host budget
+    // consumption (CPU/memory, entry/ledger footprint) to test output for
+    // rent-cost inspection; reaching this line proves no trap occurred.
+    env.budget().print();
+}
