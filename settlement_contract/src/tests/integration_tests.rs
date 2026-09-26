@@ -1501,3 +1501,81 @@ fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
 
     let _ = env;
 }
+
+// ---------------------------------------------------------------------------
+// Issue #746: Payments survive when governance traps
+// ---------------------------------------------------------------------------
+
+/// When governance traps during a payment operation, the settlement contract
+/// must still process the payment by falling back to the cached or bootstrap
+/// rule, rather than propagating the governance failure to the caller.
+/// This ensures payment operations remain resilient to governance outages
+/// (issue #746).
+#[test]
+fn payments_survive_broken_governance_with_cached_config() {
+    use crate::types::DataKey;
+    use governance_error_tests::panicking_gov::PanickingGovernance;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_admin = Address::generate(&env);
+    let gov_recovery = Address::generate(&env);
+    let gov_admins = soroban_sdk::vec![&env, gov_admin.clone()];
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let deployer = Address::generate(&env);
+    gov_client.init(&deployer, &gov_admins, &1, &gov_recovery);
+
+    gov_client.set_fee_config(
+        &gov_admins,
+        &GovFeeConfig {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+        },
+    );
+
+    let settle_admin = Address::generate(&env);
+    let settle_recovery = Address::generate(&env);
+    let settle_admins = soroban_sdk::vec![&env, settle_admin.clone()];
+    let merchant = Address::generate(&env);
+    let settle_id = env.register_contract(None, SettlementContract);
+    let settle_client = SettlementContractClient::new(&env, &settle_id);
+    let deployer = Address::generate(&env);
+    settle_client.init(&deployer, &settle_admins, &1, &gov_id, &settle_recovery);
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let reference = BytesN::<32>::from_array(&env, &[44u8; 32]);
+    let amount: i128 = 10_000;
+
+    let split = settle_client.store_payment_reference(&merchant, &reference, &amount);
+    assert_eq!(split.platform_fee_amount, 250);
+    assert_eq!(split.network_fee_amount, 50);
+    assert_eq!(split.merchant_amount, 9_700);
+
+    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    env.as_contract(&settle_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Governance, &panicking_gov);
+    });
+
+    let reference2 = BytesN::<32>::from_array(&env, &[45u8; 32]);
+    let split2 = settle_client.store_payment_reference(&merchant, &reference2, &amount);
+
+    assert_eq!(
+        split2.platform_fee_amount, 250,
+        "payment must survive governance trap by using cached config"
+    );
+    assert_eq!(
+        split2.network_fee_amount, 50,
+        "payment must survive governance trap by using cached config"
+    );
+    assert_eq!(split2.merchant_amount, 9_700);
+
+    let record = settle_client
+        .get_payment_reference(&merchant, &reference2, &soroban_sdk::vec![&env])
+        .expect("payment record must exist despite governance trap");
+    assert_eq!(record.platform_fee_bps, 250);
+    assert_eq!(record.network_fee_bps, 50);
+}
