@@ -620,7 +620,7 @@ impl SettlementContract {
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
-            if is_merchant_registered_and_bump_ttl(env, new_admins.get(i).unwrap()) {
+            if is_merchant_registered_internal(env, new_admins.get(i).unwrap()) {
                 panic_with_error!(env, SettlementError::InvalidAdmin);
             }
         }
