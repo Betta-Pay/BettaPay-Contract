@@ -197,7 +197,7 @@ fn zero_ref_store_fails_invalid_payment_reference() {
     assert!(
         matches!(
             result,
-            Err(Ok(soroban_sdk::Error::from_contract_error(307)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(307)
         ),
         "all-zero reference must fail with InvalidPaymentReference (307)"
     );
@@ -241,7 +241,7 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     assert!(
         matches!(
             result,
-            Err(Ok(soroban_sdk::Error::from_contract_error(314)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(314)
         ),
         "101-element batch must fail with BatchTooLarge (314)"
     );

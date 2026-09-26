@@ -2300,9 +2300,7 @@ mod tests {
         let (env, client, admins, _recovery) = setup();
         let key = Symbol::new(&env, "min_payment");
         assert!(
-            client
-                .try_update_system_param(&admins, &key, &-1)
-                .is_err(),
+            client.try_update_system_param(&admins, &key, &-1).is_err(),
             "update_system_param with value -1 must fail with InvalidParamValue"
         );
     }
@@ -2312,9 +2310,7 @@ mod tests {
         let (env, client, admins, _recovery) = setup();
         let key = Symbol::new(&env, "min_payment");
         assert!(
-            client
-                .try_update_system_param(&admins, &key, &0)
-                .is_ok(),
+            client.try_update_system_param(&admins, &key, &0).is_ok(),
             "update_system_param with value 0 must succeed"
         );
         assert_eq!(client.get_system_param(&key), Some(0));

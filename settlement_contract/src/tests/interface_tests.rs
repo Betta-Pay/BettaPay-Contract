@@ -115,7 +115,7 @@ fn pause_allows_upgrade_and_blocks_payment() {
     assert!(
         matches!(
             pay_result,
-            Err(Ok(soroban_sdk::Error::from_contract_error(5)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(5)
         ),
         "store_payment_reference must fail with Paused (5) while paused"
     );
@@ -134,7 +134,7 @@ fn pause_blocks_payment_and_unpaused_succeeds() {
     assert!(
         matches!(
             result,
-            Err(Ok(soroban_sdk::Error::from_contract_error(5)))
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(5)
         ),
         "store_payment_reference must fail with Paused (5) while paused"
     );

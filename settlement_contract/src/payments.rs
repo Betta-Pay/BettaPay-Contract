@@ -8,12 +8,22 @@ use crate::storage::{
     is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default, read_threshold,
     verify_admin_auth,
 };
-use crate::types::{DataKey, FeeSplit, PaymentRecord, SettlementRule};
+use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, SettlementRule};
 use crate::BOOTSTRAP_DEFAULT_RULE;
 use crate::{
     SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
     PAYMENT_TTL_THRESHOLD,
 };
+
+/// Checked form of [`Bps::calculate_fee_ceil`]: returns `None` instead of
+/// trapping when `amount * bps + (BPS_DENOMINATOR - 1)` overflows `i128`.
+fn checked_fee_ceil(amount: i128, bps: Bps) -> Option<i128> {
+    let denom = BPS_DENOMINATOR as i128;
+    amount
+        .checked_mul(bps.as_i128())
+        .and_then(|numerator| numerator.checked_add(denom - 1))
+        .map(|numerator| numerator / denom)
+}
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
 ///
@@ -42,22 +52,45 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     {
         panic_with_error!(env, SettlementError::AmountOverflow);
     }
+    // The combined fee rate must also fit, so an overflow of the fee sum maps
+    // deterministically to AmountOverflow rather than a later arithmetic trap.
+    let sum_bps = platform_bps
+        .as_i128()
+        .checked_add(network_bps.as_i128())
+        .unwrap_or(i128::MAX);
+    if amount
+        .checked_mul(sum_bps)
+        .and_then(|numerator| numerator.checked_add(denom - 1))
+        .is_none()
+    {
+        panic_with_error!(env, SettlementError::AmountOverflow);
+    }
 
     // Integer arithmetic is used instead of floats to ensure deterministic, reproducible smart contract execution.
     // Standard integer division (`/`) truncates fractions toward zero, causing precision loss and under-collecting fees.
     // To prevent fee under-collection, ceiling division is simulated by adding `BPS_DENOMINATOR - 1` to the numerator.
     // Edge case: For small amounts, ceil rounding can force fees to 1 unit even when the basis points represent a tiny fraction.
-    let platform_fee_amount = platform_bps.calculate_fee_ceil(amount);
-    let mut network_fee_amount = network_bps.calculate_fee_ceil(amount);
+    let platform_fee_amount = checked_fee_ceil(amount, platform_bps)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
+    let mut network_fee_amount = checked_fee_ceil(amount, network_bps)
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
 
     // Ceil-rounded fees can sum to more than the gross for tiny amounts with
     // high fee configs. Clamp the network leg so total fees never exceed the
-    // gross, keeping the accounting equation balanced (issue #683).
-    if platform_fee_amount + network_fee_amount > amount {
-        network_fee_amount = amount - platform_fee_amount;
+    // gross, keeping the accounting equation balanced (issue #683). An
+    // overflowing sum is treated as exceeding the gross.
+    let fees_exceed_gross = platform_fee_amount
+        .checked_add(network_fee_amount)
+        .is_none_or(|total| total > amount);
+    if fees_exceed_gross {
+        network_fee_amount = (amount - platform_fee_amount).max(0);
     }
 
-    let merchant_amount = (amount - platform_fee_amount - network_fee_amount).max(0);
+    let merchant_amount = amount
+        .checked_sub(platform_fee_amount)
+        .and_then(|remainder| remainder.checked_sub(network_fee_amount))
+        .unwrap_or(0)
+        .max(0);
     FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
@@ -92,6 +125,88 @@ mod tests {
             split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
             split.gross_amount,
         );
+    }
+
+    fn rule(platform_fee_bps: u32, network_fee_bps: u32) -> SettlementRule {
+        SettlementRule {
+            platform_fee_bps,
+            network_fee_bps,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        }
+    }
+
+    #[test]
+    fn checked_fee_ceil_matches_unchecked_helper_in_range() {
+        for (amount, bps) in [
+            (1i128, 1u32),
+            (199, 100),
+            (10_000, 250),
+            (1_000_000_007, 9_999),
+        ] {
+            assert_eq!(
+                checked_fee_ceil(amount, Bps::new(bps)),
+                Some(Bps::new(bps).calculate_fee_ceil(amount)),
+            );
+        }
+    }
+
+    #[test]
+    fn checked_fee_ceil_returns_none_on_overflow() {
+        assert_eq!(checked_fee_ceil(i128::MAX, Bps::new(BPS_DENOMINATOR)), None);
+        assert_eq!(checked_fee_ceil(i128::MAX, Bps::new(1)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #310)")]
+    fn full_bps_fee_leg_overflow_panics_with_amount_overflow() {
+        let env = Env::default();
+        calculate_split(&env, i128::MAX, &rule(BPS_DENOMINATOR, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #310)")]
+    fn fee_sum_overflow_panics_even_when_each_leg_fits() {
+        let env = Env::default();
+        // 6000 bps alone fits, but the combined 10000 bps does not.
+        let amount = i128::MAX / 8_000;
+        calculate_split(&env, amount, &rule(6_000, 4_000));
+    }
+
+    #[test]
+    fn largest_amount_passing_sum_guard_splits_without_trapping() {
+        let env = Env::default();
+        let denom = BPS_DENOMINATOR as i128;
+        let amount = (i128::MAX - (denom - 1)) / denom;
+
+        let split = calculate_split(&env, amount, &rule(6_000, 4_000));
+
+        assert_eq!(split.gross_amount, amount);
+        assert_eq!(
+            split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+            amount,
+        );
+        assert!(split.merchant_amount >= 0);
+    }
+
+    #[test]
+    fn tiny_amount_with_full_fees_clamps_network_and_merchant_to_zero() {
+        let env = Env::default();
+        let split = calculate_split(&env, 1, &rule(5_000, 5_000));
+
+        assert_eq!(split.platform_fee_amount, 1);
+        assert_eq!(split.network_fee_amount, 0);
+        assert_eq!(split.merchant_amount, 0);
+    }
+
+    #[test]
+    fn balanced_split_is_unchanged() {
+        let env = Env::default();
+        let split = calculate_split(&env, 10_000, &rule(250, 50));
+
+        assert_eq!(split.platform_fee_amount, 250);
+        assert_eq!(split.network_fee_amount, 50);
+        assert_eq!(split.merchant_amount, 9_700);
     }
 
     proptest! {
@@ -456,12 +571,10 @@ mod read_authorization_tests {
         let admin = admins.get(0).unwrap();
         let duplicate_signers = soroban_sdk::vec![&env, admin.clone(), admin];
 
-        assert_eq!(
-            client
-                .try_get_payment_reference(&merchant, &reference, &duplicate_signers)
-                .unwrap_err(),
-            Ok(Error::from_contract_error(3))
-        );
+        assert!(matches!(
+            client.try_get_payment_reference(&merchant, &reference, &duplicate_signers),
+            Err(Ok(e)) if e == Error::from_contract_error(3)
+        ));
     }
 
     #[test]
@@ -472,8 +585,7 @@ mod read_authorization_tests {
         client.store_payment_reference(&merchant, &reference, &1_000);
 
         assert!(client
-            .try_get_payment_reference(&merchant, &reference, &admins)
-            .unwrap()
+            .get_payment_reference(&merchant, &reference, &admins)
             .is_some());
     }
 }
