@@ -985,4 +985,65 @@ mod tests {
             SettlementError::InvalidSettlementDelay.into()
         );
     }
+
+    #[test]
+    fn change_threshold_allows_2_of_2_to_lower_to_1() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+        let governance = crate::tests::register_governance(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &governance, &recovery);
+
+        assert_eq!(client.get_threshold(), 2);
+        // 2-of-2 set lowers threshold to 1 with 2 signers
+        client.change_threshold(&admins, &1);
+        assert_eq!(client.get_threshold(), 1);
+    }
+
+    #[test]
+    fn change_threshold_allows_1_of_1_to_change_with_one() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+        let governance = crate::tests::register_governance(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &1, &governance, &recovery);
+
+        assert_eq!(client.get_threshold(), 1);
+        let one_signer = soroban_sdk::vec![&env, a1.clone()];
+        // 1-of-1 can change threshold to 2 with 1 signer
+        client.change_threshold(&one_signer, &2);
+        assert_eq!(client.get_threshold(), 2);
+    }
+
+    #[test]
+    fn change_threshold_rejects_sub_threshold_signers() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+        let governance = crate::tests::register_governance(&env);
+        let contract_id = env.register_contract(None, SettlementContract);
+        let client = SettlementContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &governance, &recovery);
+
+        let one_signer = soroban_sdk::vec![&env, a1.clone()];
+        // 1 signer for threshold 2 must fail
+        let res = client.try_change_threshold(&one_signer, &1);
+        assert!(res.is_err());
+    }
 }

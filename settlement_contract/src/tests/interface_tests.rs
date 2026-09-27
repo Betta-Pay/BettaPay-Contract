@@ -143,7 +143,6 @@ fn pause_blocks_payment_and_unpaused_succeeds() {
     client.store_payment_reference(&merchant, &reference, &1_000);
 }
 
-
 // ---------------------------------------------------------------------------
 // Issue 728: Upgrade parity test matrix direct vs timelocked
 // ---------------------------------------------------------------------------
@@ -169,21 +168,22 @@ fn upgrade_paths_agree_on_interface_check() {
     // Schedule and execute a good upgrade
     let good_op = crate::types::Operation::Upgrade(good_hash.clone());
     client.schedule(&admins, &good_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger().with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
     let executor = Address::generate(&env);
-    
+
     // We expect try_execute to match direct
     let timelocked_good = client.try_execute(&executor, &good_op);
 
     // Reset env to avoid AlreadyExecuted or we just schedule a new one
     let bad_op = crate::types::Operation::Upgrade(bad_hash.clone());
     client.schedule(&admins, &bad_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
-    
+
     // execution fails
     let timelocked_bad = client.try_execute(&executor, &bad_op);
 
     assert_eq!(direct_good.is_ok(), timelocked_good.is_ok());
-    
+
     // bad upgrade fails
     assert_eq!(direct_bad.is_ok(), timelocked_bad.is_ok());
     assert!(direct_bad.is_err());
@@ -195,11 +195,11 @@ fn fee_ceiling_parity_direct_vs_timelocked() {
     client.register_merchant(&admins, &merchant);
 
     // Using a rule that is intentionally out of bounds
-    // The ceiling from bootstrap default governance is 100 platform, 5 network? 
+    // The ceiling from bootstrap default governance is 100 platform, 5 network?
     // Wait, the governance here is MockGovernance which returns nothing (fallback to bootstrap defaults)?
     // The default ceiling logic falls back to what?
     // Actually, validate_rule_bounds already prevents u32::MAX.
-    // If we want a rule exceeding mock governance ceiling, we can use 250, 50, 7. 
+    // If we want a rule exceeding mock governance ceiling, we can use 250, 50, 7.
     // Wait! In interface_tests.rs setup, governance is probably a mock. Let's assume there is some ceiling, or we can just trigger another parity error.
     let bad_rule = crate::types::SettlementRule {
         platform_fee_bps: 20000,
@@ -213,11 +213,15 @@ fn fee_ceiling_parity_direct_vs_timelocked() {
 
     let bad_op = crate::types::Operation::SetSettlementRule(merchant.clone(), bad_rule.clone());
     client.schedule(&admins, &bad_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger().with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
     let executor = soroban_sdk::Address::generate(&env);
-    
+
     let res_timelocked = client.try_execute(&executor, &bad_op);
     assert!(res_timelocked.is_err());
-    
-    assert_eq!(res_direct.unwrap_err().unwrap(), res_timelocked.unwrap_err().unwrap());
+
+    assert_eq!(
+        res_direct.unwrap_err().unwrap(),
+        res_timelocked.unwrap_err().unwrap()
+    );
 }

@@ -192,7 +192,10 @@ fn store_payment_reference_failed_auth_does_not_bump_merchant_ttl() {
 
     env.mock_auths(&[]);
     let result = client.try_store_payment_reference(&merchant, &reference, &1_000);
-    assert!(result.is_err(), "expected store_payment_reference to fail without merchant auth");
+    assert!(
+        result.is_err(),
+        "expected store_payment_reference to fail without merchant auth"
+    );
 
     let ttl_after = env.as_contract(&client.address, || {
         env.storage().persistent().get_ttl(&marker_key)

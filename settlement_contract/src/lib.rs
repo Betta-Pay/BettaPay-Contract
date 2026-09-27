@@ -164,6 +164,39 @@
 //! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
 //! `unpaused` event is only ever emitted on an actual state transition.
 //!
+//! ## Fail-Open vs Fail-Closed Policy Under Governance Degradation (Issue #749)
+//!
+//! When the external governance contract is degraded, unreachable, or traps,
+//! the settlement contract follows a strict fail-open vs fail-closed policy per
+//! entry point:
+//!
+//! - **Reads and payments fail open**: Core payment ingestion and query paths
+//!   must remain operational. If governance fee resolution is unavailable,
+//!   `store_payment_reference` falls back to [`BOOTSTRAP_DEFAULT_RULE`].
+//! - **Admin setters fail closed**: Administrative operations, rule updates,
+//!   and contract modifications must never execute with unverified governance
+//!   parameters and reject with [`SettlementError::GovernanceCallFailed`].
+//!
+//! | Entry Point | Policy | Behavior on Governance Outage / Trap |
+//! |---|---|---|
+//! | `store_payment_reference` | fail-open to bootstrap | Degrades to `BOOTSTRAP_DEFAULT_RULE` and emits `bootstrap_fallback` |
+//! | `get_payment` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_payment_reference` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
+//! | `is_merchant_registered` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_min_payment_amount` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_version` | fail-open | Storage read only; unaffected by governance availability |
+//! | `set_settlement_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
+//! | `set_default_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
+//! | `update_governance` | fail-closed GovernanceCallFailed | Reverts if new governance contract fails interface checks |
+//! | `register_merchant` / `unregister_merchant` | fail-closed | Requires valid admin multisig authorization |
+//! | `clear_settlement_rule` | fail-closed | Requires valid admin multisig authorization |
+//! | `set_min_payment_amount` | fail-closed | Requires valid admin multisig authorization |
+//! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
+//! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
+//! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
+//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock |
+//!
 //! ## Event Convention
 //!
 //! This contract follows a consistent event emission pattern (see Issue #49):

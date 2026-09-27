@@ -593,8 +593,16 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
         None => return,
     };
 
-    if rule.platform_fee_bps > fee_config.platform_fee_bps || rule.network_fee_bps > fee_config.network_fee_bps {
-        env.events().publish((Symbol::new(env, "fee_ceiling_rejected"), rule.platform_fee_bps), rule.network_fee_bps);
+    if rule.platform_fee_bps > fee_config.platform_fee_bps
+        || rule.network_fee_bps > fee_config.network_fee_bps
+    {
+        env.events().publish(
+            (
+                Symbol::new(env, "fee_ceiling_rejected"),
+                rule.platform_fee_bps,
+            ),
+            rule.network_fee_bps,
+        );
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }

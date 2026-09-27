@@ -140,7 +140,8 @@ fn schedule_collision_branch_raises_operation_hash_collision() {
 
     // Inject a slot whose XDR belongs to a completely different operation,
     // but occupies the same storage key as `operation` (simulated collision).
-    let colliding_bytes = soroban_sdk::Bytes::from_slice(&env, b"collision: unrelated operation xdr");
+    let colliding_bytes =
+        soroban_sdk::Bytes::from_slice(&env, b"collision: unrelated operation xdr");
     plant_colliding_slot(
         &env,
         &client.address,

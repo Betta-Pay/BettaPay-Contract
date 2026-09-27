@@ -91,10 +91,39 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     }
 }
 
+/// Returns true if `rule` matches the bootstrap default settlement rule across all fields.
+fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
+    rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+        && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
+        && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
+        && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::{prop_assert, prop_assert_eq, proptest};
+
+    #[test]
+    fn is_bootstrap_rule_identifies_matching_and_divergent_rules() {
+        assert!(is_bootstrap_rule(&BOOTSTRAP_DEFAULT_RULE));
+
+        let mut modified = BOOTSTRAP_DEFAULT_RULE;
+        modified.platform_fee_bps += 1;
+        assert!(!is_bootstrap_rule(&modified));
+
+        let mut modified = BOOTSTRAP_DEFAULT_RULE;
+        modified.network_fee_bps += 1;
+        assert!(!is_bootstrap_rule(&modified));
+
+        let mut modified = BOOTSTRAP_DEFAULT_RULE;
+        modified.settlement_delay_ledger += 1;
+        assert!(!is_bootstrap_rule(&modified));
+
+        let mut modified = BOOTSTRAP_DEFAULT_RULE;
+        modified.auto_settle = !BOOTSTRAP_DEFAULT_RULE.auto_settle;
+        assert!(!is_bootstrap_rule(&modified));
+    }
 
     #[test]
     fn zero_fee_split_handles_maximum_amount() {
@@ -402,11 +431,7 @@ impl SettlementContract {
         env.storage().persistent().set(&payment_key, &dummy_record);
 
         let rule = read_rule_or_default(&env, merchant.clone());
-        if rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
-            && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
-            && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
-            && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
-        {
+        if is_bootstrap_rule(&rule) {
             env.events().publish(
                 (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
                 BOOTSTRAP_DEFAULT_RULE,
