@@ -16,12 +16,30 @@ use bettapay_common::events::PendingRecovery;
 use bettapay_common::storage::CommonDataKey;
 
 use crate::storage::{read_pending_recovery, read_threshold};
-use crate::types::DataKey;
+use crate::types::{DataKey, SettlementRule};
 use crate::{
     SettlementError, MERCHANT_TTL_BUMP, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD,
+    RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
 
 use super::setup;
+
+fn make_rule(platform_fee_bps: u32, network_fee_bps: u32, delay: u32) -> SettlementRule {
+    SettlementRule {
+        platform_fee_bps,
+        network_fee_bps,
+        settlement_delay_ledger: delay,
+        auto_settle: true,
+    }
+}
+
+/// SettlementRule does not derive PartialEq/Debug, so compare field-wise.
+fn rules_equal(a: &SettlementRule, b: &SettlementRule) -> bool {
+    a.platform_fee_bps == b.platform_fee_bps
+        && a.network_fee_bps == b.network_fee_bps
+        && a.settlement_delay_ledger == b.settlement_delay_ledger
+        && a.auto_settle == b.auto_settle
+}
 
 /// Establishes a known instance-TTL baseline of exactly `READ_INSTANCE_TTL_BUMP`
 /// ledgers from the current sequence, then advances the ledger far enough that
@@ -167,6 +185,178 @@ fn tombstone_survives_payment_read_attempts() {
     });
 }
 
+// ─── TTL-neutral rule readers (issues #760–#763) ────────────────────────────
+
+/// Sets a merchant-specific rule, then decays the persistent `Rule` entry's
+/// TTL below the bump threshold without letting it expire, returning the TTL
+/// observed right before the call under test.
+fn make_rule_ttl_stale(env: &Env, contract_address: &Address, merchant: &Address) -> u32 {
+    let rule_key = DataKey::Rule(merchant.clone());
+    env.as_contract(contract_address, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&rule_key, RULE_TTL_BUMP, RULE_TTL_BUMP);
+    });
+
+    let seq = env.ledger().sequence();
+    // Advance so remaining TTL (RULE_TTL_BUMP - advance) sits below the
+    // RULE_TTL_THRESHOLD while staying well clear of actual expiry.
+    env.ledger()
+        .set_sequence_number(seq + (RULE_TTL_BUMP - RULE_TTL_THRESHOLD / 5));
+
+    env.as_contract(contract_address, || {
+        env.storage().persistent().get_ttl(&rule_key)
+    })
+}
+
+#[test]
+fn get_settlement_rule_no_bump_returns_same_rule_without_extending_ttl() {
+    let (env, client, admins, merchant) = setup();
+
+    let expected = client.get_settlement_rule(&merchant);
+    assert!(expected.is_none(), "setup must not set a merchant rule");
+
+    // No rule stored: both variants agree on `None` and nothing panics.
+    let no_bump = client.get_settlement_rule_no_bump(&merchant);
+    assert!(no_bump.is_none());
+    assert!(expected.is_none());
+
+    // With a rule stored: both variants return identical values.
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+    let stored = client
+        .get_settlement_rule(&merchant)
+        .expect("rule must be set");
+    let via_no_bump = client
+        .get_settlement_rule_no_bump(&merchant)
+        .expect("rule must be set");
+    assert!(rules_equal(&stored, &via_no_bump));
+}
+
+#[test]
+fn get_settlement_rule_no_bump_does_not_extend_rule_ttl() {
+    let (env, client, admins, merchant) = setup();
+    let contract_address = client.address.clone();
+
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+
+    let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
+
+    client.get_settlement_rule_no_bump(&merchant);
+
+    let ttl_after = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after, ttl_before,
+        "no-bump getter must not extend the rule's TTL"
+    );
+}
+
+#[test]
+fn get_settlement_rule_still_bumps_for_authenticated_keepalive() {
+    let (env, client, admins, merchant) = setup();
+    let contract_address = client.address.clone();
+
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+
+    let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
+    assert!(
+        ttl_before < RULE_TTL_THRESHOLD,
+        "test setup did not let the rule TTL decay below threshold: {ttl_before}"
+    );
+
+    client.get_settlement_rule(&merchant);
+
+    let ttl_after = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after, RULE_TTL_BUMP,
+        "bumping getter must keep extending the rule TTL to the keep-alive floor"
+    );
+}
+
+#[test]
+fn get_effective_rule_returns_identical_rule_without_extending_ttl() {
+    let (env, client, admins, merchant) = setup();
+    let contract_address = client.address.clone();
+
+    client.set_settlement_rule(&admins, &merchant, &make_rule(150, 250, 20));
+
+    let effective = client.get_effective_rule(&merchant);
+    assert_eq!(effective.platform_fee_bps, 150);
+
+    let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
+
+    let again = client.get_effective_rule(&merchant);
+    assert!(rules_equal(&again, &effective));
+
+    let ttl_after = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after, ttl_before,
+        "get_effective_rule must be TTL-neutral (issue #762)"
+    );
+}
+
+#[test]
+fn calculate_fee_split_is_ttl_neutral_for_the_merchant_rule() {
+    let (env, client, admins, merchant) = setup();
+    let contract_address = client.address.clone();
+
+    client.register_merchant(&admins, &merchant);
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+
+    let split_before = client.calculate_fee_split(&merchant, &10_000);
+
+    let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
+
+    let split_after = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(
+        split_after.platform_fee_amount, split_before.platform_fee_amount,
+        "platform fee must be unchanged by the TTL-neutral read (issue #760)"
+    );
+    assert_eq!(
+        split_after.network_fee_amount, split_before.network_fee_amount,
+        "network fee must be unchanged by the TTL-neutral read (issue #760)"
+    );
+    assert_eq!(
+        split_after.merchant_amount, split_before.merchant_amount,
+        "merchant amount must be unchanged by the TTL-neutral read (issue #760)"
+    );
+
+    let ttl_after = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after, ttl_before,
+        "repeated calculate_fee_split calls must not extend the rule TTL"
+    );
+}
+
+#[test]
+fn calculate_fee_split_still_works_when_rule_ttl_is_stale() {
+    let (env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+
+    let _ = make_rule_ttl_stale(&env, &client.address, &merchant);
+
+    // The stale (but unexpired) rule is still readable and resolves fees.
+    let split = client.calculate_fee_split(&merchant, &10_000);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 200);
+}
 /// Issue #759: a failed-auth call to `store_payment_reference` must not warm
 /// the merchant marker. Before the fix, `is_merchant_registered_and_bump_ttl`
 /// was called ahead of `merchant.require_auth()`, so the TTL extended even
