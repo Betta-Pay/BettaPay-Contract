@@ -374,11 +374,12 @@ impl SettlementContract {
     /// ## Emitted Event: `payment_stored`
     ///
     /// **Topics**: `(Symbol("payment_stored"), Address merchant, BytesN<32> reference)`
-    /// **Data**: `()`
+    /// **Data**: `PaymentRecord`
     ///
-    /// The fee split (platform fee, network fee, merchant amount, gross amount)
-    /// is available on the `PaymentRecord` in this event's data; no separate
-    /// split event is emitted.
+    /// The full fee split snapshot (gross amount, platform fee, network fee,
+    /// merchant amount) is carried directly on the `PaymentRecord` in this
+    /// event's data, so indexers do not need a separate state read to see
+    /// the split; no separate split event is emitted.
     pub fn store_payment_reference(
         env: Env,
         merchant: Address,
