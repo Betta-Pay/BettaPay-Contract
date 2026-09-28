@@ -282,6 +282,40 @@ fn min_payment_boundary_99_fails_100_succeeds() {
     client.store_payment_reference(&merchant, &reference_100, &100i128);
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate payment reference scoped to merchant (issue: Add duplicate
+// payment reference test per merchant isolation)
+// ---------------------------------------------------------------------------
+
+/// Payment reference uniqueness is scoped per merchant: the same reference
+/// reused by a different merchant must succeed, while reusing it twice under
+/// the same merchant must fail with `DuplicatePaymentReference`.
+#[test]
+fn duplicate_reference_scoped_to_merchant() {
+    let (env, client, admins, merchant_a) = setup();
+    client.register_merchant(&admins, &merchant_a);
+
+    let merchant_b = Address::generate(&env);
+    client.register_merchant(&admins, &merchant_b);
+
+    let reference = BytesN::from_array(&env, &[9u8; 32]);
+
+    client.store_payment_reference(&merchant_a, &reference, &1_000);
+
+    // Same reference, different merchant — must succeed.
+    client.store_payment_reference(&merchant_b, &reference, &1_000);
+
+    // Same reference, same merchant again — must fail.
+    let result = client.try_store_payment_reference(&merchant_a, &reference, &1_000);
+    assert!(
+        matches!(
+            result,
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(303)
+        ),
+        "reusing a reference under the same merchant must fail with DuplicatePaymentReference (303)"
+    );
+}
+
 #[test]
 fn contract_specific_codes_stay_in_their_reserved_range() {
     bettapay_common::error_codes::assert_no_code_collisions(

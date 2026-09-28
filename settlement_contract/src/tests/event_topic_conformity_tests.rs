@@ -261,6 +261,54 @@ fn scheduled_operation_lifecycle_uses_canonical_topics() {
     );
 }
 
+/// Issue: only some `Operation` variants had `op_scheduled` event assertions.
+/// Every variant must independently emit `op_scheduled` with the operation's
+/// hash as its second topic when scheduled.
+#[test]
+fn op_scheduled_emits_hash_topic_for_every_operation_variant() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+
+    let operations = [
+        Operation::UpdateGovernance(Address::generate(&env)),
+        Operation::CancelRecovery,
+        Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1),
+        Operation::Upgrade(BytesN::from_array(&env, &[1u8; 32])),
+        Operation::RegisterMerchant(Address::generate(&env)),
+        Operation::UnregisterMerchant(merchant.clone()),
+        Operation::SetSettlementRule(merchant.clone(), rule.clone()),
+        Operation::ClearSettlementRule(merchant.clone()),
+        Operation::SetDefaultRule(rule.clone()),
+    ];
+    assert_eq!(operations.len(), 9, "all 9 Operation variants must be covered");
+
+    for (index, operation) in operations.into_iter().enumerate() {
+        let operation_xdr = operation.clone().to_xdr(&env);
+        let expected_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+
+        client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, events::OP_SCHEDULED_EVENT),
+            "op_scheduled topic missing for variant index {index}"
+        );
+        let hash_topic: BytesN<32> = BytesN::from_val(&env, &topics.get(1).unwrap());
+        assert_eq!(
+            hash_topic, expected_hash,
+            "op_scheduled hash topic mismatch for variant index {index}"
+        );
+    }
+}
+
 #[test]
 fn scheduled_operation_events_identify_the_executor() {
     let (env, client, admins, merchant) = setup();

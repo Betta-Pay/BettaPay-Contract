@@ -695,3 +695,24 @@ fn cancel_unscheduled_operation_returns_operation_not_scheduled() {
     // The operation was never scheduled — cancel must panic with #11.
     client.cancel(&admins, &operation);
 }
+
+// ---------------------------------------------------------------------------
+// Execute-of-unscheduled operation test
+// ---------------------------------------------------------------------------
+
+/// Verifies that `execute` returns `OperationNotScheduled` (#11) when the
+/// operation has never been scheduled.
+///
+/// Mirrors `cancel_unscheduled_operation_returns_operation_not_scheduled`:
+/// execute looks up the operation by its hash the same way cancel does, and
+/// panics with `OperationNotScheduled` when nothing is found. This pins that
+/// branch on the execute path independently.
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn execute_unscheduled_operation_returns_operation_not_scheduled() {
+    let (_env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    // The operation was never scheduled — execute must panic with #11.
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
