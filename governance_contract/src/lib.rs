@@ -624,7 +624,7 @@ impl GovernanceContract {
         }
 
         let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
+        verify_admin_auth(&env, &signers, current_threshold);
 
         env.storage()
             .instance()
@@ -1742,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_threshold_with_threshold_plus_one_signatures() {
+    fn changes_threshold_with_valid_signatures() {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -1759,8 +1759,7 @@ mod tests {
 
         assert_eq!(client.get_threshold(), 1);
 
-        // Threshold is 1, so change_threshold requires 1 + 1 = 2 signatures.
-        let signers = vec![&env, a1.clone(), a2.clone()];
+        let signers = vec![&env, a1.clone()];
         client.change_threshold(&signers, &2);
         assert_eq!(client.get_threshold(), 2);
     }
@@ -1779,11 +1778,40 @@ mod tests {
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(&env, &contract_id);
         let deployer = Address::generate(&env);
-        client.init(&deployer, &admins, &1, &recovery);
+        client.init(&deployer, &admins, &2, &recovery);
 
-        // Current threshold is 1, needs 2 signatures for change_threshold, but only 1 provided.
+        // Current threshold is 2, needs 2 signatures for change_threshold, but only 1 provided.
         let single_signer = vec![&env, a1.clone()];
-        client.change_threshold(&single_signer, &2);
+        client.change_threshold(&single_signer, &1);
+    }
+
+    #[test]
+    fn gov_two_of_two_can_lower_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+        let admins = vec![&env, a1.clone(), a2.clone()];
+        let recovery = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, GovernanceContract);
+        let client = GovernanceContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        client.init(&deployer, &admins, &2, &recovery);
+
+        assert_eq!(client.get_threshold(), 2);
+
+        // 2-of-2 can lower threshold to 1 with both signers
+        client.change_threshold(&admins, &1);
+        assert_eq!(client.get_threshold(), 1);
+
+        // Zero threshold is still rejected
+        let zero_res = client.try_change_threshold(&admins, &0);
+        assert_eq!(
+            zero_res.unwrap_err().unwrap(),
+            GovernanceError::InvalidThreshold.into()
+        );
     }
 
     // Issue #565: setting a threshold above the admin count must surface
@@ -2204,7 +2232,7 @@ mod tests {
         client.pause(&admins);
         assert!(client.is_paused());
 
-        // change_threshold (threshold 1 -> needs threshold + 1 = 2 signers)
+        // change_threshold (threshold 1 -> needs threshold = 1 signer)
         client.change_threshold(&admins, &2);
         assert_eq!(client.get_threshold(), 2);
 

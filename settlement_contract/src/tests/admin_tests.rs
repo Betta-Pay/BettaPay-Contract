@@ -987,6 +987,54 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     client.change_threshold(&admins, &0);
 }
 
+#[test]
+fn two_of_two_can_lower_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    assert_eq!(client.get_threshold(), 2);
+
+    let single_signer = soroban_sdk::vec![&env, a1.clone()];
+    assert!(client.try_change_threshold(&single_signer, &1).is_err());
+
+    client.change_threshold(&admins, &1);
+    assert_eq!(client.get_threshold(), 1);
+}
+
+#[test]
+fn single_signer_cannot_change_two_of_two_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    let single_signer = soroban_sdk::vec![&env, a1.clone()];
+    let res = client.try_change_threshold(&single_signer, &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::Unauthorized.into()
+    );
+
+    client.change_threshold(&admins, &1);
+    assert_eq!(client.get_threshold(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // recovery
 // ---------------------------------------------------------------------------
