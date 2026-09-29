@@ -17,6 +17,26 @@ use soroban_sdk::{Address, BytesN, Env};
 
 use super::{register_governance, setup};
 
+#[test]
+fn stranger_cannot_batch_read_payments() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = BytesN::<32>::from_array(&env, &[71; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+    let refs = soroban_sdk::vec![&env, reference];
+
+    let authorized_records = client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    assert_eq!(authorized_records.len(), 1);
+
+    env.set_auths(&[]);
+    let stranger_result = client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    assert!(
+        stranger_result.is_err(),
+        "an unauthenticated batch read must return an error, not an empty result"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // supports_interface
 // ---------------------------------------------------------------------------
