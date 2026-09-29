@@ -31,6 +31,12 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
+//! ### Important: Key Enumeration Workaround
+//! Soroban cannot enumerate persistent storage keys. The `get_payments` method does not
+//! iterate over all stored payments — instead, callers **must supply references** observed
+//! from `payment_stored` events (or other indexer-sourced sources). Each reference is then
+//! looked up individually via `get_payment_reference`.
+//!
 //! ## Upgrade Process
 //!
 //! [`SettlementContract::upgrade`] replaces the Wasm and nothing else. That is
@@ -3169,5 +3175,50 @@ mod tests {
             Symbol::new(&env, "admin")
         );
         assert_eq!(Address::from_val(&env, &data), new_admin);
+    }
+
+    // Issue #777: verify DefaultRule stored in instance never expires independently
+    #[test]
+    fn default_rule_survives_long_idle() {
+        let (env, client, _admin, _merchant) = setup();
+
+        let rule = SettlementRule {
+            platform_fee_bps: 300,
+            network_fee_bps: 100,
+            settlement_delay_ledger: 5,
+            auto_settle: true,
+        };
+        client.set_default_rule(&rule);
+
+        // Advance the ledger by 60 days (well past RULE_TTL_THRESHOLD of 17280*14 = 241_920)
+        // Each hop advances 100_000 ledgers, touching the contract via get_admin()
+        // between hops so the instance's own TTL doesn't expire along the way.
+        for _ in 0..15 {
+            env.ledger().set_sequence_number(env.ledger().sequence() + 100_000);
+            client.get_admin();
+        }
+
+        // After long idle, get_default_rule should still return the stored rule
+        // (TTL is extended on read via get_default_rule)
+        let retrieved = client.get_default_rule();
+        assert!(
+            retrieved.is_some(),
+            "DefaultRule should survive long idle and be retrievable via get_default_rule"
+        );
+        assert_eq!(
+            retrieved.unwrap().platform_fee_bps,
+            rule.platform_fee_bps,
+            "platform_fee_bps should match after long idle"
+        );
+        assert_eq!(
+            retrieved.unwrap().network_fee_bps,
+            rule.network_fee_bps,
+            "network_fee_bps should match after long idle"
+        );
+        assert_eq!(
+            retrieved.unwrap().auto_settle,
+            rule.auto_settle,
+            "auto_settle should match after long idle"
+        );
     }
 }
