@@ -2,6 +2,15 @@
 
 Soroban smart contracts for the BettaPay payment infrastructure on Stellar.
 
+## Payment reference read access
+
+`get_payment_reference` and `get_payments` are intentionally public so
+off-chain settlement indexers and composing contracts can verify a payment
+without a merchant signature. A payment reference is a 32-byte value supplied
+by the merchant and must be generated with cryptographically secure randomness;
+it functions as a bearer capability for lookup. Indexers may consume
+`payment_stored` events for discovery and use these endpoints for targeted
+verification; raw Soroban state reads remain an equivalent alternative.
 
 ## Structure
 
@@ -69,7 +78,7 @@ cargo test -p settlement_contract
 cargo test -p governance_contract
 
 # Run a specific test by name
-cargo test registers_merchant_and_persists_flag -p settlement_contract
+cargo test merchant_lifecycle_uses_canonical_topics -p settlement_contract
 ```
 
 ### Deploy to Testnet
@@ -82,19 +91,19 @@ bash scripts/deploy_testnet.sh
 # 1. Generate and fund a key
 soroban keys generate bettapay-admin --fund
 
-# 2. Build WASM
-cargo build --target wasm32-unknown-unknown --release
+# 2. Build and optimize WASM
+make optimize
 
 # 3. Deploy settlement contract
 SETTLEMENT_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/settlement_contract.wasm \
+  --wasm target/optimized/settlement_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
 
 # 4. Deploy governance contract
 GOVERNANCE_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/governance_contract.wasm \
+  --wasm target/optimized/governance_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
@@ -109,7 +118,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 
 soroban contract invoke \
   --id "$GOVERNANCE_ID" \
@@ -117,7 +126,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --recovery-address "$RECOVERY_ADDRESS"
 ```
 
 ### Invoke Settlement Contract
@@ -438,17 +447,17 @@ pub struct PaymentRecord {
 | `unpause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Resumes mutating contract operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the contract is currently paused. |
 | `register_merchant`| `merchant: Address` | `()` | Stored Admin | `Paused`, `InvalidAddress`, `MerchantExists` | Registers a new merchant. The merchant must not already exist and cannot be the zero address. |
-| `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry and deletes their specific rule. |
+| `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry, deletes their specific rule, and orphans their payment records — post-unregister reads of those records fail with `PaymentOrphaned`. |
 | `set_settlement_rule`| `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin | `Paused`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
-| `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to the default rules. |
+| `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
 | `set_default_rule` | `new_rule: SettlementRule` | `()` | Stored Admin | `InvalidFeeBps`, `InvalidSettlementDelay` | Configures the global fallback rule applied when no merchant-specific rule exists. |
 | `get_default_rule` | None | `Option<SettlementRule>` | None | None | Fetches the global default settlement rule configuration, if any. |
 | `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant` | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `InvalidAmount`, `DuplicatePaymentReference` | Records a payment hash on-chain and returns the fee split. `amount` must be $\ge 100$. |
 | `is_merchant_registered`| `merchant: Address` | `bool` | None | None | Checks if a merchant is present in the registry. |
 | `get_settlement_rule`| `merchant: Address` | `Option<SettlementRule>` | None | None | Reads the merchant-specific settlement rule override. |
 | `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. |
-| `get_payment_reference`| `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the logged payment record. Refreshes the entry's TTL when queried. |
-| `get_payments` | `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves logged payment records. Missing references are ignored. |
+| `get_payment_reference`| `merchant: Address`, `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the merchant's logged payment record for the reference. Refreshes the entry's TTL when queried. |
+| `get_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves the merchant's logged payment records. Missing references are ignored. |
 
 ---
 
@@ -536,4 +545,9 @@ This diagram highlights the main interaction pattern: the backend and operators 
 
 No cross-contract calls. Both contracts are independently deployable and stateless across each other. The backend services call them via Stellar RPC.
 
-i would like to work on this issue
+## Security
+
+Found a security vulnerability? Please do **not** open a public GitHub issue.
+See [`SECURITY.md`](SECURITY.md) for the reporting process (GitHub Security
+Advisories preferred, email fallback), the vulnerability report template, the
+list of report owners, and our 90-day responsible disclosure window.

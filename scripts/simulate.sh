@@ -97,14 +97,12 @@ log_info "Checking friendbot funding status..."
 curl --silent --fail --show-error "${FRIENDBOT_URL}?addr=${SOROBAN_SOURCE_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
 
 # Build contracts
-log_info "Building settlement and governance contracts..."
-cargo build --target wasm32-unknown-unknown --release \
-  -p settlement_contract \
-  -p governance_contract
-log_success "Build completed successfully."
+log_info "Building and optimizing settlement and governance contracts..."
+make optimize
+log_success "Optimized build completed successfully."
 
-SETTLEMENT_WASM="$ROOT_DIR/target/wasm32-unknown-unknown/release/settlement_contract.wasm"
-GOVERNANCE_WASM="$ROOT_DIR/target/wasm32-unknown-unknown/release/governance_contract.wasm"
+SETTLEMENT_WASM="$ROOT_DIR/target/optimized/settlement_contract_opt.wasm"
+GOVERNANCE_WASM="$ROOT_DIR/target/optimized/governance_contract_opt.wasm"
 
 assert_file_exists "$SETTLEMENT_WASM"
 assert_file_exists "$GOVERNANCE_WASM"
@@ -138,25 +136,16 @@ assert_contract_id "$GOVERNANCE_ID" "Governance Contract ID"
 log_success "Governance contract deployed: $GOVERNANCE_ID"
 
 # Initialize settlement contract
-log_info "Initializing Settlement contract with admin..."
-soroban contract invoke \
-  --id "$SETTLEMENT_ID" \
-  --source-account "$SOROBAN_SOURCE" \
-  --rpc-url "$SOROBAN_RPC_URL" \
-  --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
-  -- \
-  init --admin "$SOROBAN_SOURCE_ADDRESS" --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
+log_info "Initializing Settlement contract with admin set..."
+ADMINS="[\"${SOROBAN_SOURCE_ADDRESS}\"]"
+invoke_contract_init "$SETTLEMENT_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+  --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
-log_info "Initializing Governance contract with admin..."
-soroban contract invoke \
-  --id "$GOVERNANCE_ID" \
-  --source-account "$SOROBAN_SOURCE" \
-  --rpc-url "$SOROBAN_RPC_URL" \
-  --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
-  -- \
-  init --admin "$SOROBAN_SOURCE_ADDRESS" --recovery-address "$RECOVERY_ADDRESS"
+log_info "Initializing Governance contract with admin set..."
+invoke_contract_init "$GOVERNANCE_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+  --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 
 # Print summary

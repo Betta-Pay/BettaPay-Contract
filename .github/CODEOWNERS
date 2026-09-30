@@ -1,0 +1,8 @@
+# BettaPay CODEOWNERS
+# This file assigns default reviewers for PRs based on the paths modified.
+
+/settlement_contract/ @team-settlement
+/governance_contract/ @team-governance
+/scripts/ @team-devops
+Makefile @team-devops
+*.md @team-docs

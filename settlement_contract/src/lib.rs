@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
@@ -31,11 +32,86 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
-//! ### Important: Key Enumeration Workaround
-//! Soroban cannot enumerate persistent storage keys. The `get_payments` method does not
-//! iterate over all stored payments — instead, callers **must supply references** observed
-//! from `payment_stored` events (or other indexer-sourced sources). Each reference is then
-//! looked up individually via `get_payment_reference`.
+//! ## Storage Key Ownership (issue #772)
+//!
+//! Which ledger each key lives in, and how long it lives:
+//!
+//! | `DataKey` variant            | Ledger type | TTL policy |
+//! |------------------------------|-------------|------------|
+//! | `Admin`                      | Instance (singleton multisig `Vec<Address>`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `Initializing`               | Instance (ephemeral init guard) | No TTL management; set at the start of `init`, removed when `init` completes |
+//! | `Governance`                 | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `Deployer`                   | Instance (set once at `init`) | Instance TTL; written once to gate init to the deployer, never expires independently of the instance |
+//! | `SchemaVersion`              | Instance (singleton `u32`) | Instance TTL; written at `init`, advanced by `migrate` |
+//! | `DefaultRule`                | Instance (singleton `SettlementRule`) | Instance TTL; lives as long as the contract instance, cannot expire independently |
+//! | `Merchant(Address)`          | Persistent (one entry per merchant) | `MERCHANT_TTL_THRESHOLD` / `MERCHANT_TTL_BUMP` (14d / 30d); bumped only on merchant- or admin-authed writes, never on public reads |
+//! | `Rule(Address)`              | Persistent (one entry per merchant override) | `RULE_TTL_THRESHOLD` / `RULE_TTL_BUMP` (14d / 30d); bumped on rule writes and reads |
+//! | `ArchivedMerchant(Address)`  | Persistent (tombstone) | Persistent TTL; written on `unregister_merchant`, survives re-registration guard until cleared on re-register |
+//! | `Payment(Address, BytesN<32>)` | Persistent (one entry per merchant + reference, high volume) | `PAYMENT_TTL_THRESHOLD` / `PAYMENT_TTL_BUMP` (14d / 30d); bumped on store and on payment reads |
+//! | `ScheduledOperation(BytesN<32>)` | Persistent (one entry per scheduled op hash) | `SCHEDULED_OP_TTL_THRESHOLD` / `SCHEDULED_OP_TTL_BUMP` (14d / 30d); removed on `execute` / `cancel` |
+//! | `CommonDataKey::Threshold`   | Instance (multisig threshold `u32`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `CommonDataKey::RecoveryAddress` | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
+//! | `CommonDataKey::PendingRecovery` | Instance (optional in-flight recovery) | Instance TTL; removed on `execute_recovery` / `cancel_recovery` / timelocked `CancelRecovery` |
+//! | `CommonDataKey::Paused`      | Instance (pause flag) | Instance TTL; lives as long as the contract instance |
+//!
+//! Rule of thumb: instance keys are singletons tied to the contract instance
+//! lifetime (no independent expiry); persistent keys are per-entity records
+//! that must be kept warm with `extend_ttl` or they are evicted.
+//!
+//! ## Payment Reads
+//!
+//! Single-record payment reads are authorized as either the owning merchant
+//! or an admin. Pass an empty `signers` vector to use the merchant path, which
+//! requires the merchant's authorization. Pass a non-empty admin signer vector
+//! to use the admin path, which requires the configured signature threshold.
+//! A payment reference identifies a record; it does not grant read access.
+//!
+//! ## Settlement Boundary (Off-Chain Execution)
+//!
+//! This contract calculates and securely locks the fee split for each payment in a `PaymentRecord` and emits a
+//! `payment_stored` event. It does **not** transfer tokens, hold funds, or expose an in-contract `settle` function.
+//!
+//! Settlement execution is intentionally designed to be **off-chain**:
+//! 1. **Indexers** listen to `payment_stored` events and read the `PaymentRecord` state.
+//! 2. **Readiness** is verified off-chain by evaluating if the current ledger sequence satisfies the delay:
+//!    `current_ledger >= record.ledger + record.settlement_delay_ledger`.
+//! 3. **Execution** happens via a separate off-chain payout engine that processes transfers (batching where
+//!    appropriate based on `auto_settle` preferences) and tracks settlement state externally.
+//!
+//! The in-contract flags (`settlement_delay_ledger`, `auto_settle`) are strictly informational directives
+//! enforcing standardized agreement parameters for off-chain consumers; they do not trigger on-chain state transitions.
+//!
+//! ## Event Conventions
+//!
+//! Events are emitted via [`soroban_sdk::Env::events`]. To give off-chain
+//! indexers a predictable topic layout, every event in this contract follows
+//! the same conventions:
+//!
+//! - `topic[0]` is always the event name as a [`Symbol`], constructed via
+//!   [`Symbol::new`]. Indexers filter on this single topic to dispatch by
+//!   event type.
+//! - `topic[1..n]` carry the entity identifiers that scope the event —
+//!   typically an [`Address`] (merchant, asset, admin), but for some events
+//!   also a [`BytesN<32>`] (new Wasm hash on `contract_upgraded`, payment
+//!   reference on `payment_stored`). The exact shape of `topic[1..n]` is
+//!   fixed per event.
+//! - The **data payload** carries the values describing the state change.
+//!   Its shape is event-specific: a single value (`admin` for
+//!   `merchant_registered`), a tuple (e.g. `(admin, prev, rule)` for
+//!   `settlement_rule_updated`, or `(admin, true)` for `paused`), a typed
+//!   struct such as the `SettlementRule` emitted on `bootstrap_fallback` or
+//!   the shared [`bettapay_common::events::AdminTransferred`] payload on
+//!   `admin_transferred` / `recovery_executed`, or `()`.
+//!
+//! Events shared with the governance contract (`admin_transferred`, `paused`,
+//! `unpaused`, `recovery_initiated`, `recovery_cancelled`, `recovery_executed`,
+//! `threshold_changed`, `contract_upgraded`) use the canonical topic names and
+//! payload shapes defined in [`bettapay_common::events`] so an indexer can
+//! decode them identically no matter which contract published them.
+//! - Each entry point emits exactly the events tied to the state change it
+//!   performs. Usually, no two events emitted by the same call describe the
+//!   same logical change, though exceptions exist (e.g., `_set_settlement_rule`
+//!   emits both `bootstrap_fallback` and `settlement_rule_updated` when falling back).
 //!
 //! ## Upgrade Process
 //!
@@ -56,212 +132,222 @@
 //!    struct — the old type is what keeps those entries readable.
 //! 4. Order is: upgrade the Wasm, then call `migrate`, then verify the
 //!    post-upgrade state, then remove the migration code in a later upgrade.
-//! 5. `Payment(BytesN<32>)`, `Merchant(Address)` and `Rule(Address)` are keyed
-//!    by value and Soroban cannot enumerate storage keys — which is why
-//!    [`SettlementContract::get_payments`] takes the references from the
-//!    caller. Convert these lazily on read, or pass the keys in explicitly.
+//! 5. `Payment(Address, BytesN<32>)`, `Merchant(Address)` and `Rule(Address)`
+//!    are keyed by value and Soroban cannot enumerate storage keys — which is
+//!    why [`SettlementContract::get_payments`] takes the merchant and the
+//!    references from the caller. Convert these lazily on read, or pass the
+//!    keys in explicitly.
 //! 6. Call `extend_ttl` on anything the migration rewrites: `set` alone does
 //!    not extend an entry's life, so a migrated record would otherwise expire
 //!    sooner than an untouched one.
 //!
 //! Full guidance, including worked examples and how to test a migration, is in
 //! [`DEVELOPMENT.md`](https://github.com/Betta-Pay/BettaPay-Contract/blob/main/DEVELOPMENT.md).
-
-// TODO: Refactor flat file structure into modular hierarchy (Issue #84)
-// Intended module structure:
-// - mod types: Data structures (enums, structs)
-// - mod storage: DataKey and storage access helpers
-// - mod events: Event definitions and emission helpers
-// - mod errors: Error enums
-// - mod contract: Main contract trait implementation
-// - mod test: Unit and integration tests
+//!
+//! ## Pause Model
+//! The pause flag blocks payment-processing and merchant-management
+//! operations (`register_merchant`, `unregister_merchant`,
+//! `set_settlement_rule`, `clear_settlement_rule`, `set_default_rule`,
+//! `store_payment_reference`, `update_governance` all call
+//! `assert_not_paused`). The following administrative operations are
+//! intentionally NOT blocked during pause, so the admin can fix the root
+//! cause of the emergency:
+//!
+//! - `upgrade` — deploy a fix
+//! - `transfer_admin` — rotate compromised keys
+//! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
+//!   admin-recovery flow itself must keep working while paused
+//! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
+//!
+//! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
+//! governance: pausing while already paused panics with `AlreadyPaused`, and
+//! unpausing while not paused panics with `AlreadyUnpaused`, so a `paused`/
+//! `unpaused` event is only ever emitted on an actual state transition.
+//!
+//! ## Fail-Open vs Fail-Closed Policy Under Governance Degradation (Issue #749)
+//!
+//! When the external governance contract is degraded, unreachable, or traps,
+//! the settlement contract follows a strict fail-open vs fail-closed policy per
+//! entry point:
+//!
+//! - **Reads and payments fail open**: Core payment ingestion and query paths
+//!   must remain operational. If governance fee resolution is unavailable,
+//!   `store_payment_reference` falls back to [`BOOTSTRAP_DEFAULT_RULE`].
+//! - **Admin setters fail closed**: Administrative operations, rule updates,
+//!   and contract modifications must never execute with unverified governance
+//!   parameters and reject with [`SettlementError::GovernanceCallFailed`].
+//!
+//! | Entry Point | Policy | Behavior on Governance Outage / Trap |
+//! |---|---|---|
+//! | `store_payment_reference` | fail-open to bootstrap | Degrades to `BOOTSTRAP_DEFAULT_RULE` and emits `bootstrap_fallback` |
+//! | `get_payment` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_payment_reference` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
+//! | `is_merchant_registered` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_min_payment_amount` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_version` | fail-open | Storage read only; unaffected by governance availability |
+//! | `set_settlement_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
+//! | `set_default_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
+//! | `update_governance` | fail-closed GovernanceCallFailed | Reverts if new governance contract fails interface checks |
+//! | `register_merchant` / `unregister_merchant` | fail-closed | Requires valid admin multisig authorization |
+//! | `clear_settlement_rule` | fail-closed | Requires valid admin multisig authorization |
+//! | `set_min_payment_amount` | fail-closed | Requires valid admin multisig authorization |
+//! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
+//! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
+//! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
+//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock |
+//!
+//! ## Event Convention
+//!
+//! This contract follows a consistent event emission pattern (see Issue #49):
+//!
+//! **Topics** carry the fixed event-name symbol and filterable entity
+//! identifiers. The first topic is always a [`Symbol`] naming the event type,
+//! enabling indexers to filter by event kind. Subsequent topics hold the
+//! primary identifiers relevant to the event (e.g., merchant address, payment
+//! reference), so listeners can subscribe to events for a specific entity
+//! without scanning all events.
+//!
+//! **Data** carries caller context and event-specific details — information
+//! that is useful once the event has been matched by topic but is not needed
+//! for filtering. Typically this includes the caller's address (admin) and
+//! any before/after values or configuration data.
+//!
+//! ### Canonical Example
+//!
+//! [`SettlementContract::register_merchant`] is the canonical example of this convention:
+//!
+//! | Role   | Value                                                       |
+//! |--------|-------------------------------------------------------------|
+//! | Topics | `(Symbol("merchant_registered"), Address merchant)`         |
+//! | Data   | `Address caller` (the admin who authorized the registration)|
+//!
+//! New events should follow the same pattern: filterable identifiers in
+//! topics, caller context and details in data.
+//!
+//! ## Module Layout
+//!
+//! - [`types`] — shared contract data types (`SettlementRule`, `PaymentRecord`, `FeeSplit`, `Operation`, `DataKey`, ...).
+//! - [`errors`] — the [`SettlementError`] enum.
+//! - [`storage`] — low-level storage read/validate helpers shared across entry points.
+//! - [`admin`] — init, admin transfer/recovery, pause/unpause, upgrade, scheduled-operation execution.
+//! - [`merchant`] — merchant registration.
+//! - [`settlement`] — settlement rule configuration (per-merchant and global default).
+//! - [`payments`] — payment reference storage and fee-split calculation.
+//!
+//! Each of `admin`, `merchant`, `settlement`, and `payments` contributes its own
+//! `#[contractimpl] impl SettlementContract { ... }` block; Soroban merges these
+//! into a single generated `SettlementContractClient`, so callers see one
+//! unified contract API regardless of how the implementation is split across files.
 
 #![no_std]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, String, Symbol, Val, Vec,
-};
-use soroban_sdk::testutils::storage::Persistent;
+mod admin;
+mod errors;
+mod merchant;
+mod payments;
+mod settlement;
+mod storage;
+mod types;
 
-const BPS_DENOMINATOR: u32 = 10_000;
-const MIN_FEE_BPS: u32 = 5; // Must match governance_contract::MIN_FEE_BPS
-const MIN_PAYMENT_AMOUNT: i128 = 100;
-const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
-const PAYMENT_TTL_THRESHOLD: u32 = 17280 * 14;
-const PAYMENT_TTL_BUMP: u32 = 17280 * 30;
-const RULE_TTL_THRESHOLD: u32 = 17280 * 14;
-const RULE_TTL_BUMP: u32 = 17280 * 30;
-const RECOVERY_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
-const MERCHANT_TTL_THRESHOLD: u32 = 17280 * 14;
-const MERCHANT_TTL_BUMP: u32 = 17280 * 30;
+#[cfg(test)]
+mod tests;
+
+use bettapay_common::constants::MIN_FEE_BPS;
+use soroban_sdk::contract;
+
+pub use errors::SettlementError;
+pub use types::{
+    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule,
+};
+
+/// Minimum gross payment amount, in the asset's smallest unit.
+///
+/// Derived as `BPS_DENOMINATOR / 100`. Each fee leg rounds up
+/// ([`Bps::calculate_fee_ceil`]) and so over-collects by strictly less than one
+/// unit; at 100 units that unit is 1 % of the gross, capping the inflation of a
+/// leg's effective rate below 100 bps over its configured bps. Below the floor the
+/// distortion is unbounded — 1 unit charged the minimum legal fee (`MIN_FEE_BPS`,
+/// 0.05 %) still rounds up to 1 unit, a 100 % effective fee. 100 is also the
+/// smallest amount at which [`BOOTSTRAP_DEFAULT_RULE`]'s 100 bps platform fee is
+/// exact. Nothing but dust is excluded: on a 7-decimal Soroban asset, 100 base
+/// units is 10^-5 of one token.
+///
+/// Enforced by [`SettlementContract::store_payment_reference`], which panics with
+/// [`AmountTooSmall`](SettlementError::AmountTooSmall). It does **not** guarantee a
+/// non-negative merchant payout — extreme fee rules can still make the two
+/// rounded-up legs exceed the gross; see `calculate_split` for that edge case.
+pub(crate) const MIN_PAYMENT_AMOUNT: i128 = 100;
+pub(crate) const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
+
+/// Default settlement delay period applied as a fallback (1 day equivalent in ledgers)
+pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
+
+/// Maximum number of payments that can be retrieved in a single batch lookup
+pub const MAX_PAYMENTS_BATCH: u32 = 100;
+
+/// Maximum number of payment records that may be stored per merchant.
+///
+/// Rationale: payment entries live in persistent storage (`DataKey::Payment`)
+/// and each entry accrues rent via TTL extension, so an unbounded per-merchant
+/// history would let a single merchant bloat ledger state without bound.
+/// A single named cap gives tests and docs one canonical value to assert
+/// against. Enforcement (rejecting `store_payment_reference` past this cap)
+/// is intentionally left to a separate standalone change (issue #775 scope:
+/// constant plus docs only, no enforcement logic here).
+pub const MAX_PAYMENTS_PER_MERCHANT: u32 = 10_000;
+
+/// Approximate ledgers per day on Stellar (~5s per ledger).
+pub(crate) const LEDGERS_PER_DAY: u32 = 17280;
+
+// TTL thresholds and bumps use LEDGERS_PER_DAY for readability.
+pub(crate) const PAYMENT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
+pub(crate) const PAYMENT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
+pub(crate) const RULE_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
+pub(crate) const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
+pub(crate) const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
+pub(crate) const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
+pub(crate) const SCHEDULED_OP_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
+pub(crate) const SCHEDULED_OP_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
+
+/// Minimum delay for scheduled administrative operations.
+///
+/// This matches the seven-day recovery window so the recovery address has
+/// time to replace compromised admins before a scheduled upgrade or admin
+/// transfer can execute. The recovery path is the veto authority for pending
+/// schedules; ordinary admin cancellation remains available as well.
+pub(crate) const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// The single interface version advertised by `supports_interface`.
+///
+/// `upgrade` probes the incoming Wasm with `supports_interface(SUPPORTED_INTERFACE_VERSION)`
+/// before committing the swap. Any Wasm that returns `false` (or traps) is
+/// rejected with `InvalidWasmInterface`. Increment this constant in a future
+/// Wasm update when a breaking API change requires callers to distinguish the
+/// new contract from this one (issue #48).
+pub(crate) const SUPPORTED_INTERFACE_VERSION: u32 = 1;
+
+/// The schema version this build expects. `init` writes this value and
+/// `migrate` advances any stored value below it. Mirrors
+/// governance_contract's `CURRENT_SCHEMA_VERSION` (issue #507, issue #704).
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// 50k/100k per ADR-003: inactive instance entries evictable in days, not weeks.
+///
+/// Settlement-specific TTL policy for short-lived reads of admin / governance /
+/// recovery addresses. Deliberately shorter than the protocol defaults so that
+/// an inactive instance-side entry can still be evicted in days rather than
+/// weeks — see ADR 003 for the rationale.
+pub(crate) const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
+pub(crate) const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 
 // Used until the admin sets a global default settlement rule.
-const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
+pub(crate) const BOOTSTRAP_DEFAULT_RULE: SettlementRule = SettlementRule {
     platform_fee_bps: 100,
-    network_fee_bps: 0,
+    network_fee_bps: MIN_FEE_BPS,
     settlement_delay_ledger: 0,
     auto_settle: false,
 };
-
-/// Configuration governing how merchant payments are settled.
-///
-/// This struct defines the fee allocation and settlement timing for a merchant,
-/// including the platform and network fee shares as well as whether
-/// settlement is processed automatically after a delay.
-#[derive(Clone)]
-#[contracttype]
-pub struct SettlementRule {
-    /// Platform fee charged on each payment, expressed in basis points.
-    ///
-    /// One basis point is 0.01%, and 100 basis points equals 1%.
-    /// This value is used when calculating the platform's share of a payment.
-    pub platform_fee_bps: u32,
-    /// Network fee charged on each payment, expressed in basis points.
-    ///
-    /// This represents the portion reserved for network or protocol-related
-    /// costs and is combined with other fees as validated elsewhere in the contract.
-    pub network_fee_bps: u32,
-    /// Number of ledger closes to wait before settlement becomes eligible.
-    ///
-    /// A value of `0` enables immediate settlement, while larger values delay
-    /// settlement until the specified number of ledgers has elapsed.
-    pub settlement_delay_ledger: u32,
-    /// Indicates whether settlement should occur automatically.
-    ///
-    /// When set to `true`, settlements may be processed automatically after
-    /// the configured settlement delay has elapsed; when `false`, settlement
-    /// requires manual or external triggering.
-    pub auto_settle: bool,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct FeeSplit {
-    /// The total gross amount of the payment before any fees are deducted.
-    /// Mirrors the input amount for caller convenience — not independently meaningful.
-    pub gross_amount: i128,
-    /// Portion of the settlement fee allocated to the platform.
-    /// This amount is calculated by applying the platform fee basis points to the gross amount.
-    pub platform_fee_amount: i128,
-    /// Portion of the settlement fee allocated to the network.
-    /// This amount is calculated by applying the network fee basis points to the gross amount.
-    pub network_fee_amount: i128,
-    /// Net amount allocated to the merchant.
-    /// This derived output is calculated as the gross amount minus the rounded platform and network fee amounts.
-    pub merchant_amount: i128,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct PaymentRecord {
-    /// The total gross amount of the payment processed.
-    /// Set upon payment creation and used to derive the fee split.
-    pub amount: i128,
-    /// The exact amount deducted for the platform fee.
-    /// Calculated and stored at payment creation to lock in the fee value.
-    pub platform_fee_amount: i128,
-    /// The exact amount deducted for the network fee.
-    /// Calculated and stored at payment creation to lock in the fee value.
-    pub network_fee_amount: i128,
-    /// The net payout amount owed to the merchant.
-    /// Calculated at payment creation to ensure deterministic settlement value.
-    pub merchant_amount: i128,
-    /// The platform fee rate (in basis points) applied to this payment.
-    /// Snapshot taken from the active settlement rule during creation.
-    pub platform_fee_bps: u32,
-    /// The network fee rate (in basis points) applied to this payment.
-    /// Snapshot taken from the active settlement rule during creation.
-    pub network_fee_bps: u32,
-    /// Ledger sequence timestamp when the payment was recorded.
-    /// Used alongside settlement_delay_ledger to verify if the payment is ripe for settlement.
-    pub ledger: u32,
-    /// The delay period (in ledgers) before settlement can occur.
-    /// Sourced from the active settlement rule and used to prevent premature settlement.
-    pub settlement_delay_ledger: u32,
-    /// Indicates if the payment should participate in automated settlement batches.
-    /// Set from the active rule and used by external auto-settlement processes.
-    pub auto_settle: bool,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct FeeConfig {
-    pub platform_fee_bps: u32,
-    pub network_fee_bps: u32,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct PendingRecovery {
-    pub new_admin: Address,
-    pub execute_after: u64,
-}
-
-#[derive(Clone)]
-#[contracttype]
-enum DataKey {
-    Admin,
-    RecoveryAddress,
-    PendingRecovery,
-    Governance,
-    Merchant(Address),
-    Rule(Address),
-    DefaultRule,
-    Payment(BytesN<32>),
-    Paused,
-}
-
-#[contracterror]
-#[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(u32)]
-pub enum SettlementError {
-    /// `init()` has already been called. Only one initialization is permitted.
-    AlreadyInitialized = 1,
-    /// `init()` has not been called. All admin-guarded functions require prior initialization.
-    NotInitialized = 2,
-    /// The caller does not match the stored admin address.
-    Unauthorized = 3,
-    /// `register_merchant` was called for an address that is already registered.
-    MerchantExists = 4,
-    /// The target merchant address is not registered. Raised by
-    /// `set_settlement_rule`, `store_payment_reference`, `calculate_fee_split`,
-    /// and `unregister_merchant` when the merchant is missing.
-    MerchantMissing = 5,
-    /// The fee BPS values exceed 10 000 (`BPS_DENOMINATOR`) or their sum
-    /// exceeds 10 000. Raised by `set_settlement_rule` and `set_default_rule`.
-    InvalidFeeBps = 6,
-    /// The payment amount is below `MIN_PAYMENT_AMOUNT` (100) or is ≤ 0
-    /// in `calculate_fee_split`.
-    InvalidAmount = 7,
-    /// `store_payment_reference` was called with a 32‑byte reference that
-    /// already exists in storage.
-    DuplicatePaymentReference = 8,
-    /// The contract is paused. Most state‑mutating operations are blocked.
-    Paused = 9,
-    /// No merchant-specific rule has been set. The merchant will use the default rule or bootstrap fallback.
-    MerchantRuleNotSet = 10,
-    /// The supplied address is the zero‑address or an empty string.
-    /// Raised by `register_merchant` and `transfer_admin`.
-    InvalidAddress = 11,
-    /// `store_payment_reference` was called with an all‑zero 32‑byte
-    /// reference, which is reserved.
-    InvalidPaymentReference = 12,
-    /// `settlement_delay_ledger` exceeds `MAX_SETTLEMENT_DELAY_LEDGER`
-    /// (100 000). Raised by `set_settlement_rule` and `set_default_rule`.
-    InvalidSettlementDelay = 13,
-    /// `transfer_admin` was called with the current admin address as the
-    /// new admin. The new admin must be different.
-    InvalidAdmin = 14,
-    InvalidGovernance = 15,
-    InvalidRecoveryAddress = 16,
-    RecoveryNotPending = 17,
-    RecoveryDelayActive = 18,
-    /// The payment amount is large enough that multiplying it by a fee's
-    /// basis points would overflow `i128`. Raised by `calculate_split`
-    /// before the multiplication is attempted.
-    AmountOverflow = 19,
-}
 
 #[contract]
 pub struct SettlementContract;

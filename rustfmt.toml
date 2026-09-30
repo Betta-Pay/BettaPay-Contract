@@ -1,0 +1,4 @@
+imports_granularity = "Module"
+reorder_imports = true
+edition = "2021"
+max_width = 100
