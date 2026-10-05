@@ -287,7 +287,11 @@ fn op_scheduled_emits_hash_topic_for_every_operation_variant() {
         Operation::ClearSettlementRule(merchant.clone()),
         Operation::SetDefaultRule(rule.clone()),
     ];
-    assert_eq!(operations.len(), 9, "all 9 Operation variants must be covered");
+    assert_eq!(
+        operations.len(),
+        9,
+        "all 9 Operation variants must be covered"
+    );
 
     for (index, operation) in operations.into_iter().enumerate() {
         let operation_xdr = operation.clone().to_xdr(&env);

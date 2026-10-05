@@ -396,3 +396,46 @@ fn store_payment_reference_failed_auth_does_not_bump_merchant_ttl() {
         "merchant marker TTL must not increase on a failed-auth store attempt (before={ttl_before}, after={ttl_after})"
     );
 }
+
+// Issue #777: verify DefaultRule stored in instance never expires independently.
+#[test]
+fn default_rule_survives_long_idle() {
+    let (env, client, admins, _merchant) = setup();
+
+    let rule = SettlementRule {
+        platform_fee_bps: 300,
+        network_fee_bps: 100,
+        settlement_delay_ledger: 5,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &rule);
+
+    // Advance the ledger by 60 days (well past RULE_TTL_THRESHOLD of 17280*14 = 241_920).
+    // Each hop advances 100_000 ledgers, touching the contract via get_admin()
+    // between hops so the instance's own TTL doesn't expire along the way.
+    for _ in 0..15 {
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 100_000);
+        client.get_admin();
+    }
+
+    // After long idle, get_default_rule should still return the stored rule.
+    let retrieved = client.get_default_rule();
+    assert!(
+        retrieved.is_some(),
+        "DefaultRule should survive long idle and be retrievable via get_default_rule"
+    );
+    let retrieved = retrieved.unwrap();
+    assert_eq!(
+        retrieved.platform_fee_bps, rule.platform_fee_bps,
+        "platform_fee_bps should match after long idle"
+    );
+    assert_eq!(
+        retrieved.network_fee_bps, rule.network_fee_bps,
+        "network_fee_bps should match after long idle"
+    );
+    assert_eq!(
+        retrieved.auto_settle, rule.auto_settle,
+        "auto_settle should match after long idle"
+    );
+}

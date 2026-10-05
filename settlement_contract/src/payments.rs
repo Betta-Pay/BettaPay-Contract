@@ -555,6 +555,21 @@ impl SettlementContract {
 
     /// Retrieve multiple payment records for a merchant by a vector of references.
     ///
+    /// `get_payments` cannot list keys; pass refs observed from `payment_stored` events.
+    ///
+    /// Soroban cannot enumerate persistent storage keys, so this method does not
+    /// iterate over all stored payments. Callers **must supply references**
+    /// observed from `payment_stored` events (or other indexer-sourced sources).
+    /// Each reference is then looked up individually within the merchant's own
+    /// namespace, and the returned vector contains only records that exist.
+    ///
+    /// Example indexer flow:
+    /// 1. Listen for `payment_stored` events with topics
+    ///    `(Symbol("payment_stored"), merchant, reference)`.
+    /// 2. Collect the `reference: BytesN<32>` values for the merchant of interest.
+    /// 3. Call `get_payments(merchant, refs, signers)` with those references to
+    ///    fetch the corresponding `PaymentRecord`s.
+    ///
     /// References are resolved within the merchant's own namespace and the
     /// returned vector contains only records that exist.
     /// Pass an empty `signers` vector to authorize as the merchant, or a
