@@ -32,6 +32,12 @@
 //! to securely organize persistent and instance storage, while applying TTL extensions to ensure
 //! active records remain available and do not expire prematurely.
 //!
+//! ### Important: Key Enumeration Workaround
+//! Soroban cannot enumerate persistent storage keys. The `get_payments` method does not
+//! iterate over all stored payments — instead, callers **must supply references** observed
+//! from `payment_stored` events (or other indexer-sourced sources). Each reference is then
+//! looked up individually via `get_payment_reference`.
+//!
 //! ## Storage Key Ownership (issue #772)
 //!
 //! Which ledger each key lives in, and how long it lives:
