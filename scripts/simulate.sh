@@ -135,6 +135,9 @@ GOVERNANCE_ID="$(tr -d '\n' <"$ROOT_DIR/.soroban/bettapay_governance_id.txt")"
 assert_contract_id "$GOVERNANCE_ID" "Governance Contract ID"
 log_success "Governance contract deployed: $GOVERNANCE_ID"
 
+# Deployment order and one-shot init recovery notes: see ../DEPLOYMENT.md.
+# Initialize settlement before governance; settlement stores the governance
+# address without calling it, but a successful init must not be repeated.
 # Initialize settlement contract
 log_info "Initializing Settlement contract with admin set..."
 ADMINS="[\"${SOROBAN_SOURCE_ADDRESS}\"]"

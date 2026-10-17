@@ -90,6 +90,45 @@ jobs:
       - name: Check and test under MSRV ${{ steps.msrv.outputs.version }}
         run: make msrv
 
+  coverage:
+    name: Workspace coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Measure workspace test coverage
+        shell: bash
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info 2>&1 | tee target/coverage/summary.txt
+
+      - name: Record coverage summary
+        run: |
+          echo "## Workspace coverage baseline" >> "$GITHUB_STEP_SUMMARY"
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-coverage
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 30
+
   doc:
     name: Docs
     runs-on: ubuntu-latest

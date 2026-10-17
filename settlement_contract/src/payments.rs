@@ -157,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    // See FEE_ROUNDING.md for the documented ceil direction and per-leg bound.
     fn calculate_fee_ceil_matches_expected_values() {
         for (amount, bps, expected) in [
             (1i128, 1u32, 1i128),
@@ -216,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    // See FEE_ROUNDING.md for the network clamp and non-negative merchant rule.
     fn tiny_amount_with_full_fees_clamps_network_and_merchant_to_zero() {
         let env = Env::default();
         let split = calculate_split(&env, 1, &rule(5_000, 5_000));
