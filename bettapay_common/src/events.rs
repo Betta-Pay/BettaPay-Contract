@@ -110,6 +110,11 @@ pub const GOVERNANCE_UPDATED_EVENT: &str = "governance_updated";
 /// Topic emitted when a merchant is registered.
 pub const MERCHANT_REGISTERED_EVENT: &str = "merchant_registered";
 
+/// Topic emitted alongside `merchant_registered`, marking that the merchant
+/// itself authorized its own registration (`merchant.require_auth()`), as
+/// distinct from the admin action that invoked `register_merchant` (issue #978).
+pub const MERCHANT_CONSENT_EVENT: &str = "merchant_consent";
+
 /// Topic emitted when a merchant is unregistered.
 pub const MERCHANT_UNREGISTERED_EVENT: &str = "merchant_unregistered";
 

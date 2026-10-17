@@ -23,6 +23,24 @@ pub struct FeeSplit {
     pub merchant_amount: i128,
 }
 
+/// A single page of results from [`SettlementContract::get_payments`](crate::SettlementContract::get_payments).
+///
+/// Soroban cannot enumerate persistent storage keys, so pagination is over the
+/// caller-supplied `refs` vector rather than server-side merchant state: the
+/// caller advances `cursor` by the number of refs consumed on each call.
+#[derive(Clone)]
+#[contracttype]
+pub struct PaymentsPage {
+    /// The resolved records for this page, in the same relative order as the
+    /// `refs` the caller supplied.
+    pub records: Vec<PaymentRecord>,
+    /// `Some(next_cursor)` when this page was exactly
+    /// [`MAX_PAYMENTS_BATCH`](crate::MAX_PAYMENTS_BATCH) refs long, signalling
+    /// the caller's reference set may extend further; `None` once a
+    /// shorter-than-cap page confirms there is nothing left to fetch.
+    pub next_cursor: Option<u32>,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct PaymentRecord {

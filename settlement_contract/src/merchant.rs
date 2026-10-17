@@ -44,6 +44,16 @@ impl SettlementContract {
         // squatted addresses as merchants.
         merchant.require_auth();
 
+        // Distinct from `merchant_registered` below: this marks the proof of
+        // the merchant's own consent, separate from the admin action.
+        env.events().publish(
+            (
+                Symbol::new(&env, events::MERCHANT_CONSENT_EVENT),
+                merchant.clone(),
+            ),
+            (),
+        );
+
         let key = DataKey::Merchant(merchant.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, SettlementError::MerchantExists);

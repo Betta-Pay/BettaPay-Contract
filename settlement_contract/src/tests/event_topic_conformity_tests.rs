@@ -208,6 +208,37 @@ fn merchant_lifecycle_uses_canonical_topics() {
     );
 }
 
+/// `register_merchant` must emit a dedicated `merchant_consent` event, with
+/// the merchant address as a topic, alongside the existing
+/// `merchant_registered` event (issue #978).
+#[test]
+fn register_merchant_emits_consent_event() {
+    let (env, client, admins, merchant) = setup();
+
+    client.register_merchant(&admins, &merchant);
+
+    let events = env.events().all();
+    let mut found = false;
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if topics.len() >= 2
+            && Symbol::from_val(&env, &topics.get(0).unwrap())
+                == Symbol::new(&env, events::MERCHANT_CONSENT_EVENT)
+        {
+            let topic_merchant = Address::from_val(&env, &topics.get(1).unwrap());
+            assert_eq!(topic_merchant, merchant, "consent topic must carry the merchant address");
+            found = true;
+        }
+    }
+    assert!(found, "register_merchant must emit merchant_consent");
+
+    // merchant_registered must still be emitted too.
+    assert_eq!(
+        last_topic(&env),
+        Symbol::new(&env, events::MERCHANT_REGISTERED_EVENT)
+    );
+}
+
 #[test]
 fn default_rule_and_payment_use_canonical_topics() {
     let (env, client, admins, merchant) = setup();

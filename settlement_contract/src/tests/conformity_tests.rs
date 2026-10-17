@@ -241,7 +241,7 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     }
 
     // 100 refs — must succeed.
-    client.get_payments(&merchant, &refs_100, &soroban_sdk::vec![&env]);
+    client.get_payments(&merchant, &refs_100, &0, &soroban_sdk::vec![&env]);
 
     // Build a 101-element vec by duplicating the last entry (get_payments
     // accepts duplicates; we only need to exceed the batch cap).
@@ -249,7 +249,7 @@ fn batch_at_cap_succeeds_and_above_cap_fails() {
     let mut refs_101 = refs_100.clone();
     refs_101.push_back(extra);
 
-    let result = client.try_get_payments(&merchant, &refs_101, &soroban_sdk::vec![&env]);
+    let result = client.try_get_payments(&merchant, &refs_101, &0, &soroban_sdk::vec![&env]);
     assert!(
         matches!(
             result,

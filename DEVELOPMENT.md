@@ -58,6 +58,9 @@ What is on the ledger today, and which storage kind holds it.
 | `Rule(Address)` | persistent | `SettlementRule` |
 | `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` |
 
+The payment reference's fixed `BytesN<32>` length is named as
+`MAX_PAYMENT_REFERENCE_LEN` (32) rather than left as a bare literal.
+
 ### Governance contract
 
 | Key | Storage | Holds |

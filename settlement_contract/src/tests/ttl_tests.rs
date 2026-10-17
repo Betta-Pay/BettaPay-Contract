@@ -161,6 +161,7 @@ fn tombstone_survives_payment_read_attempts() {
     let batch_read = client.try_get_payments(
         &merchant,
         &soroban_sdk::vec![&env, reference.clone()],
+        &0,
         &soroban_sdk::vec![&env],
     );
     assert!(

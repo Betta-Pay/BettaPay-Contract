@@ -710,10 +710,10 @@ fn full_lifecycle_configure_governance_then_process_payments() {
     assert_eq!(stored_fees.network_fee_bps, 50);
 
     // 7. Batch-read returns consistent ordering & length.
-    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(records.len(), 4);
+    let records = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(records.records.len(), 4);
     for i in 0..amounts.len() as u32 {
-        assert_eq!(records.get(i).unwrap().amount, amounts[i as usize]);
+        assert_eq!(records.records.get(i).unwrap().amount, amounts[i as usize]);
     }
 }
 
@@ -866,10 +866,10 @@ fn cross_merchant_reference_reuse_is_allowed() {
 
     // Batch reads are scoped identically: merchant A only sees its own record.
     let refs = soroban_sdk::vec![&env, reference.clone()];
-    let batch_a = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(batch_a.len(), 1);
-    assert_eq!(batch_a.get(0).unwrap().merchant, merchant);
-    assert_eq!(batch_a.get(0).unwrap().amount, 1_000);
+    let batch_a = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(batch_a.records.len(), 1);
+    assert_eq!(batch_a.records.get(0).unwrap().merchant, merchant);
+    assert_eq!(batch_a.records.get(0).unwrap().amount, 1_000);
 }
 
 /// Within a single merchant, the reference stays unique: storing the same
@@ -920,7 +920,7 @@ fn stranger_cannot_read_payment_records_or_bump_ttl() {
     );
 
     let refs = soroban_sdk::vec![&env, reference.clone()];
-    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let batch = settle_client.try_get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
     assert!(
         batch.is_err(),
         "a stranger must not read another merchant's payments"
@@ -967,9 +967,9 @@ fn get_payment_reference_owner_read_works() {
     // Batch read for the owner works too.
     let missing_reference = BytesN::<32>::from_array(&env, &[23u8; 32]);
     let refs = soroban_sdk::vec![&env, reference, missing_reference];
-    let records = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records.get(0).unwrap().amount, 10_000);
+    let records = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(records.records.len(), 1);
+    assert_eq!(records.records.get(0).unwrap().amount, 10_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,10 +1006,10 @@ fn admin_reads_any_merchants_payment_records() {
 
     // The batch read works for the admin too.
     let refs = soroban_sdk::vec![&env, reference];
-    let records = settle_client.get_payments(&merchant, &refs, &settle_admins);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records.get(0).unwrap().merchant, merchant);
-    assert_eq!(records.get(0).unwrap().amount, 7_000);
+    let records = settle_client.get_payments(&merchant, &refs, &0, &settle_admins);
+    assert_eq!(records.records.len(), 1);
+    assert_eq!(records.records.get(0).unwrap().merchant, merchant);
+    assert_eq!(records.records.get(0).unwrap().amount, 7_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,7 +1048,7 @@ fn payments_of_unregistered_merchant_are_orphaned() {
     );
 
     let refs = soroban_sdk::vec![&env, reference];
-    let batch = settle_client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let batch = settle_client.try_get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
     assert!(
         matches!(batch, Err(Ok(ref err)) if *err == orphaned),
         "post-unregister batch read must be rejected as orphaned"
@@ -1261,7 +1261,7 @@ fn get_payments_rejects_batch_too_large() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
 }
 
 #[test]
@@ -1274,8 +1274,32 @@ fn get_payments_accepts_max_batch_size() {
         refs.push_back(BytesN::<32>::from_array(&env, &[i; 32]));
     }
 
-    let payments = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(payments.len(), 0); // No payments stored, but succeeds
+    let payments = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(payments.records.len(), 0); // No payments stored, but succeeds
+    assert_eq!(
+        payments.next_cursor,
+        Some(100),
+        "a full page (refs.len() == MAX_PAYMENTS_BATCH) must signal more may remain"
+    );
+}
+
+/// A page shorter than `MAX_PAYMENTS_BATCH` must report `next_cursor: None`,
+/// signalling the caller's reference set has been fully consumed (issue #982).
+#[test]
+fn get_payments_below_cap_reports_no_next_cursor() {
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let reference = BytesN::<32>::from_array(&env, &[7u8; 32]);
+    settle_client.store_payment_reference(&merchant, &reference, &1_000);
+    let refs = soroban_sdk::vec![&env, reference];
+
+    let page = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(
+        page.next_cursor, None,
+        "a page shorter than the cap must report no next cursor"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1323,8 +1347,8 @@ fn get_payments_extends_ttl_for_every_retrieved_record() {
 
     // The batch read is the only touch point — this is the call under test.
     let refs = soroban_sdk::vec![&env, ref_a.clone(), ref_b.clone()];
-    let batch = settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(batch.len(), 2);
+    let batch = settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(batch.records.len(), 2);
 
     let live_until_a_after = env.as_contract(&settle_client.address, || {
         env.storage().persistent().get_ttl(&key_a)
@@ -1376,7 +1400,7 @@ fn batch_and_singular_reads_yield_identical_ttl_outcomes() {
         &soroban_sdk::vec![&env, merchant.clone()],
     );
     let refs = soroban_sdk::vec![&env, ref_batch.clone()];
-    settle_client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    settle_client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
 
     let key_single = DataKey::Payment(merchant.clone(), ref_single);
     let key_batch = DataKey::Payment(merchant.clone(), ref_batch);

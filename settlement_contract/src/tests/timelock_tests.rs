@@ -2,8 +2,9 @@
 
 use crate::{Operation, SettlementContractClient, SettlementError, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS, MIN_TIMELOCK_DELAY_SECONDS};
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
+use bettapay_common::events::AdminTransferred;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, TryFromVal};
 
 use super::setup;
 
@@ -765,4 +766,59 @@ fn schedule_with_zero_delay_is_rejected() {
     let operation = Operation::RegisterMerchant(merchant);
 
     client.schedule(&admins, &operation, &0);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #976: Admin set change confirmation across read helpers and events
+// ---------------------------------------------------------------------------
+
+/// An admin set change must be reflected consistently whether it goes through
+/// the direct `transfer_admin` path or the timelocked `Operation::TransferAdmin`
+/// path: `get_admin`/`get_threshold` return the new values, `admin_transferred`
+/// carries the old and new primary admin, and the old signer set no longer
+/// satisfies an admin-gated call.
+#[test]
+fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
+    let (env, client, admins, _merchant) = setup();
+    let old_admin = admins.get(0).unwrap();
+
+    // --- Direct path ---
+    let new_admin = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+    client.transfer_admin(&admins, &new_admins, &1);
+
+    assert_eq!(client.get_admin(), new_admins);
+    assert_eq!(client.get_threshold(), 1);
+
+    let (_, _, data) = env.events().all().last().unwrap();
+    let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload.old_admin, old_admin);
+    assert_eq!(payload.new_admin, new_admin);
+
+    assert!(
+        client.try_pause(&admins).is_err(),
+        "the old signer set must no longer satisfy an admin-gated call"
+    );
+
+    // --- Timelocked path ---
+    let next_admin = Address::generate(&env);
+    let next_admins = soroban_sdk::vec![&env, next_admin.clone()];
+    let operation = Operation::TransferAdmin(next_admins.clone(), 1);
+    client.schedule(&new_admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&new_admin, &operation);
+
+    assert_eq!(client.get_admin(), next_admins);
+    assert_eq!(client.get_threshold(), 1);
+
+    let (_, _, data) = env.events().all().last().unwrap();
+    let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload.old_admin, new_admin);
+    assert_eq!(payload.new_admin, next_admin);
+
+    assert!(
+        client.try_pause(&new_admins).is_err(),
+        "the superseded signer set must no longer satisfy an admin-gated call"
+    );
 }
