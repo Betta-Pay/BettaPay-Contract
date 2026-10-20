@@ -103,7 +103,19 @@ fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::{prop_assert, prop_assert_eq, proptest};
+    use proptest::prelude::*;
+    use proptest::{prop_assert, prop_assert_eq, prop_assume, proptest};
+
+    fn fee_test_amounts() -> impl proptest::strategy::Strategy<Value = i128> {
+        prop_oneof![
+            Just(0i128),
+            Just(1i128),
+            Just(crate::MIN_PAYMENT_AMOUNT),
+            Just(i128::MIN),
+            Just(i128::MAX),
+            1i128..=1_000_000_000i128,
+        ]
+    }
 
     #[test]
     fn is_bootstrap_rule_identifies_matching_and_divergent_rules() {
@@ -281,12 +293,62 @@ mod tests {
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
             prop_assert_eq!(split.network_fee_amount, clamped_network);
             prop_assert_eq!(split.merchant_payout_amount, clamped_merchant);
+            prop_assert_eq!(
+                split.platform_fee_amount
+                    + split.network_fee_amount
+                    + split.merchant_payout_amount,
+                split.gross_amount,
+            );
             prop_assert!(split.merchant_payout_amount >= 0);
         }
 
         #[test]
+        fn fee_ceiling_is_monotonic_for_platform_and_network_legs(
+            platform_rate in 0u32..=BPS_DENOMINATOR,
+            network_rate in 0u32..=BPS_DENOMINATOR,
+            amount_a in fee_test_amounts(),
+            amount_b in fee_test_amounts(),
+        ) {
+            let (amount_a, amount_b) = if amount_a <= amount_b {
+                (amount_a, amount_b)
+            } else {
+                (amount_b, amount_a)
+            };
+            for rate in [platform_rate, network_rate] {
+                let fee_a = Bps::new(rate).calculate_fee_ceil(amount_a);
+                let fee_b = Bps::new(rate).calculate_fee_ceil(amount_b);
+                prop_assume!(fee_a.is_some() && fee_b.is_some());
+                prop_assert!(fee_a.unwrap() <= fee_b.unwrap());
+                if rate == 0 {
+                    prop_assert_eq!(fee_a, Some(0));
+                    prop_assert_eq!(fee_b, Some(0));
+                }
+            }
+        }
+
+        #[test]
+        fn clamped_network_leg_is_monotonic_in_gross_amount(
+            platform_fee_bps in 0u32..=BPS_DENOMINATOR,
+            network_fee_bps in 0u32..=BPS_DENOMINATOR,
+            amount_a in 1i128..=1_000_000_000i128,
+            amount_b in 1i128..=1_000_000_000i128,
+        ) {
+            let (amount_a, amount_b) = if amount_a <= amount_b {
+                (amount_a, amount_b)
+            } else {
+                (amount_b, amount_a)
+            };
+            let env = Env::default();
+            let rule = rule(platform_fee_bps, network_fee_bps);
+            let split_a = calculate_split(&env, amount_a, &rule);
+            let split_b = calculate_split(&env, amount_b, &rule);
+
+            prop_assert!(split_a.network_fee_amount <= split_b.network_fee_amount);
+        }
+
+        #[test]
         fn zero_fee_legs_preserve_the_gross_amount(
-            amount in 1i128..=i128::MAX,
+            amount in 0i128..=i128::MAX,
         ) {
             let env = Env::default();
             let rule = SettlementRule {
