@@ -61,6 +61,7 @@
 //! | `DataKey::ArchivedMerchant(Address)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister |
 //! | `DataKey::Payment(Address, BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Scoped by merchant and payment reference |
 //! | `DataKey::ScheduledOperation(BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Timelocked operation payload and execute_at |
+//! | `DataKey::PendingOperationCount` | `settlement_contract` | Instance | Instance TTL | **Contract-Local / Settlement-Only**: Pending timelock queue depth, incremented by `schedule` and decremented by `execute` / `cancel` / `cancel_all` |
 //! | `governance_contract::DataKey::Admin` | `governance_contract` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Governance admin set |
 //! | `governance_contract::DataKey::FeeConfig` | `governance_contract` | Instance | Instance TTL | **Contract-Local / Governance-Only**: Protocol fee ceilings |
 //! | `governance_contract::DataKey::SchemaVersion` | `governance_contract` | Instance | Instance TTL | **Contract-Local**: Governance schema version |
@@ -74,7 +75,7 @@
 //! - **Contract-Local Admin**: `Admin` is contract-local (`Vec<Address>`) declared in each contract's
 //!   own `DataKey` enum, preserving administrative separation.
 //! - **Settlement-Only Keys**: `CachedGovRule`, `Initializing`, `Governance`, `DefaultRule`, `Merchant`,
-//!   `Rule`, `ArchivedMerchant`, `Payment`, and `ScheduledOperation`.
+//!   `Rule`, `ArchivedMerchant`, `Payment`, `ScheduledOperation`, and `PendingOperationCount`.
 //! - **Governance-Only Keys**: `FeeConfig`, `Anchor`, and `SystemParam`.
 //! - **Local Duplications**: `SchemaVersion` and `Deployer` are declared locally in each contract
 //!   to manage contract-specific migration baselines and deployer authorization independently.
@@ -179,7 +180,7 @@
 //! The pause flag blocks payment-processing and merchant-management
 //! operations (`register_merchant`, `unregister_merchant`,
 //! `set_settlement_rule`, `clear_settlement_rule`, `set_default_rule`,
-//! `store_payment_reference`, `update_governance` all call
+//! `store_payment_reference`, `prune_payment`, `update_governance` all call
 //! `assert_not_paused`). The following administrative operations are
 //! intentionally NOT blocked during pause, so the admin can fix the root
 //! cause of the emergency:

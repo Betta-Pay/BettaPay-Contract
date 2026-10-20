@@ -291,6 +291,42 @@ pub(crate) fn decrement_payment_count(env: &Env, merchant: &Address, by: u32) {
         .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
 }
 
+/// Returns the number of scheduled operations currently pending in the
+/// timelock queue (issue #887). A missing counter means an empty queue, so a
+/// fresh contract reads as zero.
+pub(crate) fn read_pending_operation_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PendingOperationCount)
+        .unwrap_or(0)
+}
+
+/// Records that one operation was added to the timelock queue.
+///
+/// The counter lives in instance storage alongside the other queue-wide
+/// singletons and is maintained by `schedule`; it is the only way to observe
+/// queue depth because Soroban cannot enumerate persistent
+/// `ScheduledOperation` keys.
+pub(crate) fn increment_pending_operation_count(env: &Env) {
+    let count = read_pending_operation_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingOperationCount, &count.saturating_add(1));
+}
+
+/// Records that `by` operations left the timelock queue via `execute`,
+/// `cancel`, or `cancel_all`. A `by` of zero is a no-op and the counter never
+/// underflows below zero, so a repeated or skipped removal cannot corrupt it.
+pub(crate) fn decrement_pending_operation_count(env: &Env, by: u32) {
+    if by == 0 {
+        return;
+    }
+    let count = read_pending_operation_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingOperationCount, &count.saturating_sub(by));
+}
+
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, then governance fee config, and finally using the bootstrap fallback.
 /// See `docs/bootstrap-fallback.md` for full semantics, trigger conditions, and emission rules.

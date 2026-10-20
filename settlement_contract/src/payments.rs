@@ -8,10 +8,10 @@ use crate::policy::{
     PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_not_paused, assert_payments_readable, decrement_payment_count,
-    increment_payment_count, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
-    read_min_payment_amount, read_payment_count, read_rule_or_default,
-    read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
+    assert_admin_and_not_paused, assert_not_paused, assert_payments_readable,
+    decrement_payment_count, increment_payment_count, is_merchant_registered_and_bump_ttl,
+    is_merchant_registered_internal, read_min_payment_amount, read_payment_count,
+    read_rule_or_default, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -568,17 +568,43 @@ impl SettlementContract {
     /// Remove a payment reference after the configured admin threshold has
     /// authorized the operation. Removing a missing record is intentionally a
     /// no-op so maintenance callers can safely retry cleanup work.
+    ///
+    /// When a record actually exists, it is removed and a single
+    /// `payment_pruned` event is emitted with topics
+    /// `(Symbol("payment_pruned"), merchant, reference)` and data
+    /// `(merchant, reference)` (issue #890). The missing-record no-op path
+    /// emits nothing, so indexers never observe a prune that removed nothing.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if the signers do
+    ///   not satisfy the admin threshold.
     pub fn prune_payment(
         env: Env,
         signers: Vec<Address>,
         merchant: Address,
         reference: BytesN<32>,
     ) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        let key = DataKey::Payment(merchant.clone(), reference);
+        // Payment pruning is a state-mutating admin action, so it follows the
+        // same pause guard as every other mutation (issue #889). The guard
+        // runs before auth so a paused contract consistently reports `Paused`
+        // rather than leaking whether the supplied signer set is authorized.
+        assert_admin_and_not_paused(&env, &signers);
+        let key = DataKey::Payment(merchant.clone(), reference.clone());
         if env.storage().persistent().has(&key) {
             env.storage().persistent().remove(&key);
             decrement_payment_count(&env, &merchant, 1);
+            // Issue #890: one event per actually-removed record. Keeping the
+            // publish inside this branch also keeps the no-op path silent.
+            env.events().publish(
+                (
+                    Symbol::new(&env, events::PAYMENT_PRUNED_EVENT),
+                    merchant.clone(),
+                    reference.clone(),
+                ),
+                (merchant, reference),
+            );
         }
     }
 

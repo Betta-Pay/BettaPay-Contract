@@ -157,7 +157,8 @@ pub enum Operation {
 /// All `DataKey` variants follow the UpperCamelCase singular noun convention
 /// without ad-hoc abbreviations (e.g., `Admin`, `Initializing`, `Governance`,
 /// `Merchant`, `Rule`, `ArchivedMerchant`, `DefaultRule`, `Payment`,
-/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`).
+/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`,
+/// `PaymentCount`, `PendingOperationCount`).
 ///
 /// **Stability Notice:**
 /// In Soroban, contracttype enum variants are serialized into ledger keys using
@@ -212,4 +213,9 @@ pub(crate) enum DataKey {
     /// `prune_payments`. Absence means zero, matching a registered merchant
     /// that has never stored a payment.
     PaymentCount(Address),
+    /// Instance — number of scheduled operations currently pending in the
+    /// timelock queue (issue #887). Incremented by `schedule`, decremented by
+    /// `execute`, `cancel`, and `cancel_all`. Absence means zero, so a fresh
+    /// contract reports an empty queue without an initialisation write.
+    PendingOperationCount,
 }

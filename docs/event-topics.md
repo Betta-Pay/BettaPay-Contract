@@ -63,10 +63,18 @@ is emitted by both contracts; other rows identify the only emitting contract.
 | `BOOTSTRAP_FALLBACK_EVENT` | `bootstrap_fallback` | Settlement |
 | `PAYMENT_STORED_EVENT` | `payment_stored` | Settlement |
 | `PAYMENTS_PRUNED_EVENT` | `payments_pruned` | Settlement |
+| `PAYMENT_PRUNED_EVENT` | `payment_pruned` | Settlement |
 | `OP_SCHEDULED_EVENT` | `op_scheduled` | Settlement |
 | `OP_EXECUTED_EVENT` | `op_executed` | Settlement |
 | `OP_CANCELLED_EVENT` | `op_cancelled` | Settlement |
 | `FEE_CEILING_REJECTED_EVENT` | `fee_ceiling_rejected` | Settlement |
+
+### `payment_pruned` payload
+
+`prune_payment` emits exactly one event per actually-removed record with
+topics `(Symbol("payment_pruned"), merchant, reference)` and data
+`(merchant, reference)`. Pruning a missing record is a no-op and emits
+nothing, so an indexer never sees a prune that removed no state (issue #890).
 
 ## Stability and changes
 

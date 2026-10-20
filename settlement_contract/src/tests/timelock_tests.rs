@@ -1039,3 +1039,183 @@ fn cancel_after_execute_returns_operation_not_scheduled() {
         "a failed cancel must not resurrect the scheduled slot"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #888: execute consumes the ScheduledOperation on every path
+// ---------------------------------------------------------------------------
+
+/// The scheduled slot is removed before the operation is applied, so a
+/// successful execution is a one-shot transition. A retry fails with the
+/// typed `OperationNotScheduled` error, and retrying that failure again leaves
+/// both the slot and the error unchanged — the operation can never be replayed.
+#[test]
+fn execute_consumes_slot_and_failed_retry_stays_operation_not_scheduled() {
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant.clone());
+    let executor = admins.get(0).unwrap();
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_some(),
+        "schedule must queue the operation"
+    );
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&executor, &operation);
+
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_none(),
+        "execute must consume the scheduled slot before applying the operation"
+    );
+
+    let failed_retry = client.try_execute(&executor, &operation);
+    assert_eq!(
+        failed_retry.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into())),
+        "a replay after execution must fail with OperationNotScheduled"
+    );
+
+    // A retry of the failed execute is not a re-schedule: the queue stays
+    // empty and the same typed error is returned.
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+    let retry_after_failure = client.try_execute(&executor, &operation);
+    assert_eq!(
+        retry_after_failure.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into())),
+        "a retry after a failed execute must stay OperationNotScheduled"
+    );
+}
+
+/// The recovery veto is checked before the slot is consumed, so a vetoed
+/// execution leaves the operation queued. Once the recovery is cancelled the
+/// same operation executes exactly once, after which retries are
+/// `OperationNotScheduled`.
+#[test]
+fn recovery_veto_preserves_scheduled_slot_until_recovery_resolves() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+    let executor = admins.get(0).unwrap();
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.initiate_recovery(&Address::generate(&env));
+    let vetoed = client.try_execute(&executor, &operation);
+    assert_eq!(
+        vetoed.err(),
+        Some(Ok(SettlementError::RecoveryDelayActive.into())),
+        "a pending recovery must veto the execution"
+    );
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_some(),
+        "the RecoveryDelayActive veto must leave the scheduled slot intact"
+    );
+
+    client.cancel_recovery(&admins);
+    client.execute(&executor, &operation);
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_none(),
+        "execution must consume the slot once the veto is lifted"
+    );
+
+    let retry = client.try_execute(&executor, &operation);
+    assert_eq!(
+        retry.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #887: scheduled-operation queue-depth metric
+// ---------------------------------------------------------------------------
+
+/// The queue-depth query starts at zero on a fresh contract and tracks
+/// schedule, execute, and cancel. A failed cancel of a missing operation
+/// leaves the count untouched and a failed replay after execution cannot
+/// underflow it.
+#[test]
+fn pending_operation_count_tracks_schedule_execute_and_cancel() {
+    let (env, client, admins, _merchant) = setup();
+
+    assert_eq!(
+        client.get_pending_operation_count(),
+        0,
+        "a fresh contract must report an empty timelock queue"
+    );
+
+    let first_merchant = Address::generate(&env);
+    let second_merchant = Address::generate(&env);
+    let first = Operation::RegisterMerchant(first_merchant.clone());
+    let second = Operation::RegisterMerchant(second_merchant.clone());
+
+    client.schedule(&admins, &first, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 1);
+    client.schedule(&admins, &second, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 2);
+
+    // Cancelling an operation that is not queued fails before any removal, so
+    // the counter cannot underflow.
+    let missing = Operation::RegisterMerchant(Address::generate(&env));
+    let missing_cancel = client.try_cancel(&admins, &missing);
+    assert_eq!(
+        missing_cancel.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+    assert_eq!(
+        client.get_pending_operation_count(),
+        2,
+        "a failed cancel of a missing operation must not change the count"
+    );
+
+    client.cancel(&admins, &first);
+    assert_eq!(client.get_pending_operation_count(), 1);
+    assert!(read_scheduled_op(&env, &client, &first).is_none());
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap(), &second);
+    assert_eq!(client.get_pending_operation_count(), 0);
+    assert!(client.is_merchant_registered(&second_merchant));
+
+    // A replay fails with OperationNotScheduled; the counter must stay at 0.
+    let replay = client.try_execute(&admins.get(0).unwrap(), &second);
+    assert_eq!(
+        replay.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+    assert_eq!(
+        client.get_pending_operation_count(),
+        0,
+        "a failed replay must not decrement the counter below zero"
+    );
+}
+
+/// `cancel_all` removes each actually-cancelled queue entry and decrements the
+/// metric once per removal, skipping missing entries without touching it.
+#[test]
+fn pending_operation_count_tracks_cancel_all() {
+    let (env, client, admins, _merchant) = setup();
+
+    let first = Operation::RegisterMerchant(Address::generate(&env));
+    let second = Operation::RegisterMerchant(Address::generate(&env));
+    client.schedule(&admins, &first, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &second, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 2);
+
+    let missing = Operation::RegisterMerchant(Address::generate(&env));
+    let batch = soroban_sdk::vec![&env, first.clone(), missing, first.clone()];
+    assert_eq!(client.cancel_all(&admins, &batch), 1);
+    assert_eq!(
+        client.get_pending_operation_count(),
+        1,
+        "cancel_all must decrement only for operations it actually removed"
+    );
+
+    client.cancel(&admins, &second);
+    assert_eq!(client.get_pending_operation_count(), 0);
+}

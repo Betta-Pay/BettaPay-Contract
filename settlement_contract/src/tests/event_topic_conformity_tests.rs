@@ -264,6 +264,65 @@ fn default_rule_and_payment_use_canonical_topics() {
     );
 }
 
+/// Issue #890: `prune_payment` emits exactly one `payment_pruned` event with
+/// the canonical topic and `(merchant, reference)` payload, and stays silent
+/// when the record does not exist.
+#[test]
+fn prune_payment_emits_one_canonical_event_and_none_on_noop() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = BytesN::from_array(&env, &[9; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+
+    let before = env.events().all().len();
+    client.prune_payment(&admins, &merchant, &reference);
+
+    let emitted = env.events().all();
+    assert_eq!(
+        emitted.len() - before,
+        1,
+        "a successful prune must emit exactly one event"
+    );
+
+    let (_, topics, data) = emitted.get(emitted.len() - 1).unwrap();
+    assert_eq!(
+        topics.len(),
+        3,
+        "payment_pruned topics must be (name, merchant, reference)"
+    );
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::PAYMENT_PRUNED_EVENT),
+        "topic[0] must match the registered constant"
+    );
+    assert_eq!(
+        Address::from_val(&env, &topics.get(1).unwrap()),
+        merchant,
+        "topic[1] must carry the merchant"
+    );
+    assert_eq!(
+        BytesN::<32>::from_val(&env, &topics.get(2).unwrap()),
+        reference,
+        "topic[2] must carry the payment reference"
+    );
+
+    let (payload_merchant, payload_reference): (Address, BytesN<32>) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload_merchant, merchant, "payload merchant must match");
+    assert_eq!(payload_reference, reference, "payload reference must match");
+
+    // Pruning an already-removed record is a no-op and must not emit a second
+    // event, so indexers cannot observe a prune that removed nothing.
+    let before_noop = env.events().all().len();
+    client.prune_payment(&admins, &merchant, &reference);
+    assert_eq!(
+        env.events().all().len(),
+        before_noop,
+        "pruning a missing record must emit no event"
+    );
+}
+
 #[test]
 fn scheduled_operation_lifecycle_uses_canonical_topics() {
     let (env, client, admins, merchant) = setup();

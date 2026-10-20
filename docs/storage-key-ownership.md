@@ -26,6 +26,7 @@ The following master table maps every key variant to its owning crate, storage k
 | **`settlement_contract::DataKey::ArchivedMerchant(Address)`** | `settlement_contract` | Persistent | `bool` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister to orphan payment history. |
 | **`settlement_contract::DataKey::Payment(Address, BytesN<32>)`** | `settlement_contract` | Persistent | `PaymentRecord` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Payment record scoped by merchant and 32-byte reference. |
 | **`settlement_contract::DataKey::ScheduledOperation(BytesN<32>)`** | `settlement_contract` | Persistent | `ScheduledOp` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Pending timelocked operation payload and `execute_at` timestamp. |
+| **`settlement_contract::DataKey::PendingOperationCount`** | `settlement_contract` | Instance | `u32` | Instance TTL | **Contract-Local / Settlement-Only**: Queue-depth metric for pending timelocked operations. Incremented by `schedule`; decremented by `execute`, `cancel`, and `cancel_all`. Absence means zero. |
 | **`governance_contract::DataKey::Admin`** | `governance_contract` | Instance | `Vec<Address>` | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Multisig admin set for governance contract only. |
 | **`governance_contract::DataKey::FeeConfig`** | `governance_contract` | Instance | `FeeConfig` | Instance TTL | **Contract-Local / Governance-Only**: Protocol fee ceilings (`platform_fee_bps`, `network_fee_bps`). |
 | **`governance_contract::DataKey::SchemaVersion`** | `governance_contract` | Instance | `u32` | Instance TTL | **Contract-Local**: Storage schema version tracking for governance contract migrations. |
@@ -56,6 +57,7 @@ The settlement contract possesses several keys unique to payment processing:
 - `DefaultRule`: Singleton default rule stored in instance storage.
 - `Merchant`, `Rule`, `ArchivedMerchant`, `Payment`: High-volume merchant and payment tracking records.
 - `ScheduledOperation`: Fixed-size SHA-256 keyed queue for administrative timelocks.
+- `PendingOperationCount`: Instance-storage counter mirroring the number of `ScheduledOperation` entries, used as the queue-depth metric (issue #887).
 - `Initializing` & `Governance`: Ephemeral init guard and governance address reference.
 
 ### 5. Governance-Only Keys
@@ -77,4 +79,4 @@ Persistent storage entries require proactive TTL management:
   - `ScheduledOperation`: Extended on `schedule()`; removed on `execute()` or `cancel()`.
   - `Anchor` / `SystemParam`: Extended on reads and writes.
 
-Instance storage keys are tied to the contract instance lifecycle and do not expire independently as long as the contract instance remains active.
+Instance storage keys are tied to the contract instance lifecycle and do not expire independently as long as the contract instance remains active. `PendingOperationCount` therefore needs no separate TTL bump; it is kept in sync by `schedule`, `execute`, `cancel`, and `cancel_all`.

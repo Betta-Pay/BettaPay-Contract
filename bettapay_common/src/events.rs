@@ -152,6 +152,15 @@ pub const PAYMENT_STORED_EVENT: &str = "payment_stored";
 /// `(admin, removed_count)`.
 pub const PAYMENTS_PRUNED_EVENT: &str = "payments_pruned";
 
+/// Topic emitted when a single payment record is removed by `prune_payment`.
+///
+/// Topics: `(Symbol("payment_pruned"), Address merchant, BytesN<32> reference)`
+/// Data:   `(Address merchant, BytesN<32> reference)`
+///
+/// Emitted only when a record actually existed and was removed; pruning a
+/// missing record is a no-op and stays silent (issue #890).
+pub const PAYMENT_PRUNED_EVENT: &str = "payment_pruned";
+
 /// Topic emitted when a timelocked administrative operation is scheduled.
 pub const OP_SCHEDULED_EVENT: &str = "op_scheduled";
 
@@ -200,6 +209,7 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     BOOTSTRAP_FALLBACK_EVENT,
     PAYMENT_STORED_EVENT,
     PAYMENTS_PRUNED_EVENT,
+    PAYMENT_PRUNED_EVENT,
     OP_SCHEDULED_EVENT,
     OP_EXECUTED_EVENT,
     OP_CANCELLED_EVENT,

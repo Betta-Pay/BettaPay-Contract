@@ -39,6 +39,7 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "bootstrap_fallback",
     "payment_stored",
     "payments_pruned",
+    "payment_pruned",
     "op_scheduled",
     "op_executed",
     "op_cancelled",
@@ -94,6 +95,10 @@ fn lifecycle_events_use_only_registered_topics() {
     let reference = BytesN::from_array(&env, &[3; 32]);
     client.store_payment_reference(&merchant, &reference, &1_000);
     client.prune_payments(&admins, &merchant, &soroban_sdk::vec![&env, reference]);
+
+    let single_reference = BytesN::from_array(&env, &[4; 32]);
+    client.store_payment_reference(&merchant, &single_reference, &1_000);
+    client.prune_payment(&admins, &merchant, &single_reference);
 
     client.clear_settlement_rule(&admins, &merchant);
     client.unregister_merchant(&admins, &merchant);
@@ -168,6 +173,7 @@ fn conformity_tested_topics_are_all_registered() {
         events::SETTLEMENT_RULE_CLEARED_EVENT,
         events::DEFAULT_RULE_UPDATED_EVENT,
         events::PAYMENT_STORED_EVENT,
+        events::PAYMENT_PRUNED_EVENT,
         events::OP_SCHEDULED_EVENT,
         events::OP_EXECUTED_EVENT,
         events::OP_CANCELLED_EVENT,

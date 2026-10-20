@@ -193,6 +193,7 @@ What is on the ledger today, and which storage kind holds it. See [`docs/storage
 | `ArchivedMerchant(Address)` | persistent | `bool` (tombstone written when merchant unregisters, issue #490) |
 | `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` (scoped by merchant and reference, issue #493) |
 | `ScheduledOperation(BytesN<32>)` | persistent | `ScheduledOp` (timelocked operation payload and execute_at) |
+| `PendingOperationCount` | instance | `u32` (pending timelock queue depth, issue #887) |
 
 #### Shared Keys (`CommonDataKey`)
 The following instance keys are shared across contracts via `bettapay_common::storage::CommonDataKey`:

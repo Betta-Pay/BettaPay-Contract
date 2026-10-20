@@ -501,3 +501,51 @@ fn prune_payments_rejects_oversized_batch() {
         )
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Singular payment pruning pause guard (issue #889)
+// ---------------------------------------------------------------------------
+
+/// `prune_payment` is a state-mutating admin action and must be rejected with
+/// `Paused` while the contract is paused. Unpausing must make the same call
+/// succeed and actually remove the stored record. This is the regression
+/// contract for the pause guard: deleting the guard makes the paused call
+/// succeed and this test fail.
+#[test]
+fn prune_payment_is_blocked_while_paused_and_succeeds_after_unpause() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = payment_ref(&env, 42);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+    let no_signers = soroban_sdk::vec![&env];
+    assert!(
+        client
+            .get_payment_reference(&merchant, &reference, &no_signers)
+            .is_some(),
+        "the payment record must exist before pruning"
+    );
+
+    client.pause(&admins, &0);
+    let paused = client.try_prune_payment(&admins, &merchant, &reference);
+    assert_eq!(
+        paused.err(),
+        Some(Ok(SettlementError::Paused.into())),
+        "prune_payment must fail with Paused while the contract is paused"
+    );
+    assert!(
+        client
+            .get_payment_reference(&merchant, &reference, &no_signers)
+            .is_some(),
+        "a blocked prune must not remove the payment record"
+    );
+
+    client.unpause(&admins);
+    client.prune_payment(&admins, &merchant, &reference);
+    assert!(
+        client
+            .get_payment_reference(&merchant, &reference, &no_signers)
+            .is_none(),
+        "an unpaused prune must remove the payment record"
+    );
+}
