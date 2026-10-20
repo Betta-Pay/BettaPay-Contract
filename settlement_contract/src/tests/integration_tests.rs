@@ -1944,6 +1944,8 @@ fn effective_rule_precedence_walks_all_four_rungs() {
     // Clearing the override falls back to the global default.
     client.clear_settlement_rule(&admins, &merchant);
     assert_resolves_to(&default_rule, "after clear_settlement_rule");
+}
+
 // Issue #896: get_payments ordering is positional
 // ---------------------------------------------------------------------------
 

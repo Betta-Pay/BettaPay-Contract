@@ -224,9 +224,11 @@ impl SettlementContract {
 
 #[cfg(test)]
 mod rule_validation_tests {
-    use crate::tests::setup;
+    use crate::tests::{assert_rule_eq, setup};
     use crate::*;
     use bettapay_common::constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS};
+    use proptest::prelude::*;
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{Address, Env, String};
 
     const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -248,6 +250,147 @@ mod rule_validation_tests {
         Err(Ok(soroban_sdk::Error::from_contract_error(
             SettlementError::InvalidFeeBps as u32,
         )))
+    }
+
+    fn rule_is_within_bounds(rule: &SettlementRule) -> bool {
+        rule.platform_fee_bps >= MIN_FEE_BPS
+            && rule.platform_fee_bps <= MAX_FEE_BPS
+            && rule.network_fee_bps >= MIN_FEE_BPS
+            && rule.network_fee_bps <= MAX_FEE_BPS
+            && rule
+                .platform_fee_bps
+                .checked_add(rule.network_fee_bps)
+                .is_some_and(|sum| sum <= BPS_DENOMINATOR)
+            && rule.settlement_delay_ledger <= MAX_SETTLEMENT_DELAY_LEDGER
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Random fee pairs and delays cover both setter branches. Accepted
+        /// rules are persisted by both direct and timelocked writes; rejected
+        /// rules leave the prior value absent from storage.
+        #[test]
+        fn setter_paths_agree_on_rule_bounds(
+            platform_fee_bps in prop_oneof![
+                Just(MIN_FEE_BPS),
+                Just(MAX_FEE_BPS),
+                Just(BPS_DENOMINATOR),
+                any::<u32>(),
+            ],
+            network_fee_bps in prop_oneof![
+                Just(MIN_FEE_BPS),
+                Just(MAX_FEE_BPS),
+                Just(BPS_DENOMINATOR),
+                any::<u32>(),
+            ],
+            settlement_delay_ledger in prop_oneof![
+                Just(MAX_SETTLEMENT_DELAY_LEDGER),
+                Just(MAX_SETTLEMENT_DELAY_LEDGER + 1),
+                any::<u32>(),
+            ],
+            auto_settle in any::<bool>(),
+        ) {
+            let candidate = SettlementRule {
+                platform_fee_bps,
+                network_fee_bps,
+                settlement_delay_ledger,
+                auto_settle,
+            };
+            let accepted = rule_is_within_bounds(&candidate);
+
+            let (_direct_env, direct_client, direct_admins, _merchant) = setup();
+            let direct_result = direct_client.try_set_default_rule(&direct_admins, &candidate);
+            prop_assert_eq!(direct_result.is_ok(), accepted);
+            if accepted {
+                assert_rule_eq(
+                    &direct_client.get_default_rule().unwrap(),
+                    &candidate,
+                    "direct setter must persist every accepted rule",
+                );
+            } else {
+                prop_assert!(direct_client.get_default_rule().is_none());
+            }
+
+            let (timelock_env, timelock_client, timelock_admins, _merchant) = setup();
+            let operation = Operation::SetDefaultRule(candidate.clone());
+            let scheduled = timelock_client.try_schedule(
+                &timelock_admins,
+                &operation,
+                &DEFAULT_TIMELOCK_DELAY_SECONDS,
+            );
+            let executed = if scheduled.is_ok() {
+                timelock_env.ledger().with_mut(|ledger| {
+                    ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+                });
+                timelock_client.try_execute(&timelock_admins.get(0).unwrap(), &operation).is_ok()
+            } else {
+                false
+            };
+            prop_assert_eq!(executed, accepted);
+            if accepted {
+                assert_rule_eq(
+                    &timelock_client.get_default_rule().unwrap(),
+                    &candidate,
+                    "timelocked setter must persist every accepted rule",
+                );
+            } else {
+                prop_assert!(timelock_client.get_default_rule().is_none());
+            }
+
+            let (merchant_env, merchant_client, merchant_admins, merchant) = setup();
+            merchant_client.register_merchant(&merchant_admins, &merchant);
+            let direct_result = merchant_client.try_set_settlement_rule(
+                &merchant_admins,
+                &merchant,
+                &candidate,
+            );
+            prop_assert_eq!(direct_result.is_ok(), accepted);
+            if accepted {
+                assert_rule_eq(
+                    &merchant_client.get_settlement_rule(&merchant).unwrap(),
+                    &candidate,
+                    "direct merchant setter must persist every accepted rule",
+                );
+            } else {
+                prop_assert!(merchant_client.get_settlement_rule(&merchant).is_none());
+            }
+
+            let (merchant_timelock_env, merchant_timelock_client, merchant_timelock_admins, merchant) = setup();
+            merchant_timelock_client.register_merchant(&merchant_timelock_admins, &merchant);
+            let operation = Operation::SetSettlementRule(merchant.clone(), candidate.clone());
+            let scheduled = merchant_timelock_client.try_schedule(
+                &merchant_timelock_admins,
+                &operation,
+                &DEFAULT_TIMELOCK_DELAY_SECONDS,
+            );
+            let executed = if scheduled.is_ok() {
+                merchant_timelock_env.ledger().with_mut(|ledger| {
+                    ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS;
+                });
+                merchant_timelock_client
+                    .try_execute(&merchant_timelock_admins.get(0).unwrap(), &operation)
+                    .is_ok()
+            } else {
+                false
+            };
+            prop_assert_eq!(executed, accepted);
+            if accepted {
+                assert_rule_eq(
+                    &merchant_timelock_client
+                        .get_settlement_rule(&merchant)
+                        .unwrap(),
+                    &candidate,
+                    "timelocked merchant setter must persist every accepted rule",
+                );
+            } else {
+                prop_assert!(
+                    merchant_timelock_client
+                        .get_settlement_rule(&merchant)
+                        .is_none()
+                );
+            }
+        }
     }
 
     // #806
