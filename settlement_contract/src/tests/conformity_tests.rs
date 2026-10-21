@@ -61,7 +61,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 34] {
+fn settlement_codes() -> [(&'static str, u32); 37] {
     [
         (
             "AlreadyInitialized",
@@ -148,6 +148,18 @@ fn settlement_codes() -> [(&'static str, u32); 34] {
             SettlementError::OperationHashCollision as u32,
         ),
         ("AdminSetEmpty", SettlementError::AdminSetEmpty as u32),
+        (
+            "PayloadTooLarge",
+            SettlementError::PayloadTooLarge as u32,
+        ),
+        (
+            "ExecutionDelayTooLong",
+            SettlementError::ExecutionDelayTooLong as u32,
+        ),
+        (
+            "InvalidPauseReason",
+            SettlementError::InvalidPauseReason as u32,
+        ),
     ]
 }
 
@@ -337,6 +349,28 @@ fn contract_specific_codes_stay_in_their_reserved_range() {
     bettapay_common::error_codes::assert_no_code_collisions(
         &settlement_codes(),
         bettapay_common::error_codes::SETTLEMENT_RANGE_START,
+    );
+
+    // Enumerate codes and flag gaps (Issue #881):
+    // Unassigned historical gaps at 301 and 305 are identified and asserted.
+    let settle_gaps = bettapay_common::error_codes::find_code_gaps(
+        &settlement_codes(),
+        bettapay_common::error_codes::SETTLEMENT_RANGE_START,
+    );
+    assert_eq!(
+        settle_gaps,
+        alloc::vec![301, 305],
+        "settlement contract codes must have exactly the documented historical gaps at 301 and 305"
+    );
+
+    // Governance codes have no gaps in their active range (200..=201)
+    let gov_gaps = bettapay_common::error_codes::find_code_gaps(
+        &governance_codes(),
+        bettapay_common::error_codes::GOVERNANCE_RANGE_START,
+    );
+    assert!(
+        gov_gaps.is_empty(),
+        "governance contract codes should have no gaps in their active range"
     );
 }
 

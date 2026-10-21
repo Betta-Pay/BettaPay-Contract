@@ -47,6 +47,7 @@ pub enum SettlementError {
     AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
+    // Code 301 is an unassigned historical gap (reservation removed, issue #881).
     /// The target merchant address is not registered. Raised by
     /// `set_settlement_rule`, `store_payment_reference`, `calculate_fee_split`,
     /// and `unregister_merchant` when the merchant is missing.
@@ -56,6 +57,7 @@ pub enum SettlementError {
     DuplicatePaymentReference = 303,
     /// No merchant-specific rule has been set. The merchant will use the default rule or bootstrap fallback.
     MerchantRuleNotSet = 304,
+    // Code 305 is an unassigned historical gap (reservation removed, issue #881).
     /// The supplied address is the zero‑address.
     /// Raised by `register_merchant` and `transfer_admin`.
     ZeroAddress = 306,

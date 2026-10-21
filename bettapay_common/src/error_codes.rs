@@ -87,8 +87,9 @@ pub const SHARED_CODES: &[(&str, u32)] = &[
 
 /// Asserts that a contract's full `(name, code)` table is internally
 /// consistent with the shared registry: every code it reuses from
-/// [`SHARED_CODES`] must be attached to the matching name, and every code
-/// outside the shared `1..=99` range must fall inside `range_start..`.
+/// [`SHARED_CODES`] must be attached to the matching name, every code
+/// outside the shared `1..=99` range must fall inside `range_start..`,
+/// and no code is duplicated within the table.
 ///
 /// Intended to be called from each contract's own test suite with its full
 /// error table, so a future edit that assigns a contract-specific error the
@@ -110,6 +111,41 @@ pub fn assert_no_code_collisions(contract_codes: &[(&str, u32)], range_start: u3
             );
         }
     }
+
+    // Check for duplicate codes (collisions)
+    for (i, &(name_a, code_a)) in contract_codes.iter().enumerate() {
+        for &(name_b, code_b) in &contract_codes[i + 1..] {
+            assert_ne!(
+                code_a, code_b,
+                "duplicate code {code_a} shared between `{name_a}` and `{name_b}`"
+            );
+        }
+    }
+}
+
+/// Enumerates contract-specific codes in `contract_codes` (codes >= `range_start`)
+/// and returns any gaps (missing integers) between the minimum and maximum
+/// code in that range. Used by tests to audit and flag code space gaps.
+pub fn find_code_gaps(contract_codes: &[(&str, u32)], range_start: u32) -> alloc::vec::Vec<u32> {
+    use alloc::vec::Vec;
+
+    let mut specific_codes: Vec<u32> = contract_codes
+        .iter()
+        .map(|&(_, c)| c)
+        .filter(|&c| c >= range_start)
+        .collect();
+    specific_codes.sort_unstable();
+    specific_codes.dedup();
+
+    let mut gaps = Vec::new();
+    if let (Some(&min), Some(&max)) = (specific_codes.first(), specific_codes.last()) {
+        for expected in min..=max {
+            if !specific_codes.contains(&expected) {
+                gaps.push(expected);
+            }
+        }
+    }
+    gaps
 }
 
 #[cfg(test)]
@@ -161,6 +197,36 @@ mod tests {
     fn assert_no_code_collisions_detects_out_of_range_code() {
         let invalid: &[(&str, u32)] = &[("CustomCode", 150)];
         assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate code 200 shared between `AnchorMissing` and `DuplicateAnchor`")]
+    fn assert_no_code_collisions_detects_duplicate_contract_codes() {
+        let invalid: &[(&str, u32)] = &[
+            ("AnchorMissing", 200),
+            ("DuplicateAnchor", 200),
+        ];
+        assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+
+    #[test]
+    fn find_code_gaps_identifies_missing_numbers() {
+        let table: &[(&str, u32)] = &[
+            ("CodeA", 300),
+            ("CodeB", 302),
+            ("CodeC", 303),
+            ("CodeD", 306),
+        ];
+        let gaps = find_code_gaps(table, SETTLEMENT_RANGE_START);
+        assert_eq!(gaps, alloc::vec![301, 304, 305]);
+
+        let contiguous: &[(&str, u32)] = &[
+            ("CodeA", 300),
+            ("CodeB", 301),
+            ("CodeC", 302),
+        ];
+        let gaps = find_code_gaps(contiguous, SETTLEMENT_RANGE_START);
+        assert!(gaps.is_empty());
     }
 }
 

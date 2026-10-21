@@ -70,26 +70,28 @@ Defined in `settlement_contract/src/errors.rs` as `SettlementError`.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 300 | `MerchantNotFound` | Merchant address not registered |
-| 301 | — | **Reserved (formerly allocated, now unused)** |
-| 302 | `InvalidMerchantConfig` | Merchant configuration violates constraints |
-| 303 | `PaymentNotFound` | Payment reference does not exist |
-| 304 | `InvalidPaymentState` | Payment state transition not allowed |
-| 305 | — | **Reserved (formerly allocated, now unused)** |
-| 306 | `InsufficientBalance` | Payer balance too low for payment |
-| 307 | `InvalidRecipient` | Recipient address invalid for payment |
-| 308 | `FeeCalculationFailed` | Fee split computation failed |
-| 309 | `GovernanceCallFailed` | Cross-contract governance call returned error |
-| 310 | `ScheduleNotFound` | Scheduled operation does not exist |
-| 311 | `ScheduleAlreadyExecuted` | Scheduled operation already executed |
-| 312 | `ScheduleNotReady` | Scheduled operation execution time not reached |
-| 313 | `RecoveryNotInitiated` | Recovery mode must be initiated before execution |
-| 314 | `RecoveryAlreadyActive` | Recovery mode already in progress |
-| 315 | `InvalidRecoveryState` | Recovery state transition not allowed |
-| 316 | `UpgradeHashMismatch` | Upgrade WASM hash does not match scheduled hash |
-| 317 | `InvalidBytesLength` | Byte array length constraint violated |
-| 318 | `ReferenceAlreadyUsed` | Payment reference already exists (duplicate) |
-| 319-399 | — | **Reserved for future settlement errors** |
+| 300 | `MerchantExists` | `register_merchant` was called for an address that is already registered |
+| 301 | — | Unassigned gap (historical reservation removed) |
+| 302 | `MerchantMissing` | Target merchant address is not registered |
+| 303 | `DuplicatePaymentReference` | Reference already exists in storage for this merchant |
+| 304 | `MerchantRuleNotSet` | No merchant-specific rule set (falls back to default/bootstrap) |
+| 305 | — | Unassigned gap (historical reservation removed) |
+| 306 | `ZeroAddress` | Supplied address is the zero-address |
+| 307 | `InvalidPaymentReference` | Reference is all zeros (reserved) |
+| 308 | `InvalidSettlementDelay` | `settlement_delay_ledger` exceeds `MAX_SETTLEMENT_DELAY_LEDGER` |
+| 309 | `InvalidGovernance` | Supplied governance contract address is invalid |
+| 310 | `AmountOverflow` | Multiplying payment amount by fee BPS would overflow `i128` |
+| 311 | `GovernanceCallFailed` | Cross-contract call to governance failed |
+| 312 | `FeeExceedsGovernanceConfig` | Fee exceeds ceilings in governance fee configuration |
+| 313 | `AmountTooSmall` | Payment amount is below minimum required amount |
+| 314 | `BatchTooLarge` | Batch size exceeds allowed limit |
+| 315 | `PaymentOrphaned` | Merchant's payment records are orphaned while unregistered |
+| 316 | `OperationHashCollision` | Scheduled operation hash collision or byte mismatch |
+| 317 | `AdminSetEmpty` | Stored admin list was empty when resolving primary admin |
+| 318 | `PayloadTooLarge` | Scheduled operation XDR payload exceeds maximum length |
+| 319 | `ExecutionDelayTooLong` | Scheduled execution delay exceeds maximum timelock |
+| 320 | `InvalidPauseReason` | Pause reason code exceeds maximum pause reason |
+| 321-399 | — | **Reserved for future settlement errors** |
 
 ---
 
