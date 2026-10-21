@@ -14,7 +14,7 @@ use crate::storage::{
     read_rule_or_default, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
-use crate::{SettlementContract, SettlementContractClient};
+use crate::SettlementContract;
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
 ///
@@ -817,7 +817,6 @@ impl SettlementContract {
 
 #[cfg(test)]
 mod read_authorization_tests {
-    use super::SettlementContractClient;
     use crate::tests::setup;
     use soroban_sdk::{BytesN, Error};
 

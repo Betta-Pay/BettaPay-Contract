@@ -5,11 +5,11 @@ use bettapay_common::events;
 use crate::errors::SettlementError;
 use crate::policy::{MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD};
 use crate::storage::{
-    assert_admin_and_not_paused, assert_not_paused, is_merchant_registered_read,
-    read_fallback_rule, read_threshold, validate_nonzero_address, verify_admin_auth,
+    assert_admin_and_not_paused, is_merchant_registered_read, read_fallback_rule,
+    validate_nonzero_address,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::{SettlementContract, SettlementContractClient};
+use crate::SettlementContract;
 
 #[contractimpl]
 impl SettlementContract {

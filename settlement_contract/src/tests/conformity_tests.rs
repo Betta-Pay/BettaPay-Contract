@@ -16,7 +16,7 @@ use crate::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env};
 
-use super::{register_governance, setup};
+use super::setup;
 
 fn governance_codes() -> [(&'static str, u32); 17] {
     [
