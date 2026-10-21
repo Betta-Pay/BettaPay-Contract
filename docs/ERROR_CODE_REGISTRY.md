@@ -87,7 +87,7 @@ Defined in `settlement_contract/src/errors.rs` as `SettlementError`.
 | 314 | `RecoveryAlreadyActive` | Recovery mode already in progress |
 | 315 | `InvalidRecoveryState` | Recovery state transition not allowed |
 | 316 | `UpgradeHashMismatch` | Upgrade WASM hash does not match scheduled hash |
-| 317 | `InvalidBytesLength` | Byte array length constraint violated |
+| 317 | `AdminSetEmpty` | Stored admin list was empty when resolving primary admin |
 | 318 | `ReferenceAlreadyUsed` | Payment reference already exists (duplicate) |
 | 319-399 | — | **Reserved for future settlement errors** |
 

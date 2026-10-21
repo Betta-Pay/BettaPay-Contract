@@ -364,6 +364,31 @@ fn emits_event_on_admin_transfer() {
     assert_eq!(payload.new_admins, soroban_sdk::vec![&env, new_admin]);
 }
 
+// Issue #883: verify transfer_admin emits the exact old_admins in AdminTransferred
+// and preserves the exclusivity check between admins and merchants.
+#[test]
+fn transfer_admin_emits_expected_old_admins_and_enforces_exclusivity() {
+    let (env, client, admins, merchant) = setup();
+
+    // Enforce exclusivity: attempting to transfer to a registered merchant must fail with InvalidAdmin.
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, merchant.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidAdmin as u32)
+    );
+
+    // Valid transfer emits AdminTransferred with the exact old_admins
+    let new_admin = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+    client.transfer_admin(&admins, &new_admins, &1);
+
+    let events = env.events().all();
+    let (_contract_id, _topics, data) = events.last().unwrap();
+    let payload: AdminTransferred = AdminTransferred::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, new_admins);
+}
+
 // ---------------------------------------------------------------------------
 // pause / unpause
 // ---------------------------------------------------------------------------

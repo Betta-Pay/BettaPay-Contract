@@ -829,10 +829,11 @@ fn op_scheduled_event_count(env: &Env) -> u32 {
     count
 }
 
-/// Issue #893: a zero delay would collapse the timelock entirely. `schedule`
+/// Issues #885, #893: a zero delay collapses the timelock entirely. `schedule`
 /// must reject it with the typed `ExecutionNotReady` error, write no
-/// `ScheduledOperation` entry, and emit no `op_scheduled` event. The minimal
-/// valid delay (the floor) still schedules and emits `op_scheduled`.
+/// `ScheduledOperation` entry, and emit no `op_scheduled` event.
+/// Boundary test: delay 0 is rejected, while the minimum valid delay
+/// (`MIN_TIMELOCK_DELAY_SECONDS`) successfully schedules and emits `op_scheduled`.
 #[test]
 fn schedule_with_zero_delay_is_rejected() {
     let (env, client, admins, merchant) = setup();
@@ -929,6 +930,36 @@ fn schedule_accepts_max_delay_with_exact_execute_at() {
     let (_contract, _topics, data) = env.events().all().last().unwrap();
     let (_caller, event_execute_at): (Address, u64) = <(Address, u64)>::from_val(&env, &data);
     assert_eq!(event_execute_at, expected);
+}
+
+/// Issue #886: Boundary test at MAX_TIMELOCK_DELAY_SECONDS and just above it.
+/// A delay of MAX_TIMELOCK_DELAY_SECONDS must be accepted and scheduled,
+/// while MAX_TIMELOCK_DELAY_SECONDS + 1 must be rejected with ExecutionDelayTooLong.
+#[test]
+fn schedule_boundary_test_at_and_above_max_timelock_delay() {
+    let (env, client, admins, merchant) = setup();
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = OVERFLOW_TEST_TIMESTAMP);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    // Just above maximum delay must be rejected with typed SettlementError::ExecutionDelayTooLong
+    let result_above = client.try_schedule(&admins, &operation, &(MAX_TIMELOCK_DELAY_SECONDS + 1));
+    assert_eq!(
+        result_above,
+        Err(Ok(SettlementError::ExecutionDelayTooLong.into())),
+        "MAX_TIMELOCK_DELAY_SECONDS + 1 must be rejected with ExecutionDelayTooLong"
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+
+    // Exactly at maximum delay must succeed
+    let result_at = client.try_schedule(&admins, &operation, &MAX_TIMELOCK_DELAY_SECONDS);
+    assert!(result_at.is_ok(), "MAX_TIMELOCK_DELAY_SECONDS must be accepted");
+    let stored = read_scheduled_op(&env, &client, &operation)
+        .expect("operation scheduled at MAX_TIMELOCK_DELAY_SECONDS must be stored");
+    assert_eq!(
+        stored.execute_at,
+        OVERFLOW_TEST_TIMESTAMP + MAX_TIMELOCK_DELAY_SECONDS
+    );
 }
 
 // ---------------------------------------------------------------------------
