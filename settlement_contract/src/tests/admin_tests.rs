@@ -1322,6 +1322,40 @@ fn single_signer_cannot_change_two_of_two_threshold() {
     assert_eq!(client.get_threshold(), 1);
 }
 
+#[test]
+fn single_admin_threshold_one_end_to_end() {
+    let (env, client, admins, _merchant) = setup();
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 1);
+
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &rule);
+    assert_eq!(client.get_threshold(), 1);
+
+    let new_admin = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+    let operation = Operation::TransferAdmin(new_admins.clone(), 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap(), &operation);
+    assert_eq!(client.get_admin(), new_admins);
+    assert_eq!(client.get_threshold(), 1);
+
+    let recovered_admin = Address::generate(&env);
+    client.initiate_recovery(&recovered_admin);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+    client.execute_recovery();
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, recovered_admin]);
+    assert_eq!(client.get_threshold(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // recovery
 // ---------------------------------------------------------------------------
