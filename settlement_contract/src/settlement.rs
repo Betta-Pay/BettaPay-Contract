@@ -227,15 +227,8 @@ mod rule_validation_tests {
     use crate::tests::{assert_rule_eq, setup};
     use crate::*;
     use bettapay_common::constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS};
+    use bettapay_common::storage::zero_address;
     use proptest::prelude::*;
-    use soroban_sdk::testutils::Ledger;
-    use soroban_sdk::{Address, Env, String};
-
-    const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-
-    fn zero_address(env: &Env) -> Address {
-        Address::from_string(&String::from_str(env, ZERO_ADDRESS_STRKEY))
-    }
 
     fn rule(platform_fee_bps: u32, network_fee_bps: u32, delay: u32) -> SettlementRule {
         SettlementRule {

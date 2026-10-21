@@ -22,12 +22,9 @@ use soroban_sdk::{Address, Env, Vec};
 
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use bettapay_common::events::PendingRecovery;
-use bettapay_common::storage::CommonDataKey;
+use bettapay_common::storage::{CommonDataKey, ZERO_ADDRESS_STRKEY};
 
 use super::{register_governance, setup};
-
-/// Stellar's zero-address (all-zero ed25519 public key) in strkey form.
-const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
 fn zero_address(env: &Env) -> Address {
     Address::from_string(&soroban_sdk::String::from_str(env, ZERO_ADDRESS_STRKEY))

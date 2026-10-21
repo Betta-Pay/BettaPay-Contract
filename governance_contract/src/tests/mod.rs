@@ -210,10 +210,7 @@ fn governance_rejects_zero_threshold_init() {
 #[should_panic(expected = "Error(Contract, #6)")]
 fn governance_rejects_zero_address_admin_transfer() {
     let (env, client, admins, _recovery) = setup();
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.transfer_admin(&admins, &vec![&env, zero_address], &1);
 }
@@ -434,10 +431,7 @@ fn upserts_and_removes_anchor() {
 #[should_panic(expected = "Error(Contract, #6)")]
 fn rejects_upsert_anchor_with_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     let anchor = Address::generate(&env);
 
     client.upsert_anchor(&admins, &zero_address, &anchor);
@@ -448,10 +442,7 @@ fn rejects_upsert_anchor_with_zero_address_asset() {
 fn rejects_upsert_anchor_with_zero_address_anchor() {
     let (env, client, admins, _recovery) = setup();
     let asset = Address::generate(&env);
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.upsert_anchor(&admins, &asset, &zero_address);
 }
@@ -1513,10 +1504,7 @@ fn paused_with_bad_auth_yields_paused_over_unauthorized() {
 #[should_panic(expected = "Error(Contract, #6)")]
 fn upsert_anchor_rejects_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
     let anchor = Address::generate(&env);
     client.upsert_anchor(&admins, &zero, &anchor);
 }
@@ -1528,4 +1516,39 @@ fn upsert_anchor_accepts_valid_address() {
     let anchor = Address::generate(&env);
     client.upsert_anchor(&admins, &asset, &anchor);
     assert_eq!(client.get_anchor(&asset), Some(anchor));
+}
+
+#[test]
+fn zero_address_and_empty_string_governance_validation() {
+    let (env, client, admins, _recovery) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+
+    // Transferring admin to zero address must fail with InvalidAdmin (6)
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, zero.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
+
+    // Updating recovery address to zero address must fail with InvalidRecoveryAddress (7)
+    let res = client.try_update_recovery_address(&admins, &zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    // Initiating recovery with zero address target must fail with InvalidAdmin (6)
+    let res = client.try_initiate_recovery(&zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
+
+    // Empty-string address input fails conversion before invocation
+    let empty_str = soroban_sdk::String::from_str(&env, "");
+    let empty_res = Address::try_from_string(&empty_str);
+    assert!(
+        empty_res.is_err(),
+        "empty string must fail Address conversion before contract invocation"
+    );
 }

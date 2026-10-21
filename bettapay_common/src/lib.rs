@@ -44,3 +44,5 @@ pub mod events;
 pub mod storage;
 pub mod types;
 pub mod upgrade;
+
+pub use storage::{is_zero_address, zero_address, ZERO_ADDRESS_STRKEY};
