@@ -37,12 +37,9 @@ fn make_rule(platform_fee_bps: u32, network_fee_bps: u32, delay: u32) -> Settlem
     }
 }
 
-/// SettlementRule does not derive PartialEq/Debug, so compare field-wise.
+/// Compares two SettlementRule values directly.
 fn rules_equal(a: &SettlementRule, b: &SettlementRule) -> bool {
-    a.platform_fee_bps == b.platform_fee_bps
-        && a.network_fee_bps == b.network_fee_bps
-        && a.settlement_delay_ledger == b.settlement_delay_ledger
-        && a.auto_settle == b.auto_settle
+    a == b
 }
 
 /// Establishes a known instance-TTL baseline of exactly `READ_INSTANCE_TTL_BUMP`
@@ -492,7 +489,7 @@ fn get_settlement_rule_no_bump_returns_same_rule_without_extending_ttl() {
     let via_no_bump = client
         .get_settlement_rule_no_bump(&merchant)
         .expect("rule must be set");
-    assert!(rules_equal(&stored, &via_no_bump));
+    assert_eq!(stored, via_no_bump);
 }
 
 #[test]
@@ -556,7 +553,7 @@ fn get_effective_rule_returns_identical_rule_without_extending_ttl() {
     let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
 
     let again = client.get_effective_rule(&merchant);
-    assert!(rules_equal(&again, &effective));
+    assert_eq!(again, effective);
 
     let ttl_after = env.as_contract(&contract_address, || {
         env.storage()
@@ -843,10 +840,10 @@ fn reregistration_falls_back_to_default_rule_not_old_merchant_rule() {
         })
     };
     assert!(has_rule());
-    assert!(rules_equal(
-        &client.get_effective_rule(&merchant),
-        &merchant_rule
-    ));
+    assert_eq!(
+        client.get_effective_rule(&merchant),
+        merchant_rule
+    );
 
     client.unregister_merchant(&admins, &merchant);
     assert!(!has_rule(), "unregister must remove DataKey::Rule");
@@ -871,8 +868,8 @@ fn reregistration_falls_back_to_default_rule_not_old_merchant_rule() {
     let (admin, removed, fallback): (Address, SettlementRule, SettlementRule) =
         TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(admin, admins.get(0).unwrap());
-    assert!(rules_equal(&removed, &merchant_rule));
-    assert!(rules_equal(&fallback, &default_rule));
+    assert_eq!(removed, merchant_rule);
+    assert_eq!(fallback, default_rule);
 
     // Re-register: precedence is merchant rule > default rule > governance >
     // bootstrap. With no merchant rule stored, the default must win — never
@@ -884,8 +881,8 @@ fn reregistration_falls_back_to_default_rule_not_old_merchant_rule() {
     );
 
     let effective = client.get_effective_rule(&merchant);
-    assert!(rules_equal(&effective, &default_rule));
-    assert!(!rules_equal(&effective, &merchant_rule));
+    assert_eq!(effective, default_rule);
+    assert_ne!(effective, merchant_rule);
 
     // New payments are priced with the default rule, not the old one.
     let reference = BytesN::<32>::from_array(&env, &[5u8; 32]);

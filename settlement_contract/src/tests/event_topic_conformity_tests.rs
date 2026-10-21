@@ -536,10 +536,8 @@ fn rule_updated_carries_prev_and_new() {
     let data = payload.expect("settlement_rule_updated event must have been emitted");
     let (_executor, prev, new): (Address, SettlementRule, SettlementRule) =
         TryFromVal::try_from_val(&env, &data).unwrap();
-    assert_eq!(prev.platform_fee_bps, old_rule.platform_fee_bps);
-    assert_eq!(prev.network_fee_bps, old_rule.network_fee_bps);
-    assert_eq!(new.platform_fee_bps, new_rule.platform_fee_bps);
-    assert_eq!(new.network_fee_bps, new_rule.network_fee_bps);
+    assert_eq!(prev, old_rule);
+    assert_eq!(new, new_rule);
 }
 
 #[test]

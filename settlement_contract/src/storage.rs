@@ -32,6 +32,7 @@ pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
+#[allow(dead_code)] // Helper for accessing primary admin when only single admin address is needed
 pub(crate) fn read_admin(env: &Env) -> Address {
     storage::primary_admin(&read_admins(env))
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AdminSetEmpty))
@@ -46,6 +47,17 @@ pub(crate) fn read_optional_admins(env: &Env) -> Vec<Address> {
         .instance()
         .get(&DataKey::Admin)
         .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Returns the primary admin address, or the zero-address sentinel when the
+/// admin entry is missing or has no primary. Preserved per ADR-004.
+#[allow(dead_code)] // Preserved for ADR-004 compatibility
+pub(crate) fn read_optional_primary_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get::<_, Vec<Address>>(&DataKey::Admin)
+        .and_then(|admins| storage::primary_admin(&admins))
+        .unwrap_or_else(|| storage::zero_address(env))
 }
 
 /// Validates and writes the complete admin configuration in its canonical

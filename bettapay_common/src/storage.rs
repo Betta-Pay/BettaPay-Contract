@@ -129,10 +129,18 @@ pub fn primary_admin(admins: &Vec<Address>) -> Option<Address> {
     admins.get(0)
 }
 
+/// The canonical zero-address Stellar strkey sentinel.
+pub const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+/// Constructs the zero-address `Address` sentinel for the current environment.
+pub fn zero_address(env: &Env) -> Address {
+    Address::from_string(&String::from_str(env, ZERO_ADDRESS_STRKEY))
+}
+
 /// Returns `true` if `address` is the network's zero address.
 ///
-/// The Soroban zero-address is the well-known string
-/// `"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"` (a `G...`
+/// The Soroban zero-address is the well-known string [`ZERO_ADDRESS_STRKEY`]
+/// (`"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"`, a `G...`
 /// Stellar-style address whose 32-byte key is all zeros). Both contracts need
 /// to reject this on admin transfer, merchant registration, etc., so the
 /// comparison lives here and callers translate a `true` result into their own
@@ -148,18 +156,8 @@ pub fn primary_admin(admins: &Vec<Address>) -> Option<Address> {
 /// (`Address`'s `PartialEq` delegates to the host's `obj_cmp`) with no
 /// per-call `String` allocation on the hot path.
 pub fn is_zero_address(env: &Env, address: &Address) -> bool {
-    // Soroban contract invocations don't persist Rust statics across calls,
-    // so the zero `Address` can't be cached beyond this single call; this is
-    // already the cheaper of the two directions (see doc comment above): one
-    // `Address::from_string` parse plus one `obj_cmp` per call, versus
-    // re-deriving a `String` from the caller-supplied address every time. A
-    // `Symbol`-based sentinel is a possible future alternative if this cost
-    // ever shows up as a measured hotspot.
-    let zero_address = Address::from_string(&String::from_str(
-        env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
-    address == &zero_address
+    let zero = zero_address(env);
+    address == &zero
 }
 
 /// Bump the instance-storage TTL using the policy defined in
@@ -303,6 +301,21 @@ mod compatibility_tests {
             map.get(CommonDataKey::Threshold.into_val(&env)),
             Some(4u32),
             "Threshold encoding mismatch"
+        );
+    }
+
+    #[test]
+    fn zero_address_sentinel_and_detection() {
+        let env = Env::default();
+        let zero = zero_address(&env);
+        assert!(is_zero_address(&env, &zero));
+
+        let non_zero = Address::generate(&env);
+        assert!(!is_zero_address(&env, &non_zero));
+
+        assert_eq!(
+            ZERO_ADDRESS_STRKEY,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
         );
     }
 }

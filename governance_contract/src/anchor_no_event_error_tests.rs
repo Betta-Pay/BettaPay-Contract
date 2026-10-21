@@ -34,10 +34,7 @@ fn upsert_anchor_emits_no_event_when_unauthorized() {
 fn upsert_anchor_emits_no_event_when_zero_asset() {
     let (env, client, admins) = setup();
     let anchor = Address::generate(&env);
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
 
     let prev = env.events().all().len();
     client.upsert_anchor(&admins, &zero, &anchor);
@@ -49,10 +46,7 @@ fn upsert_anchor_emits_no_event_when_zero_asset() {
 fn upsert_anchor_emits_no_event_when_zero_anchor() {
     let (env, client, admins) = setup();
     let asset = Address::generate(&env);
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
 
     let prev = env.events().all().len();
     client.upsert_anchor(&admins, &asset, &zero);

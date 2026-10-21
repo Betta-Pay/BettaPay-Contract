@@ -10,12 +10,12 @@ use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_admin_and_not_paused, assert_not_paused, is_merchant_registered_and_bump_ttl,
-    read_fallback_rule, read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
-    validate_fee_against_governance, validate_nonzero_address, verify_admin_auth,
+    assert_admin_and_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule,
+    read_rule_or_default, read_rule_or_default_no_bump, validate_fee_against_governance,
+    validate_nonzero_address,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::{SettlementContract, SettlementContractClient};
+use crate::SettlementContract;
 
 /// Field-level bounds shared by the rule setters: each fee within
 /// `[MIN_FEE_BPS, MAX_FEE_BPS]` (and never above `BPS_DENOMINATOR`), the fee
@@ -227,15 +227,8 @@ mod rule_validation_tests {
     use crate::tests::{assert_rule_eq, setup};
     use crate::*;
     use bettapay_common::constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS};
+    use bettapay_common::storage::zero_address;
     use proptest::prelude::*;
-    use soroban_sdk::testutils::Ledger;
-    use soroban_sdk::{Address, Env, String};
-
-    const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-
-    fn zero_address(env: &Env) -> Address {
-        Address::from_string(&String::from_str(env, ZERO_ADDRESS_STRKEY))
-    }
 
     fn rule(platform_fee_bps: u32, network_fee_bps: u32, delay: u32) -> SettlementRule {
         SettlementRule {

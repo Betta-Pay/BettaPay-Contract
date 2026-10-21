@@ -275,10 +275,7 @@ fn every_admin_writer_preserves_the_vector_shape() {
 #[test]
 fn failed_recovery_keeps_pending_target() {
     let (env, client, _admins, _) = setup();
-    let zero_admin = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_admin = bettapay_common::storage::zero_address(&env);
     let pending = PendingRecovery {
         new_admin: zero_admin.clone(),
         execute_after: env.ledger().timestamp(),
@@ -304,10 +301,7 @@ fn failed_recovery_keeps_pending_target() {
 #[should_panic(expected = "Error(Contract, #306)")]
 fn rejects_zero_address_admin_transfer() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     client.transfer_admin(&admins, &soroban_sdk::vec![&env, zero_address], &1);
 }
 
@@ -923,10 +917,7 @@ fn set_default_rule_accepts_re_setting_an_unchanged_valid_rule() {
     client.set_default_rule(&admins, &rule);
 
     let stored = client.get_default_rule().unwrap();
-    assert_eq!(stored.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(stored.settlement_delay_ledger, rule.settlement_delay_ledger);
-    assert_eq!(stored.auto_settle, rule.auto_settle);
+    assert_eq!(stored, rule);
 }
 
 #[test]
@@ -1843,10 +1834,7 @@ fn update_governance_stores_validated_address() {
 #[should_panic(expected = "Error(Contract, #309)")]
 fn update_governance_rejects_zero_address() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.update_governance(&admins, &zero_address);
 }
@@ -2250,10 +2238,7 @@ fn paused_with_bad_auth_yields_paused_over_unauthorized() {
 #[should_panic(expected = "Error(Contract, #306)")]
 fn register_merchant_rejects_zero_address() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     client.register_merchant(&admins, &zero_address);
 }
 
@@ -2263,4 +2248,39 @@ fn register_merchant_accepts_valid_address() {
     assert!(!client.is_merchant_registered(&merchant));
     client.register_merchant(&admins, &merchant);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+#[test]
+fn zero_address_and_empty_string_validation_tests() {
+    let (env, client, admins, _merchant) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+
+    // Registering merchant with zero address must fail with ZeroAddress (306)
+    let res = client.try_register_merchant(&admins, &zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Transferring admin with zero address must fail with ZeroAddress (306)
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, zero.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Initiating recovery with zero address target must fail with ZeroAddress (306)
+    let res = client.try_initiate_recovery(&zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Empty-string address input is rejected during parsing
+    let empty_str = soroban_sdk::String::from_str(&env, "");
+    let empty_res = Address::try_from_string(&empty_str);
+    assert!(
+        empty_res.is_err(),
+        "empty string must fail Address conversion before contract invocation"
+    );
 }

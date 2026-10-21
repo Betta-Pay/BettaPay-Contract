@@ -22,14 +22,14 @@ use crate::policy::{
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
     decrement_pending_operation_count, increment_pending_operation_count,
-    is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admin, read_admins,
+    is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admins,
     read_fallback_rule, read_governance, read_optional_admins, read_pending_operation_count,
     read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
     read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::{SettlementContract, SettlementContractClient};
+use crate::SettlementContract;
 
 /// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
 ///
@@ -954,7 +954,6 @@ impl SettlementContract {
     fn _register_merchant(env: &Env, executor: &Address, merchant: Address) {
         assert_not_paused(env);
         validate_nonzero_address(env, &merchant, SettlementError::ZeroAddress);
-        let _admin = read_admin(env);
 
         // Prevent an admin from being registered as a merchant
         let admins = read_admins(env);
@@ -1151,6 +1150,7 @@ impl SettlementContract {
 mod tests {
     use super::*;
     use crate::tests::setup;
+    use crate::SettlementContractClient;
     use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
     use soroban_sdk::testutils::{Address as _, Ledger};
 
