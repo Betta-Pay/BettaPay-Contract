@@ -307,7 +307,10 @@ use soroban_sdk::contract;
 
 pub use errors::SettlementError;
 pub(crate) use policy::*;
-pub use policy::{FALLBACK_SETTLEMENT_DELAY_LEDGER, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT};
+pub use policy::{
+    FALLBACK_SETTLEMENT_DELAY_LEDGER, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT,
+    MAX_TIMELOCK_DELAY_SECONDS,
+};
 pub use storage::{assert_admin_and_not_paused, validate_nonzero_address};
 pub use types::{
     Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage, ScheduledOp,

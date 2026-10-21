@@ -462,3 +462,21 @@ fn recovery_veto_blocks_scheduled_upgrade() {
     client.cancel_recovery(&admins);
     client.execute(&admins.get(0).unwrap(), &op);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #884: read_admin returns SettlementError::AdminSetEmpty on empty admin set
+// ---------------------------------------------------------------------------
+
+/// Issue #884: read_admin must panic with typed SettlementError::AdminSetEmpty (317)
+/// when the stored admin set is empty, instead of producing an untyped host unwrap panic.
+#[test]
+#[should_panic(expected = "Error(Contract, #317)")]
+fn read_admin_panics_with_admin_set_empty_when_admin_set_is_empty() {
+    let (env, client, _admins, _merchant) = setup();
+    let empty: Vec<Address> = Vec::new(&env);
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::Admin, &empty);
+        crate::storage::read_admin(&env);
+    });
+}
+

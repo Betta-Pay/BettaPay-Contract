@@ -34,7 +34,8 @@ pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
 
 #[allow(dead_code)] // Helper for accessing primary admin when only single admin address is needed
 pub(crate) fn read_admin(env: &Env) -> Address {
-    storage::primary_admin(&read_admins(env)).unwrap()
+    storage::primary_admin(&read_admins(env))
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AdminSetEmpty))
 }
 
 /// Returns the stored admin set, or an empty vector when the admin entry is

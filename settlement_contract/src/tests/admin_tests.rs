@@ -358,6 +358,31 @@ fn emits_event_on_admin_transfer() {
     assert_eq!(payload.new_admins, soroban_sdk::vec![&env, new_admin]);
 }
 
+// Issue #883: verify transfer_admin emits the exact old_admins in AdminTransferred
+// and preserves the exclusivity check between admins and merchants.
+#[test]
+fn transfer_admin_emits_expected_old_admins_and_enforces_exclusivity() {
+    let (env, client, admins, merchant) = setup();
+
+    // Enforce exclusivity: attempting to transfer to a registered merchant must fail with InvalidAdmin.
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, merchant.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidAdmin as u32)
+    );
+
+    // Valid transfer emits AdminTransferred with the exact old_admins
+    let new_admin = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+    client.transfer_admin(&admins, &new_admins, &1);
+
+    let events = env.events().all();
+    let (_contract_id, _topics, data) = events.last().unwrap();
+    let payload: AdminTransferred = AdminTransferred::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, new_admins);
+}
+
 // ---------------------------------------------------------------------------
 // pause / unpause
 // ---------------------------------------------------------------------------
@@ -1311,6 +1336,57 @@ fn single_signer_cannot_change_two_of_two_threshold() {
 
     client.change_threshold(&admins, &1);
     assert_eq!(client.get_threshold(), 1);
+}
+
+#[test]
+fn update_recovery_address_rotates_address_and_gates_access() {
+    let (env, client, admins, _merchant) = setup();
+    let old_recovery = client.get_recovery_address();
+    let new_recovery = Address::generate(&env);
+
+    let before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    let events = env.events().all();
+    assert_eq!(events.len(), before + 1);
+
+    assert_eq!(client.get_recovery_address(), new_recovery);
+
+    let last = events.last().unwrap();
+    let (contract_id, topics, data) = last;
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics.len(), 2);
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(topics.get(1).unwrap(), new_recovery.clone().into_val(&env));
+
+    let non_admin = Address::generate(&env);
+    let res_non_admin = client.try_update_recovery_address(
+        &soroban_sdk::vec![&env, non_admin],
+        &Address::generate(&env),
+    );
+    assert_eq!(
+        res_non_admin.unwrap_err().unwrap(),
+        SettlementError::Unauthorized.into()
+    );
+
+    let zero_addr = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let res_zero = client.try_update_recovery_address(&admins, &zero_addr);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+
+    let target = Address::generate(&env);
+    let res_old = client.try_initiate_recovery(&target);
+    assert!(res_old.is_err());
+
+    client.initiate_recovery(&Address::generate(&env));
+    let _ = old_recovery;
 }
 
 // ---------------------------------------------------------------------------
