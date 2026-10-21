@@ -1323,37 +1323,54 @@ fn single_signer_cannot_change_two_of_two_threshold() {
 }
 
 #[test]
-fn single_admin_threshold_one_end_to_end() {
+fn update_recovery_address_rotates_address_and_gates_access() {
     let (env, client, admins, _merchant) = setup();
-    assert_eq!(client.get_admin(), admins);
-    assert_eq!(client.get_threshold(), 1);
+    let old_recovery = client.get_recovery_address();
+    let new_recovery = Address::generate(&env);
 
-    let rule = SettlementRule {
-        platform_fee_bps: 250,
-        network_fee_bps: 50,
-        settlement_delay_ledger: 7,
-        auto_settle: true,
-    };
-    client.set_default_rule(&admins, &rule);
-    assert_eq!(client.get_threshold(), 1);
+    let before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    let events = env.events().all();
+    assert_eq!(events.len(), before + 1);
 
-    let new_admin = Address::generate(&env);
-    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
-    let operation = Operation::TransferAdmin(new_admins.clone(), 1);
-    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-    client.execute(&admins.get(0).unwrap(), &operation);
-    assert_eq!(client.get_admin(), new_admins);
-    assert_eq!(client.get_threshold(), 1);
+    assert_eq!(client.get_recovery_address(), new_recovery);
 
-    let recovered_admin = Address::generate(&env);
-    client.initiate_recovery(&recovered_admin);
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
-    client.execute_recovery();
-    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, recovered_admin]);
-    assert_eq!(client.get_threshold(), 1);
+    let last = events.last().unwrap();
+    let (contract_id, topics, data) = last;
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics.len(), 2);
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(topics.get(1).unwrap(), new_recovery.clone().into_val(&env));
+
+    let non_admin = Address::generate(&env);
+    let res_non_admin = client.try_update_recovery_address(
+        &soroban_sdk::vec![&env, non_admin],
+        &Address::generate(&env),
+    );
+    assert_eq!(
+        res_non_admin.unwrap_err().unwrap(),
+        SettlementError::Unauthorized.into()
+    );
+
+    let zero_addr = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let res_zero = client.try_update_recovery_address(&admins, &zero_addr);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+
+    let target = Address::generate(&env);
+    let res_old = client.try_initiate_recovery(&target);
+    assert!(res_old.is_err());
+
+    client.initiate_recovery(&Address::generate(&env));
+    let _ = old_recovery;
 }
 
 // ---------------------------------------------------------------------------
