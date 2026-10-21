@@ -70,7 +70,7 @@ impl From<Bps> for u32 {
 /// This struct defines the fee allocation and settlement timing for a merchant,
 /// including the platform and network fee shares as well as whether
 /// settlement is processed automatically after a delay.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
 pub struct SettlementRule {
     /// Platform fee charged on each payment, expressed in basis points.
@@ -105,5 +105,56 @@ impl SettlementRule {
     /// Returns the network fee as a typed `Bps` wrapper.
     pub fn network_bps(&self) -> Bps {
         Bps::new(self.network_fee_bps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settlement_rule_partial_eq_and_debug() {
+        let rule1 = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        let rule2 = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        let rule3 = SettlementRule {
+            platform_fee_bps: 101,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+
+        assert_eq!(rule1, rule2);
+        assert_ne!(rule1, rule3);
+
+        extern crate std;
+        use std::format;
+        let formatted = format!("{:?}", rule1);
+        assert!(formatted.contains("SettlementRule"));
+        assert!(formatted.contains("platform_fee_bps: 100"));
+    }
+
+    #[test]
+    fn bps_partial_eq_and_debug() {
+        let bps1 = Bps::new(100);
+        let bps2 = Bps::new(100);
+        let bps3 = Bps::new(200);
+
+        assert_eq!(bps1, bps2);
+        assert_ne!(bps1, bps3);
+
+        extern crate std;
+        use std::format;
+        let formatted = format!("{:?}", bps1);
+        assert!(formatted.contains("Bps(100)"));
     }
 }

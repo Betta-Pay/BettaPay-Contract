@@ -898,10 +898,7 @@ fn set_default_rule_accepts_re_setting_an_unchanged_valid_rule() {
     client.set_default_rule(&admins, &rule);
 
     let stored = client.get_default_rule().unwrap();
-    assert_eq!(stored.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(stored.settlement_delay_ledger, rule.settlement_delay_ledger);
-    assert_eq!(stored.auto_settle, rule.auto_settle);
+    assert_eq!(stored, rule);
 }
 
 #[test]

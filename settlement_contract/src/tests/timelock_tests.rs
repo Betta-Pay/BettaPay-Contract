@@ -570,26 +570,14 @@ fn test_execute_uniform_auth_all_variants() {
 
     client.execute(&dummy_executor, &op_set_settlement_rule);
     let stored_rule = client.get_settlement_rule(&merchant3).unwrap();
-    assert_eq!(stored_rule.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored_rule.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(
-        stored_rule.settlement_delay_ledger,
-        rule.settlement_delay_ledger
-    );
-    assert_eq!(stored_rule.auto_settle, rule.auto_settle);
+    assert_eq!(stored_rule, rule);
 
     client.execute(&dummy_executor, &op_clear_settlement_rule);
     assert!(client.get_settlement_rule(&merchant4).is_none());
 
     client.execute(&dummy_executor, &op_set_default_rule);
     let stored_default = client.get_default_rule().unwrap();
-    assert_eq!(stored_default.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored_default.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(
-        stored_default.settlement_delay_ledger,
-        rule.settlement_delay_ledger
-    );
-    assert_eq!(stored_default.auto_settle, rule.auto_settle);
+    assert_eq!(stored_default, rule);
 
     // `Upgrade` runs last: the test host lets an empty Wasm stand in for a
     // valid contract, and `execute`'s `_upgrade` (unlike the admin-gated

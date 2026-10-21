@@ -94,10 +94,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
 
 /// Returns true if `rule` matches the bootstrap default settlement rule across all fields.
 fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
-    rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
-        && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
-        && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
-        && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
+    rule == &BOOTSTRAP_DEFAULT_RULE
 }
 
 #[cfg(test)]
