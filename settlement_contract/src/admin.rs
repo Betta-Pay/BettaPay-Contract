@@ -604,7 +604,13 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::OperationHashCollision);
         }
 
-        let execute_at = env.ledger().timestamp() + execute_in;
+        // Issue #886: ensure execute_at computation uses checked_add on
+        // env.ledger().timestamp() so arithmetic overflow is impossible.
+        let execute_at = env
+            .ledger()
+            .timestamp()
+            .checked_add(execute_in)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::ExecutionDelayTooLong));
         env.storage().persistent().set(
             &key,
             &ScheduledOp {
