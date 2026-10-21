@@ -829,10 +829,11 @@ fn op_scheduled_event_count(env: &Env) -> u32 {
     count
 }
 
-/// Issue #893: a zero delay would collapse the timelock entirely. `schedule`
+/// Issues #885, #893: a zero delay collapses the timelock entirely. `schedule`
 /// must reject it with the typed `ExecutionNotReady` error, write no
-/// `ScheduledOperation` entry, and emit no `op_scheduled` event. The minimal
-/// valid delay (the floor) still schedules and emits `op_scheduled`.
+/// `ScheduledOperation` entry, and emit no `op_scheduled` event.
+/// Boundary test: delay 0 is rejected, while the minimum valid delay
+/// (`MIN_TIMELOCK_DELAY_SECONDS`) successfully schedules and emits `op_scheduled`.
 #[test]
 fn schedule_with_zero_delay_is_rejected() {
     let (env, client, admins, merchant) = setup();

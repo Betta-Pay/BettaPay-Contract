@@ -524,11 +524,20 @@ impl SettlementContract {
     /// ([`MIN_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
     /// operation remains intact and executable when `execute_at` is reached.
     ///
+    /// # Delay Range
+    ///
+    /// The accepted timelock delay range is `[MIN_TIMELOCK_DELAY_SECONDS, MAX_TIMELOCK_DELAY_SECONDS]`.
+    /// A zero delay or any delay below `MIN_TIMELOCK_DELAY_SECONDS` collapses
+    /// the timelock boundary and is rejected with
+    /// [`ExecutionNotReady`](SettlementError::ExecutionNotReady).
+    /// A delay above `MAX_TIMELOCK_DELAY_SECONDS` is rejected with
+    /// [`ExecutionDelayTooLong`](SettlementError::ExecutionDelayTooLong).
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
-    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `MIN_TIMELOCK_DELAY_SECONDS`.
+    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is 0 or less than `MIN_TIMELOCK_DELAY_SECONDS`.
     /// * [`ExecutionDelayTooLong`](SettlementError::ExecutionDelayTooLong) — if `execute_in` exceeds
     ///   `MAX_TIMELOCK_DELAY_SECONDS` (issue #992).
     /// * [`PayloadTooLarge`](SettlementError::PayloadTooLarge) — if the operation's encoded
@@ -540,6 +549,11 @@ impl SettlementContract {
         assert_admin_and_not_paused(&env, &signers);
         let caller = signers.get(0).unwrap();
 
+        // Issue #885: Reject an execute_in of zero with a typed error so no
+        // operation can be queued without a timelock, defeating the recovery veto window.
+        if execute_in == 0 {
+            panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
         if execute_in < MIN_TIMELOCK_DELAY_SECONDS {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
