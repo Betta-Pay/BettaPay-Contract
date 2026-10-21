@@ -339,6 +339,22 @@ impl SettlementContract {
         );
     }
 
+    /// Transfers administrative authority to a new set of admins with a new threshold.
+    ///
+    /// Verifies admin signatures, validates the new admin set and threshold,
+    /// enforces admin/merchant exclusivity, writes the new admin configuration,
+    /// and emits an [`AdminTransferred`](bettapay_common::events::AdminTransferred)
+    /// event containing the previous `old_admins` set.
+    ///
+    /// Issue #883: ensures no dead first assignment or shadowed admin binding
+    /// remains in `transfer_admin`.
+    ///
+    /// # Panics
+    ///
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack required threshold.
+    /// * [`InvalidThreshold`](SettlementError::InvalidThreshold) — if `new_threshold` is 0 or exceeds `new_admins.len()`.
+    /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if any new admin is empty, duplicate, zero address, or registered as a merchant.
+    /// * [`SameAdmin`](SettlementError::SameAdmin) — if `new_admins` and `new_threshold` match current configuration.
     pub fn transfer_admin(
         env: Env,
         signers: Vec<Address>,
