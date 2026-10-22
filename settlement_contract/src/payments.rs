@@ -583,11 +583,10 @@ impl SettlementContract {
         merchant: Address,
         reference: BytesN<32>,
     ) {
-        // Payment pruning is a state-mutating admin action, so it follows the
-        // same pause guard as every other mutation (issue #889). The guard
-        // runs before auth so a paused contract consistently reports `Paused`
-        // rather than leaking whether the supplied signer set is authorized.
-        assert_admin_and_not_paused(&env, &signers);
+        // Check pause before signer authorization so `Paused` takes precedence
+        // over authorization errors and no stored payment can be removed.
+        assert_not_paused(&env);
+        verify_admin_auth(&env, &signers, read_threshold(&env));
         let key = DataKey::Payment(merchant.clone(), reference.clone());
         if env.storage().persistent().has(&key) {
             env.storage().persistent().remove(&key);

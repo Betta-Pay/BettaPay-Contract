@@ -547,6 +547,8 @@ fn prune_payments_rejects_oversized_batch() {
 /// succeed and this test fail.
 #[test]
 fn prune_payment_is_blocked_while_paused_and_succeeds_after_unpause() {
+    use soroban_sdk::testutils::Events;
+
     let (env, client, admins, merchant) = setup();
     client.register_merchant(&admins, &merchant);
 
@@ -561,11 +563,17 @@ fn prune_payment_is_blocked_while_paused_and_succeeds_after_unpause() {
     );
 
     client.pause(&admins, &0);
-    let paused = client.try_prune_payment(&admins, &merchant, &reference);
+    let events_before_prune = env.events().all().len();
+    let paused = client.try_prune_payment(&no_signers, &merchant, &reference);
     assert_eq!(
         paused.err(),
         Some(Ok(SettlementError::Paused.into())),
-        "prune_payment must fail with Paused while the contract is paused"
+        "Paused must take precedence over authorization while the contract is paused"
+    );
+    assert_eq!(
+        env.events().all().len(),
+        events_before_prune,
+        "a rejected paused prune must not emit an event"
     );
     assert!(
         client
