@@ -2251,6 +2251,55 @@ fn register_merchant_accepts_valid_address() {
 }
 
 #[test]
+fn duplicate_merchant_registration_preserves_marker_and_ttl() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.sequence_number += 100);
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+
+    assert_eq!(
+        client
+            .try_register_merchant(&admins, &merchant)
+            .unwrap_err()
+            .unwrap(),
+        SettlementError::MerchantExists.into()
+    );
+
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+    assert_eq!(ttl_after, ttl_before);
+    assert!(client.is_merchant_registered(&merchant));
+}
+
+#[test]
+fn re_registering_merchant_clears_archived_tombstone() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.unregister_merchant(&admins, &merchant);
+
+    let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+    assert!(env.as_contract(&client.address, || {
+        env.storage().persistent().has(&archived_key)
+    }));
+
+    client.register_merchant(&admins, &merchant);
+
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(!env.as_contract(&client.address, || {
+        env.storage().persistent().has(&archived_key)
+    }));
+}
+
+#[test]
 fn zero_address_and_empty_string_validation_tests() {
     let (env, client, admins, _merchant) = setup();
     let zero = bettapay_common::storage::zero_address(&env);

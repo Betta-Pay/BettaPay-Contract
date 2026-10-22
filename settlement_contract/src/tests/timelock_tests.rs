@@ -439,6 +439,34 @@ fn scheduled_update_governance_accepts_valid_address() {
     assert_eq!(client.get_governance(), new_governance);
 }
 
+#[test]
+fn scheduled_register_merchant_rejects_zero_address_without_writing_storage() {
+    let (env, client, admins, _) = setup();
+    let zero_address = bettapay_common::storage::zero_address(&env);
+    assert!(bettapay_common::storage::is_zero_address(
+        &env,
+        &zero_address
+    ));
+    let operation = Operation::RegisterMerchant(zero_address.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let result = client.try_execute(&admins.get(0).unwrap(), &operation);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    let merchant_key = DataKey::Merchant(zero_address.clone());
+    let archived_key = DataKey::ArchivedMerchant(zero_address);
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().persistent().has(&merchant_key));
+        assert!(!env.storage().persistent().has(&archived_key));
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Uniform execution auth policy (issue #561)
 // ---------------------------------------------------------------------------

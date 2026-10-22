@@ -332,31 +332,27 @@ fn fee_config_event_emitted_with_correct_fields() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_fee_config_rejects_fees_exceeding_ceiling() {
+fn set_fee_config_rejects_individual_fee_exceeding_max_without_overwriting_config() {
     let (_env, client, admins, _recovery) = setup();
-
-    // Sum exceeds BPS_DENOMINATOR
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_001,
+    let previous = FeeConfig {
+        platform_fee_bps: 120,
+        network_fee_bps: 35,
     };
+    client.set_fee_config(&admins, &previous);
 
-    client.set_fee_config(&admins, &cfg);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_fee_config_rejects_individual_fee_exceeding_max() {
-    let (_env, client, admins, _recovery) = setup();
-
-    // Individual fee exceeds MAX_FEE_BPS (governance trust root)
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_001,
-        network_fee_bps: 0,
+    let invalid = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS + 1,
+        network_fee_bps: MIN_FEE_BPS,
     };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
+    );
 
-    client.set_fee_config(&admins, &cfg);
+    let stored = client.get_fee_config().expect("previous config remains");
+    assert_eq!(stored.platform_fee_bps, previous.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, previous.network_fee_bps);
 }
 
 // -----------------------------------------------------------------------
@@ -365,49 +361,45 @@ fn set_fee_config_rejects_individual_fee_exceeding_max() {
 
 /// Verifies the critical sum-boundary invariant: a config whose
 /// platform + network fee sum equals exactly `BPS_DENOMINATOR` (10 000)
-/// must be accepted, while a sum of 10 001 must be rejected.
-///
-/// Both legs are individually within `[MIN_FEE_BPS, MAX_FEE_BPS]`, so
-/// only the sum check distinguishes the two cases.
+/// must be accepted and readable, while a sum of 10 001 must be rejected
+/// with `InvalidFeeBps` without overwriting the accepted configuration.
 #[test]
-fn fee_config_sum_at_boundary_10000_is_accepted() {
+fn fee_config_sum_boundary_and_overflow_are_enforced() {
     let (_env, client, admins, _recovery) = setup();
 
-    // 5_000 + 5_000 = 10_000 == BPS_DENOMINATOR — must succeed.
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_000,
+    // MAX_FEE_BPS + MAX_FEE_BPS == BPS_DENOMINATOR — must succeed.
+    let at_boundary = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS,
+        network_fee_bps: MAX_FEE_BPS,
     };
     assert!(
-        client.try_set_fee_config(&admins, &cfg).is_ok(),
+        client.try_set_fee_config(&admins, &at_boundary).is_ok(),
         "FeeConfig {{5000, 5000}} with sum == BPS_DENOMINATOR must be accepted"
     );
-}
+    let stored = client
+        .get_fee_config()
+        .expect("accepted boundary config must be readable");
+    assert_eq!(stored.platform_fee_bps, at_boundary.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, at_boundary.network_fee_bps);
 
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn fee_config_sum_above_boundary_10001_is_rejected() {
-    let (_env, client, admins, _recovery) = setup();
-
-    // 5_000 + 5_001 would be 10_001 > BPS_DENOMINATOR, but 5_001
-    // already exceeds MAX_FEE_BPS. Use 5_000 + 5_000 + 1 split as
-    // 4_999 + 5_002 — but 5_002 > MAX_FEE_BPS too.  The only way to
-    // reach sum == 10_001 with both legs <= MAX_FEE_BPS (5_000) is
-    // impossible, so we exercise the sum guard with a config that has
-    // one leg at MAX_FEE_BPS and the other one above it, which triggers
-    // the individual-leg check first.  To isolate the *sum* guard
-    // specifically, we need both legs <= MAX_FEE_BPS but sum > 10_000.
-    // That is impossible given MAX_FEE_BPS = 5_000:
-    // max(platform) + max(network) = 5_000 + 5_000 = 10_000 exactly.
-    // The sum guard is therefore only reachable when at least one leg
-    // exceeds MAX_FEE_BPS; since the individual check fires first, we
-    // confirm the rejection with a straightforwardly invalid pair.
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_001,
+    // With MAX_FEE_BPS at half the denominator, an over-sum config necessarily
+    // also violates an individual bound. It must still fail with the typed
+    // InvalidFeeBps error and preserve the last accepted value.
+    let invalid = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS,
+        network_fee_bps: MAX_FEE_BPS + 1,
     };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
+    );
 
-    client.set_fee_config(&admins, &cfg);
+    let stored = client
+        .get_fee_config()
+        .expect("accepted boundary config remains");
+    assert_eq!(stored.platform_fee_bps, at_boundary.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, at_boundary.network_fee_bps);
 }
 
 #[test]
@@ -1365,20 +1357,31 @@ fn cancel_recovery_by_admin_still_succeeds() {
 }
 
 // -----------------------------------------------------------------------
-// Zero-value fee config rejection
+// Below-minimum fee config rejection
 // -----------------------------------------------------------------------
 
 #[test]
-fn zero_fee_config_rejected() {
+fn below_min_fee_config_rejected_without_overwriting_config() {
     let (_env, client, admins, _recovery) = setup();
-    let cfg = FeeConfig {
-        platform_fee_bps: 0,
-        network_fee_bps: 100,
+    let previous = FeeConfig {
+        platform_fee_bps: MIN_FEE_BPS,
+        network_fee_bps: MIN_FEE_BPS,
     };
-    assert!(
-        client.try_set_fee_config(&admins, &cfg).is_err(),
-        "FeeConfig with platform_fee_bps=0 must be rejected with InvalidFeeBps"
+    client.set_fee_config(&admins, &previous);
+
+    let invalid = FeeConfig {
+        platform_fee_bps: MIN_FEE_BPS - 1,
+        network_fee_bps: MIN_FEE_BPS,
+    };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
     );
+
+    let stored = client.get_fee_config().expect("previous config remains");
+    assert_eq!(stored.platform_fee_bps, previous.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, previous.network_fee_bps);
 }
 
 #[test]
