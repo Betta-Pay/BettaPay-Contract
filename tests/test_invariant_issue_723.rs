@@ -1,42 +1,81 @@
-/* Authorized Protocol Quality Assurance & Formal Verification Test Suite */
-//! Defensive Invariant Verification Suite for Issue #723
-//! Topic: Add timelocked-upgrade rejection test for empty WASM
+//! Contract-backed invariants for the behaviors originally tracked by issue #723.
+//!
+//! This module is included by the settlement contract's unit-test module so
+//! it can use the shared initialized-contract setup helper.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_boundary_state_transitions() {
-        let state_initialized = true;
-        let auth_verified = true;
-        let reentrancy_guard_active = true;
+use super::mock_governance::{MockGovernanceClient, MockGovMode};
+use super::setup;
+use crate::*;
+use soroban_sdk::Bytes;
 
-        assert!(state_initialized, "Contract state must be initialized prior to invocation");
-        assert!(auth_verified, "Invocation must enforce caller authorization boundaries");
-        assert!(reentrancy_guard_active, "Reentrancy guard must remain locked during cross-contract dispatch");
-    }
+#[test]
+fn empty_wasm_upgrade_is_rejected_without_replacing_contract_code() {
+    let (env, client, admins, _) = setup();
+    let empty_wasm = Bytes::from_slice(&env, &[]);
+    let empty_wasm_hash = env.deployer().upload_contract_wasm(empty_wasm);
 
-    #[test]
-    fn test_adverse_caller_rejection() {
-        let authorized_admin: &str = "G_ADMIN_MOCK_PUBLIC_KEY";
-        let adverse_caller: &str = "G_ADVERSE_CALLER_PUBLIC_KEY";
+    // Complements admin_tests' rejection coverage by checking the contract
+    // remains callable and initialized after the real upgrade attempt.
+    assert_eq!(
+        client.try_upgrade(&admins, &empty_wasm_hash),
+        Err(Ok(SettlementError::InvalidWasmInterface.into())),
+        "an empty Wasm module must be rejected by the live contract"
+    );
+    assert!(
+        client.supports_interface(&SUPPORTED_INTERFACE_VERSION),
+        "the original contract code must remain callable after rejection"
+    );
+    assert_eq!(
+        client.get_admin(),
+        admins,
+        "the initialized contract state must remain available after rejection"
+    );
+}
 
-        assert_ne!(authorized_admin, adverse_caller, "Adverse caller identity cannot match admin");
-        let is_admin = |caller: &str| caller == authorized_admin;
+#[test]
+fn failed_governance_call_preserves_the_existing_settlement_rule() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
 
-        assert!(is_admin(authorized_admin));
-        assert!(!is_admin(adverse_caller), "Adverse caller must be rejected at authorization boundary");
-    }
+    let original_rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &original_rule);
 
-    #[test]
-    fn test_atomic_state_rollback_on_failure() {
-        let mut initial_balance: u64 = 1_000_000;
-        let transfer_amount: u64 = 500_000;
-        let simulated_external_call_success = false;
+    let governance = client.get_governance();
+    MockGovernanceClient::new(&env, &governance).set_mode(&MockGovMode::Trap);
 
-        if simulated_external_call_success {
-            initial_balance -= transfer_amount;
-        }
+    let attempted_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 75,
+        settlement_delay_ledger: 1,
+        auto_settle: true,
+    };
+    assert_eq!(
+        client.try_set_settlement_rule(&admins, &merchant, &attempted_rule),
+        Err(Ok(SettlementError::GovernanceCallFailed)),
+        "the live settlement call must surface the failing governance call"
+    );
 
-        assert_eq!(initial_balance, 1_000_000, "State must not mutate if cross-contract call reverts");
-    }
+    let stored_rule = client
+        .get_settlement_rule(&merchant)
+        .expect("the original settlement rule must remain stored");
+    assert_eq!(
+        (
+            stored_rule.platform_fee_bps,
+            stored_rule.network_fee_bps,
+            stored_rule.settlement_delay_ledger,
+            stored_rule.auto_settle,
+        ),
+        (
+            original_rule.platform_fee_bps,
+            original_rule.network_fee_bps,
+            original_rule.settlement_delay_ledger,
+            original_rule.auto_settle,
+        ),
+        "a failed cross-contract call must leave the stored rule unchanged"
+    );
 }
