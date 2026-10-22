@@ -197,4 +197,43 @@ mod tests {
 
         assert!(client.is_merchant_registered(&merchant));
     }
+
+    #[test]
+    fn unregister_merchant_rejects_unknown_address_without_writing_storage() {
+        let (env, client, admins, registered_merchant) = setup();
+        client.register_merchant(&admins, &registered_merchant);
+        let unknown_merchant = Address::generate(&env);
+
+        let result = client.try_unregister_merchant(&admins, &unknown_merchant);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::MerchantMissing.into()
+        );
+
+        assert!(client.is_merchant_registered(&registered_merchant));
+        assert!(!client.is_merchant_registered(&unknown_merchant));
+
+        let merchant_key = DataKey::Merchant(unknown_merchant.clone());
+        let archived_key = DataKey::ArchivedMerchant(unknown_merchant);
+        env.as_contract(&client.address, || {
+            assert!(!env.storage().persistent().has(&merchant_key));
+            assert!(!env.storage().persistent().has(&archived_key));
+        });
+    }
+
+    #[test]
+    fn unregister_merchant_writes_tombstone_for_registered_merchant() {
+        let (env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+
+        client.unregister_merchant(&admins, &merchant);
+
+        assert!(!client.is_merchant_registered(&merchant));
+        let merchant_key = DataKey::Merchant(merchant.clone());
+        let archived_key = DataKey::ArchivedMerchant(merchant);
+        env.as_contract(&client.address, || {
+            assert!(!env.storage().persistent().has(&merchant_key));
+            assert!(env.storage().persistent().has(&archived_key));
+        });
+    }
 }
