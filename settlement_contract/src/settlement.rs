@@ -28,6 +28,10 @@ use crate::SettlementContract;
 /// `FeeConfig`. Neither contract keeps its own copy, so the per-leg bounds
 /// cannot drift apart; `fee_bounds_parity_tests` pins this at each boundary
 /// (issue #987).
+///
+/// Checked-math policy (issue #989): the only arithmetic here is the fee sum,
+/// which uses `checked_add`; an overflow maps to
+/// [`SettlementError::InvalidFeeBps`], never to an arithmetic trap.
 fn validate_rule_bounds(env: &Env, rule: &SettlementRule) {
     if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
         panic_with_error!(env, SettlementError::InvalidFeeBps);
