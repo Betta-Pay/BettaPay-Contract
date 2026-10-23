@@ -53,3 +53,12 @@ Implementation references: `bettapay_common/src/types.rs`
 (`Bps::calculate_fee_ceil`), `settlement_contract/src/payments.rs`
 (`calculate_split`), and `settlement_contract/src/policy.rs`
 (`MIN_PAYMENT_AMOUNT`).
+
+## Checked-math policy
+
+Every basis-point computation uses checked arithmetic (issue #989).
+`Bps::calculate_fee_ceil` uses `checked_mul`, `checked_add` and `checked_div`;
+`calculate_split` additionally guards the combined platform + network rate.
+Overflow surfaces as `SettlementError::AmountOverflow` (310). Rule validation
+(`validate_rule_bounds`) uses `checked_add` on the bps sum and maps overflow to
+`SettlementError::InvalidFeeBps`. In-range inputs are unaffected.

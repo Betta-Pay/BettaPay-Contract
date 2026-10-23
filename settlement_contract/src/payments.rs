@@ -16,7 +16,56 @@ use crate::storage::{
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
 use crate::SettlementContract;
 
+/// Clamps ceil-rounded fee legs against the gross and derives the merchant remainder.
+///
+/// This is the single place that enforces the fee-split invariants (issue #988),
+/// shared by every fee path: `store_payment_reference` and `calculate_fee_split`
+/// both reach it through [`calculate_split`].
+///
+/// Returns `(platform_fee, network_fee, merchant_payout)` such that:
+///
+/// * every leg is non-negative (`merchant_payout >= 0` in particular);
+/// * `platform_fee + network_fee <= gross`;
+/// * `platform_fee + network_fee + merchant_payout == max(gross, 0)`.
+///
+/// The platform leg is clamped to the gross first and the network leg takes
+/// whatever remains of the gross when the two would otherwise overshoot, which
+/// matches the network-leg clamp from issue #683. Fee values are unchanged for
+/// every input whose legs already fit within the gross, and the ceil rounding
+/// rules are not touched.
+fn clamp_fee_legs(gross: i128, platform_fee: i128, network_fee: i128) -> (i128, i128, i128) {
+    let gross = gross.max(0);
+    let platform_fee = platform_fee.clamp(0, gross);
+    // Both subtractions are bounded by the clamps above and cannot underflow;
+    // `saturating_sub` keeps the helper free of unchecked arithmetic anyway.
+    let network_fee = network_fee.clamp(0, gross.saturating_sub(platform_fee));
+    let merchant_payout = gross
+        .saturating_sub(platform_fee)
+        .saturating_sub(network_fee);
+
+    debug_assert!(merchant_payout >= 0);
+    debug_assert!(platform_fee.saturating_add(network_fee) <= gross);
+    (platform_fee, network_fee, merchant_payout)
+}
+
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
+///
+/// # Checked-math policy (issue #989)
+///
+/// Every basis-point computation on this path uses checked (or saturating, where
+/// the bound is proven) arithmetic so extreme inputs surface as a typed error
+/// instead of an arithmetic trap or a wrapped value in release builds:
+///
+/// * `amount * bps + (BPS_DENOMINATOR - 1)` is computed with `checked_mul` /
+///   `checked_add` ([`Bps::calculate_fee_ceil`]); `None` maps to
+///   [`SettlementError::AmountOverflow`].
+/// * The combined platform + network rate is guarded the same way, so an
+///   overflowing sum also maps to `AmountOverflow` rather than a later trap.
+/// * Rule-side bps sums (`validate_rule_bounds`) use `checked_add` and map
+///   overflow to [`SettlementError::InvalidFeeBps`].
+///
+/// No arbitrary-precision arithmetic is used, and in-range inputs produce
+/// exactly the same fees as before.
 ///
 /// # Known edge case: clamping merchant payout
 ///
@@ -64,26 +113,16 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     let platform_fee_amount = platform_bps
         .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
-    let mut network_fee_amount = network_bps
+    let network_fee_amount = network_bps
         .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
 
     // Ceil-rounded fees can sum to more than the gross for tiny amounts with
-    // high fee configs. Clamp the network leg so total fees never exceed the
-    // gross, keeping the accounting equation balanced (issue #683). An
-    // overflowing sum is treated as exceeding the gross.
-    let fees_exceed_gross = platform_fee_amount
-        .checked_add(network_fee_amount)
-        .is_none_or(|total| total > amount);
-    if fees_exceed_gross {
-        network_fee_amount = amount.checked_sub(platform_fee_amount).unwrap_or(0).max(0);
-    }
-
-    let merchant_payout_amount = amount
-        .checked_sub(platform_fee_amount)
-        .and_then(|remainder| remainder.checked_sub(network_fee_amount))
-        .unwrap_or(0)
-        .max(0);
+    // high fee configs (issue #683). The shared helper clamps the legs and
+    // derives the merchant remainder so every fee path upholds the same
+    // invariants (issue #988).
+    let (platform_fee_amount, network_fee_amount, merchant_payout_amount) =
+        clamp_fee_legs(amount, platform_fee_amount, network_fee_amount);
     FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
@@ -297,6 +336,29 @@ mod tests {
                 split.gross_amount,
             );
             prop_assert!(split.merchant_payout_amount >= 0);
+        }
+
+        #[test]
+        fn clamp_fee_legs_keeps_total_fees_within_gross_and_merchant_non_negative(
+            gross in prop_oneof![Just(i128::MIN), Just(-1i128), Just(0i128), Just(i128::MAX), 0i128..=1_000_000i128],
+            platform_fee in prop_oneof![Just(i128::MIN), Just(i128::MAX), -10i128..=2_000_000i128],
+            network_fee in prop_oneof![Just(i128::MIN), Just(i128::MAX), -10i128..=2_000_000i128],
+        ) {
+            let (platform, network, merchant) = clamp_fee_legs(gross, platform_fee, network_fee);
+
+            prop_assert!(platform >= 0);
+            prop_assert!(network >= 0);
+            prop_assert!(merchant >= 0);
+            prop_assert!(platform + network <= gross.max(0));
+            prop_assert_eq!(platform + network + merchant, gross.max(0));
+            // Legs that already fit within the gross are returned untouched.
+            let fits = platform_fee >= 0
+                && network_fee >= 0
+                && platform_fee.checked_add(network_fee).is_some_and(|total| total <= gross);
+            if fits {
+                prop_assert_eq!(platform, platform_fee);
+                prop_assert_eq!(network, network_fee);
+            }
         }
 
         #[test]
@@ -559,6 +621,8 @@ impl SettlementContract {
         // queries. Fee values are unchanged — the no-bump reader resolves the
         // identical rule through the same fallback chain.
         let rule = read_rule_or_default_no_bump(&env, merchant);
+        // `calculate_split` routes the legs through `clamp_fee_legs`, the same
+        // shared invariant helper `store_payment_reference` uses (issue #988).
         calculate_split(&env, amount, &rule)
     }
 
@@ -864,5 +928,91 @@ mod read_authorization_tests {
         assert!(client
             .get_payment_reference(&merchant, &reference, &admins)
             .is_some());
+    }
+}
+
+#[cfg(test)]
+mod checked_math_tests {
+    use crate::tests::setup;
+    use crate::types::SettlementRule;
+    use bettapay_common::constants::{MAX_FEE_BPS, MIN_FEE_BPS};
+    use proptest::prelude::*;
+    use proptest::{prop_assert, proptest};
+    use soroban_sdk::Error;
+
+    fn is_error(err: &Error, code: u32) -> bool {
+        *err == Error::from_contract_error(code)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Extreme amounts and bps either split successfully or fail with
+        /// `AmountOverflow` (310); never any other error or arithmetic trap.
+        #[test]
+        fn extreme_amounts_yield_a_split_or_amount_overflow(
+            amount in prop_oneof![
+                Just(i128::MAX),
+                Just(i128::MAX - 1),
+                Just(i128::MAX / 2),
+                Just(i128::MAX / 5_000),
+                Just(i128::MAX / 10_000),
+                (i128::MAX / 10_000 - 2)..=(i128::MAX / 10_000 + 2),
+                crate::MIN_PAYMENT_AMOUNT..=i128::MAX,
+            ],
+            platform_fee_bps in MIN_FEE_BPS..=MAX_FEE_BPS,
+            network_fee_bps in MIN_FEE_BPS..=MAX_FEE_BPS,
+        ) {
+            let (_env, client, admins, merchant) = setup();
+            client.register_merchant(&admins, &merchant);
+            client.set_settlement_rule(
+                &admins,
+                &merchant,
+                &SettlementRule {
+                    platform_fee_bps,
+                    network_fee_bps,
+                    settlement_delay_ledger: 0,
+                    auto_settle: false,
+                },
+            );
+
+            match client.try_calculate_fee_split(&merchant, &amount) {
+                Ok(Ok(split)) => {
+                    prop_assert!(split.merchant_payout_amount >= 0);
+                    prop_assert!(
+                        split.platform_fee_amount + split.network_fee_amount <= split.gross_amount
+                    );
+                }
+                Err(Ok(err)) => prop_assert!(is_error(&err, 310)),
+                _ => prop_assert!(false, "unexpected error kind"),
+            }
+        }
+
+        /// Any bps pair, including values whose `u32` sum would overflow, is
+        /// accepted or rejected with `InvalidFeeBps` (4); never a trap.
+        #[test]
+        fn extreme_bps_rules_are_accepted_or_invalid_fee_bps(
+            platform_fee_bps in prop_oneof![Just(u32::MAX), Just(u32::MAX - 1), 0u32..=20_000],
+            network_fee_bps in prop_oneof![Just(u32::MAX), Just(u32::MAX - 1), 0u32..=20_000],
+        ) {
+            let (_env, client, admins, merchant) = setup();
+            client.register_merchant(&admins, &merchant);
+
+            let outcome = client.try_set_settlement_rule(
+                &admins,
+                &merchant,
+                &SettlementRule {
+                    platform_fee_bps,
+                    network_fee_bps,
+                    settlement_delay_ledger: 0,
+                    auto_settle: false,
+                },
+            );
+            match outcome {
+                Ok(Ok(())) => {}
+                Err(Ok(err)) => prop_assert!(is_error(&err, 4)),
+                _ => prop_assert!(false, "unexpected error kind"),
+            }
+        }
     }
 }

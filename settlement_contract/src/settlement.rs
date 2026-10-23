@@ -10,11 +10,11 @@ use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_admin_and_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule,
-    read_rule_or_default, read_rule_or_default_no_bump, validate_fee_against_governance,
-    validate_nonzero_address,
+    assert_admin_and_not_paused, is_merchant_registered_and_bump_ttl, read_effective_rule_no_bump,
+    read_fallback_rule, read_rule_or_default, read_rule_or_default_no_bump,
+    validate_fee_against_governance, validate_nonzero_address,
 };
-use crate::types::{DataKey, SettlementRule};
+use crate::types::{DataKey, EffectiveRule, SettlementRule};
 use crate::SettlementContract;
 
 /// Field-level bounds shared by the rule setters: each fee within
@@ -28,6 +28,10 @@ use crate::SettlementContract;
 /// `FeeConfig`. Neither contract keeps its own copy, so the per-leg bounds
 /// cannot drift apart; `fee_bounds_parity_tests` pins this at each boundary
 /// (issue #987).
+///
+/// Checked-math policy (issue #989): the only arithmetic here is the fee sum,
+/// which uses `checked_add`; an overflow maps to
+/// [`SettlementError::InvalidFeeBps`], never to an arithmetic trap.
 fn validate_rule_bounds(env: &Env, rule: &SettlementRule) {
     if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
         panic_with_error!(env, SettlementError::InvalidFeeBps);
@@ -219,6 +223,19 @@ impl SettlementContract {
         // third parties cannot keep a merchant's rule alive via repeated
         // queries. Returns the identical value through the no-bump reader.
         read_rule_or_default_no_bump(&env, merchant)
+    }
+
+    /// Returns the effective settlement rule for a merchant together with its
+    /// [`RuleProvenance`] (issue #997): whether the fees came from a
+    /// merchant-specific rule, the global default, governance, or the
+    /// bootstrap fallback.
+    ///
+    /// The `rule` field is exactly what
+    /// [`get_effective_rule`](SettlementContract::get_effective_rule) returns;
+    /// provenance is observability only and never alters a fee value. TTL-neutral
+    /// and event-free, like `get_effective_rule`.
+    pub fn get_rule_provenance(env: Env, merchant: Address) -> EffectiveRule {
+        read_effective_rule_no_bump(&env, merchant)
     }
 }
 

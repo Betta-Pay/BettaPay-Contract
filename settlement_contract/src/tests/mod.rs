@@ -20,6 +20,7 @@ mod issue_invariant_tests;
 pub mod operation_roundtrip_tests;
 pub mod recovery_admin_set_tests;
 pub mod reentrant_governance;
+pub mod rule_provenance_tests;
 pub mod schedule_collision_tests;
 pub mod timelock_tests;
 pub mod ttl_tests;

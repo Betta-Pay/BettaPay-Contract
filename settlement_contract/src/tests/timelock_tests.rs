@@ -1266,3 +1266,90 @@ fn pending_operation_count_tracks_cancel_all() {
     client.cancel(&admins, &second);
     assert_eq!(client.get_pending_operation_count(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// dry_run (issue #998)
+// ---------------------------------------------------------------------------
+
+fn contract_error(error: SettlementError) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(error as u32)
+}
+
+#[test]
+fn dry_run_on_ready_operation_succeeds_without_consuming_the_key() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let pending_before = client.get_pending_operation_count();
+
+    client.dry_run(&operation);
+
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+    assert_eq!(client.get_pending_operation_count(), pending_before);
+    assert_eq!(client.get_admin(), admins, "dry_run must not run the operation");
+    // The real execution is still available afterwards.
+    client.execute(&admins.get(0).unwrap(), &operation);
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+}
+
+#[test]
+fn dry_run_on_not_ready_operation_returns_execution_not_ready() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::ExecutionNotReady)))
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+}
+
+#[test]
+fn dry_run_on_unscheduled_operation_returns_operation_not_scheduled() {
+    let (env, client, _admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::OperationNotScheduled)))
+    );
+}
+
+#[test]
+fn dry_run_respects_the_recovery_veto() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RECOVERY_DELAY_SECONDS + DEFAULT_TIMELOCK_DELAY_SECONDS;
+    });
+    client.initiate_recovery(&Address::generate(&env));
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::RecoveryDelayActive)))
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+}
+
+#[test]
+fn dry_run_emits_no_execution_event() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.dry_run(&operation);
+
+    assert!(env.events().all().iter().all(|(_, topics, _)| {
+        topics.get(0).is_none_or(|first| {
+            Symbol::try_from_val(&env, &first)
+                .map(|s| s != Symbol::new(&env, events::OP_EXECUTED_EVENT))
+                .unwrap_or(true)
+        })
+    }));
+}
