@@ -296,6 +296,10 @@ const ENTRYPOINT_TTL_CLASSIFICATIONS: &[(&str, TtlClassification)] = &[
     ("migrate", TtlClassification::NotReader),
     ("schedule", TtlClassification::NotReader),
     ("execute", TtlClassification::NotReader),
+    (
+        "dry_run",
+        TtlClassification::Neutral("read-only simulation never touches storage TTLs"),
+    ),
     ("cancel", TtlClassification::NotReader),
     ("register_merchant", TtlClassification::NotReader),
     ("unregister_merchant", TtlClassification::NotReader),

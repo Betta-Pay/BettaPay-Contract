@@ -676,45 +676,8 @@ impl SettlementContract {
     /// checked *before* consumption, deliberately keeping vetoed entries
     /// queued until the recovery is resolved.
     pub fn execute(env: Env, executor: Address, operation: Operation) {
-        assert_not_paused(&env);
-        // executor is intentionally not required to authenticate here (permissionless execution after timelock)
-
-        let operation_xdr = operation.clone().to_xdr(&env);
-        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
-        let key = DataKey::ScheduledOperation(op_hash.clone());
-
-        let scheduled: ScheduledOp = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::OperationNotScheduled));
-
-        // Guard against a hash collision letting an operation that was never
-        // scheduled ride the timelock slot of a different, already-pending
-        // one (issue #570).
-        if scheduled.operation_xdr != operation_xdr {
-            panic_with_error!(&env, SettlementError::OperationNotScheduled);
-        }
-
-        if env.ledger().timestamp() < scheduled.execute_at {
-            panic_with_error!(&env, SettlementError::ExecutionNotReady);
-        }
-
-        // Recovery veto (issue #501): while a recovery is pending, no
-        // scheduled operation may execute except `CancelRecovery` itself.
-        // `PendingRecovery` is the veto marker left by `initiate_recovery` —
-        // once the recovery address authenticates, operations scheduled under
-        // the compromised admin are blocked, including an upgrade or an admin
-        // transfer. The check runs before the scheduled key is consumed, so a
-        // vetoed operation stays in the queue until the recovery is resolved.
-        if env
-            .storage()
-            .instance()
-            .has(&CommonDataKey::PendingRecovery)
-            && !matches!(operation, Operation::CancelRecovery)
-        {
-            panic_with_error!(&env, SettlementError::RecoveryDelayActive);
-        }
+        // Shared with `dry_run` (issue #998) so both reject identically.
+        let (key, op_hash) = Self::validate_scheduled_execution(&env, &operation);
 
         // Issue #888: consume the slot before dispatching. Every variant and
         // every outcome below is reached only through this single removal
@@ -747,6 +710,29 @@ impl SettlementContract {
 
         env.events()
             .publish((Symbol::new(&env, events::OP_EXECUTED_EVENT), op_hash), ());
+    }
+
+    /// Read-only simulation of [`execute`](Self::execute) for a scheduled
+    /// operation (issue #998).
+    ///
+    /// Runs the exact same validation as `execute` — pause check, scheduled
+    /// lookup, timelock readiness and the recovery veto — and fails with the
+    /// same typed errors, but changes nothing: the `ScheduledOperation` entry
+    /// is left in place, the queue counter is untouched, no operation arm runs
+    /// and no event is emitted. It does not bypass the recovery veto and needs
+    /// no authorization, mirroring permissionless `execute`. Success means
+    /// `execute` would pass these checks at the current ledger time; it does
+    /// not simulate the operation's own effects.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`OperationNotScheduled`](SettlementError::OperationNotScheduled) — if the operation was not scheduled.
+    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
+    /// * [`RecoveryDelayActive`](SettlementError::RecoveryDelayActive) — if a recovery is pending and the operation is
+    ///   not `CancelRecovery`.
+    pub fn dry_run(env: Env, operation: Operation) {
+        Self::validate_scheduled_execution(&env, &operation);
     }
 
     /// Cancels a scheduled administrative operation.
@@ -842,6 +828,60 @@ impl SettlementContract {
     }
 
     // --- Internal Admin Functions ---
+
+    /// Readiness checks shared by [`execute`](Self::execute) and
+    /// [`dry_run`](Self::dry_run) (issue #998): not paused, the exact
+    /// operation is scheduled (issue #570), its timelock has elapsed, and no
+    /// recovery veto applies (issue #501). Read-only: it never touches the
+    /// scheduled entry, so `execute` consumes the slot only after this returns.
+    ///
+    /// Returns the storage key and hash of the scheduled operation.
+    fn validate_scheduled_execution(
+        env: &Env,
+        operation: &Operation,
+    ) -> (DataKey, BytesN<32>) {
+        assert_not_paused(env);
+        // executor is intentionally not required to authenticate here (permissionless execution after timelock)
+
+        let operation_xdr = operation.clone().to_xdr(env);
+        let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+        let key = DataKey::ScheduledOperation(op_hash.clone());
+
+        let scheduled: ScheduledOp = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, SettlementError::OperationNotScheduled));
+
+        // Guard against a hash collision letting an operation that was never
+        // scheduled ride the timelock slot of a different, already-pending
+        // one (issue #570).
+        if scheduled.operation_xdr != operation_xdr {
+            panic_with_error!(env, SettlementError::OperationNotScheduled);
+        }
+
+        if env.ledger().timestamp() < scheduled.execute_at {
+            panic_with_error!(env, SettlementError::ExecutionNotReady);
+        }
+
+        // Recovery veto (issue #501): while a recovery is pending, no
+        // scheduled operation may execute except `CancelRecovery` itself.
+        // `PendingRecovery` is the veto marker left by `initiate_recovery` —
+        // once the recovery address authenticates, operations scheduled under
+        // the compromised admin are blocked, including an upgrade or an admin
+        // transfer. The check runs before the scheduled key is consumed, so a
+        // vetoed operation stays in the queue until the recovery is resolved.
+        if env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)
+            && !matches!(operation, Operation::CancelRecovery)
+        {
+            panic_with_error!(env, SettlementError::RecoveryDelayActive);
+        }
+
+        (key, op_hash)
+    }
 
     /// Consumes a pending `ScheduledOperation` slot.
     ///
