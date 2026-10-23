@@ -11,7 +11,7 @@ use crate::policy::{
     MERCHANT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
     RULE_TTL_THRESHOLD,
 };
-use crate::types::{DataKey, GovFeeConfig, SettlementRule};
+use crate::types::{DataKey, EffectiveRule, GovFeeConfig, RuleProvenance, SettlementRule};
 
 /// Governance system-parameter key for the fee circuit-breaker (issue #743).
 ///
@@ -298,7 +298,9 @@ pub(crate) fn decrement_payment_count(env: &Env, merchant: &Address, by: u32) {
     }
     let key = DataKey::PaymentCount(merchant.clone());
     let count = read_payment_count(env, merchant);
-    env.storage().persistent().set(&key, &count.saturating_sub(by));
+    env.storage()
+        .persistent()
+        .set(&key, &count.saturating_sub(by));
     env.storage()
         .persistent()
         .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
@@ -373,6 +375,14 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
 /// Authenticated paths that want the keep-alive side effect must call
 /// [`read_rule_or_default`] instead.
 pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> SettlementRule {
+    read_effective_rule_no_bump(env, merchant).rule
+}
+
+/// Same resolution as [`read_rule_or_default_no_bump`], but also reports which
+/// source produced the rule (issue #997). The returned `rule` is byte-for-byte
+/// what the plain reader yields; provenance is observability only and never
+/// changes a fee value.
+pub(crate) fn read_effective_rule_no_bump(env: &Env, merchant: Address) -> EffectiveRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
@@ -380,25 +390,12 @@ pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> Sett
         .persistent()
         .get::<_, SettlementRule>(&merchant_key)
     {
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Merchant,
+        };
     }
-    // Fall back to the admin-controlled global default when present.
-    let default_key = DataKey::DefaultRule;
-    if let Some(rule) = env
-        .storage()
-        .instance()
-        .get::<_, SettlementRule>(&default_key)
-    {
-        return rule;
-    }
-    // Protocol fee source: governance's GovFeeConfig, when available.
-    if let Some(rule) = read_governance_fee_rule(env) {
-        return rule;
-    }
-    // Final fallback keeps the contract usable before any config is stored.
-    // No event emitted here — the hot path runs this on every payment and
-    // event spam would burn unnecessary compute (issue #691).
-    BOOTSTRAP_DEFAULT_RULE
+    read_effective_fallback_rule(env)
 }
 
 /// Reads the effective fallback rule without a merchant-specific override,
@@ -408,21 +405,39 @@ pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> Sett
 /// `unregister_merchant`) where the returned rule is included in a different
 /// event payload and a separate bootstrap event would be misleading (issue #689).
 pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
+    read_effective_fallback_rule(env).rule
+}
+
+/// Shared tail of the resolution chain (default → governance → bootstrap),
+/// tagging each source so the plain readers and the provenance reader cannot
+/// drift apart.
+fn read_effective_fallback_rule(env: &Env) -> EffectiveRule {
+    // Fall back to the admin-controlled global default when present.
     let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
         .instance()
         .get::<_, SettlementRule>(&default_key)
     {
-        // fallback: default rule
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Default,
+        };
     }
+    // Protocol fee source: governance's GovFeeConfig, when available.
     if let Some(rule) = read_governance_fee_rule(env) {
-        // fallback: governance fee config
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Governance,
+        };
     }
-    // fallback: bootstrap default (no default rule or governance fee config set)
-    BOOTSTRAP_DEFAULT_RULE
+    // Final fallback keeps the contract usable before any config is stored.
+    // No event emitted here — the hot path runs this on every payment and
+    // event spam would burn unnecessary compute (issue #691).
+    EffectiveRule {
+        rule: BOOTSTRAP_DEFAULT_RULE,
+        provenance: RuleProvenance::Bootstrap,
+    }
 }
 
 /// Reads governance's `bypass_gov_fees` circuit-breaker flag (issue #743).

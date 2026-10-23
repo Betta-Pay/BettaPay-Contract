@@ -313,8 +313,8 @@ pub use policy::{
 };
 pub use storage::{assert_admin_and_not_paused, validate_nonzero_address};
 pub use types::{
-    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage, ScheduledOp,
-    SettlementRule,
+    Bps, EffectiveRule, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage,
+    RuleProvenance, ScheduledOp, SettlementRule,
 };
 
 #[contract]

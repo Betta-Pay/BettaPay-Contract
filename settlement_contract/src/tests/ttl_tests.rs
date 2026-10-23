@@ -322,6 +322,10 @@ const ENTRYPOINT_TTL_CLASSIFICATIONS: &[(&str, TtlClassification)] = &[
         "get_effective_rule",
         TtlClassification::Neutral("public rule resolution is TTL-neutral"),
     ),
+    (
+        "get_rule_provenance",
+        TtlClassification::Neutral("public rule resolution is TTL-neutral"),
+    ),
     ("store_payment_reference", TtlClassification::NotReader),
     (
         "calculate_fee_split",

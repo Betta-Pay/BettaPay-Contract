@@ -23,6 +23,37 @@ pub struct FeeSplit {
     pub merchant_payout_amount: i128,
 }
 
+/// Where an effective settlement rule came from (issue #997).
+///
+/// Mirrors the resolution chain used by the write and payment paths:
+/// merchant-specific rule → global default → governance fee config →
+/// bootstrap fallback. Provenance is a property of the *source*, not the
+/// values: a governance config that happens to equal the bootstrap values
+/// still reports [`Governance`](Self::Governance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[contracttype]
+pub enum RuleProvenance {
+    /// A rule stored for this specific merchant.
+    Merchant = 0,
+    /// The admin-configured global default rule.
+    Default = 1,
+    /// Governance's fee config, either read live or served from the
+    /// last-good cache during a governance outage.
+    Governance = 2,
+    /// The compiled-in bootstrap fallback; nothing else was configured.
+    Bootstrap = 3,
+}
+
+/// An effective settlement rule together with its [`RuleProvenance`].
+#[derive(Clone)]
+#[contracttype]
+pub struct EffectiveRule {
+    /// The resolved rule, identical to what `get_effective_rule` returns.
+    pub rule: SettlementRule,
+    /// Which source in the resolution chain produced `rule`.
+    pub provenance: RuleProvenance,
+}
+
 /// A single page of results from [`SettlementContract::get_payments`](crate::SettlementContract::get_payments).
 ///
 /// Soroban cannot enumerate persistent storage keys, so pagination is over the
