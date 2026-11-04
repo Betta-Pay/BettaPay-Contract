@@ -1,0 +1,88 @@
+# Supply Chain Security — hard gate.
+#
+# Blocks at merge time:
+#   1. Leaked secrets (gitleaks scans the FULL git history on push, the PR diff on PRs).
+#   2. Malicious / discontinued Rust crates (OSV database "MAL" entries in Cargo.lock).
+#   3. New RustSec advisories (cargo-deny exposes the locked `deny.toml` policy:
+#      vulnerabilities, unmaintained and yanked crates are all declined by the
+#      [advisories] section using the same RustSec database cargo-audit reads).
+#
+# Known advisory debt already captured in deny.toml [advisories] `ignore` is the
+# declared, reviewable baseline. A PR may grow that list, but every added ignore
+# shows up as a reviewable change and the upgrade sprint clears it.
+
+name: Supply Chain Security
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Weekly rescan of main — catches newly published malware in pinned crates.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gitleaks:
+    name: secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  malware-deps:
+    name: osv-malware-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan Cargo.lock for malicious crates (OSV database)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            ghcr.io/google/osv-scanner:v2.7.0 \
+            scan source --format json -L Cargo.lock \
+            > "${RUNNER_TEMP}/osv.json" || true
+
+          ADV=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' "${RUNNER_TEMP}/osv.json")
+          MAL=$(jq '[.results[]?.packages[]?.vulnerabilities[]? | select(.id | startswith("MAL"))] | length' "${RUNNER_TEMP}/osv.json")
+          {
+            echo "### OSV scan (Cargo.lock)"
+            echo "- known advisories (baseline, tracked via deny.toml): ${ADV}"
+            echo "- malicious/discontinued crates: ${MAL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$MAL" -gt 0 ]; then
+            echo "::error::Malicious crate(s) detected in Cargo.lock:"
+            jq -r '.results[]?.packages[]?.vulnerabilities[]? | select(.id | startswith("MAL")) | "- \(.id): \(.summary // "no summary")"' \
+              "${RUNNER_TEMP}/osv.json" || true
+            exit 1
+          fi
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Run cargo-deny (advisories, licenses, bans, sources)
+        run: cargo deny check

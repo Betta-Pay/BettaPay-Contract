@@ -9,7 +9,7 @@ publish = false
 
 [workspace.dependencies]
 soroban-sdk = "21.7.7"
-bettapay_common = { path = "bettapay_common" }
+bettapay_common = { version = "0.1.0", path = "bettapay_common" }
 proptest = "1.5"
 
 [profile.release]

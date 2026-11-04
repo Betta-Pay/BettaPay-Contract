@@ -1,69 +1,54 @@
-name: Contracts Auto-Merge
+# Auto-merge queue ONLY.
+#
+# This workflow does NOT run tests. Quality gates live in tests.yml, clippy.yml
+# and security.yml and are enforced as required status checks via branch
+# protection on main. When a PR is queued below, GitHub itself refuses to merge
+# until every required check and every review requirement is green.
+#
+# Any PR from an external fork is skipped: queueing is for first-party branches.
+
+name: Auto-Merge
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
-  pull_request_review:
-    types: [submitted, dismissed]
-  check_suite:
-    types: [completed]
-  status:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  contents: read
-  pull_requests: write
+  contents: write
+  pull-requests: write
 
 jobs:
-  ci:
-    name: Contracts CI
+  automerge:
+    name: Queue for auto-merge
+    if: >-
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@master
-
-      - name: Cache Rust Dependencies
-        uses: actions/cache@v4
+      - name: Enable native auto-merge (GitHub merges when all required checks pass)
+        uses: actions/github-script@v7
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-
-      - name: Run cargo-audit
-        run: cargo audit
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
-
-      - name: Run cargo-deny
-        run: cargo deny check
-
-      - name: Install Soroban CLI (version pinned in Makefile)
-        run: make install_soroban
-
-      - name: Run Contributor Gates
-        run: make all
-
-  auto-merge:
-    name: Auto-Merge
-    needs: ci
-    if: github.event_name == 'pull_request' && github.event.pull_request.mergeable != false
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enable Auto-Merge
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number || github.event.number }}
-          merge-method: squash
+          script: |
+            try {
+              await github.graphql(
+                `mutation($id: ID!) {
+                  enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) {
+                    pullRequest {
+                      number
+                      autoMergeRequest { enabledAt }
+                    }
+                  }
+                }`,
+                { id: context.payload.pull_request.node_id },
+              );
+              core.info(
+                `PR #${context.payload.pull_request.number} queued for auto-merge. ` +
+                'GitHub will merge it only after every required status check and review rule passes.',
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              // Benign states: already queued, waiting on requirements, blocked
+              // by a rule, or the PR was closed in the meantime.
+              core.notice(`Auto-merge not queued for PR #${context.payload.pull_request.number}: ${msg}`);
+            }
