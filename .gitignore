@@ -11,7 +11,6 @@
 # Cargo.lock
 
 # Editor
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -21,8 +20,6 @@
 Thumbs.db
 
 # Env
-.env
-.env.local
 *.env
 
 # Soroban identity key files (never commit private keys!)
@@ -37,3 +34,4 @@ identity/
 # Dependencies
 node_modules/
 fix.md
+config.bat
