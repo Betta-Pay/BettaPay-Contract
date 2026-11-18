@@ -382,6 +382,14 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,

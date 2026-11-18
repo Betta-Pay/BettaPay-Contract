@@ -37,6 +37,12 @@ log_info "Admin address: $ADMIN_ADDRESS"
 assert_stellar_address "$RECOVERY_ADDRESS" "Recovery Address"
 log_info "Recovery address: $RECOVERY_ADDRESS"
 
+if [ "$RECOVERY_ADDRESS" = "$ADMIN_ADDRESS" ]; then
+  log_warn "RECOVERY_ADDRESS equals ADMIN_ADDRESS. Do not use this configuration in production:"
+  log_warn "the 7-day recovery escape hatch is only useful when the recovery key is held separately."
+  log_warn "Set RECOVERY_ADDRESS to a separate cold or multisig address before a production deploy."
+fi
+
 # Fund account via Friendbot
 log_info "Checking friendbot funding status..."
 curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
