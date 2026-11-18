@@ -9,7 +9,7 @@ use crate::storage::{
     validate_nonzero_address,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 #[contractimpl]
 impl SettlementContract {
