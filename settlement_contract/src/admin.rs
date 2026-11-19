@@ -317,6 +317,15 @@ impl SettlementContract {
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
     ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets `threshold = 1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](SettlementContract::transfer_admin) from the
+    /// recovered admin.
+    ///
     /// # Panics
     ///
     /// - [`SettlementError::RecoveryDelayActive`] if the delay window has not
