@@ -565,6 +565,15 @@ impl GovernanceContract {
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`GovernanceError::RecoveryNotPending`].
     ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets the threshold to `1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](GovernanceContract::transfer_admin) from the
+    /// recovered admin.
+    ///
     /// # Panics
     ///
     /// - [`GovernanceError::RecoveryDelayActive`] if the delay window has not

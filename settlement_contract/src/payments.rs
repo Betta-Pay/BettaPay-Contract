@@ -14,7 +14,7 @@ use crate::storage::{
     read_rule_or_default, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Clamps ceil-rounded fee legs against the gross and derives the merchant remainder.
 ///

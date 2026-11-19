@@ -29,7 +29,7 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
 ///
@@ -309,6 +309,15 @@ impl SettlementContract {
     /// [`cancel_recovery`](SettlementContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
+    ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets `threshold = 1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](SettlementContract::transfer_admin) from the
+    /// recovered admin.
     ///
     /// # Panics
     ///
