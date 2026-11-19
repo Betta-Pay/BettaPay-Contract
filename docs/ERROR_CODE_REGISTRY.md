@@ -26,26 +26,27 @@ Defined in `bettapay_common/src/error_codes.rs` as `SHARED_CODES`.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 1 | `Unauthorized` | Caller lacks required authorization |
-| 2 | `AlreadyInitialized` | Contract cannot be re-initialized |
-| 3 | `NotInitialized` | Contract must be initialized before use |
-| 4 | `InvalidAmount` | Amount value is zero, negative, or exceeds limits |
-| 5 | `InvalidAddress` | Address is malformed or zero-address sentinel |
-| 6 | `InvalidFee` | Fee configuration violates constraints |
-| 7 | `StorageFailure` | Persistent storage operation failed |
-| 8 | `ArithmeticOverflow` | Numeric operation would overflow |
-| 9 | `DivisionByZero` | Division or modulo by zero |
-| 10 | `InvalidTimestamp` | Timestamp is in the past or too far in the future |
-| 11 | `DeadlineExpired` | Operation deadline has passed |
-| 12 | `InvalidSignature` | Cryptographic signature verification failed |
-| 13 | `DuplicateEntry` | Entry already exists (merchant, schedule, etc.) |
-| 14 | `EntryNotFound` | Requested entry does not exist |
-| 15 | `Paused` | Contract is paused; operation not allowed |
-| 16 | `AlreadyUnpaused` | Contract is already unpaused |
-| 17 | `AlreadyPaused` | Contract is already paused |
-| 18-99 | — | **Reserved for future shared errors** |
+| 1 | `ALREADY_INITIALIZED` | The contract has already been initialized |
+| 2 | `NOT_INITIALIZED` | The contract has not been initialized yet |
+| 3 | `UNAUTHORIZED` | The caller is not authorized to perform this action |
+| 4 | `INVALID_FEE_BPS` | The provided fee basis points are invalid or exceed the maximum limit |
+| 5 | `PAUSED` | The contract is currently paused and the operation is not allowed |
+| 6 | `INVALID_ADMIN` | The provided admin address is invalid (e.g., zero address or same as current admin) |
+| 7 | `INVALID_RECOVERY_ADDRESS` | The provided recovery address is invalid |
+| 8 | `RECOVERY_NOT_PENDING` | No admin recovery is currently pending |
+| 9 | `RECOVERY_DELAY_ACTIVE` | The admin-recovery timelock has not yet elapsed |
+| 10 | `EXECUTION_NOT_READY` | The scheduled operation is not yet ready for execution |
+| 11 | `OPERATION_NOT_SCHEDULED` | The operation has not been scheduled |
+| 12 | `OPERATION_ALREADY_SCHEDULED` | The operation has already been scheduled |
+| 13 | `INVALID_WASM_INTERFACE` | The deployed WASM does not implement the required interface |
+| 14 | `INVALID_THRESHOLD` | The provided multisig threshold is invalid |
+| 15 | `RECOVERY_ALREADY_PENDING` | A recovery operation is already pending; a second one cannot be initiated |
+| 16 | `ALREADY_UNPAUSED` | `unpause` was called while the contract was already unpaused |
+| 17 | `ALREADY_PAUSED` | `pause` was called while the contract was already paused |
+| 18 | `SAME_ADMIN` | The new admin set and threshold are identical to the current ones |
+| 19-99 | — | **Reserved for future shared errors** |
 
-**Note on code 16 and 17:** These idempotent pause state checks are intentionally ordered this way in the codebase for historical reasons. New shared errors should use codes 18+.
+**Note on code 16 and 17:** In `error_codes.rs`, `ALREADY_PAUSED` is 17 and `ALREADY_UNPAUSED` is 16. This ordering is intentional for historical reasons. New shared errors should use codes 19+.
 
 ---
 
@@ -70,26 +71,28 @@ Defined in `settlement_contract/src/errors.rs` as `SettlementError`.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 300 | `MerchantNotFound` | Merchant address not registered |
-| 301 | — | **Reserved (formerly allocated, now unused)** |
-| 302 | `InvalidMerchantConfig` | Merchant configuration violates constraints |
-| 303 | `PaymentNotFound` | Payment reference does not exist |
-| 304 | `InvalidPaymentState` | Payment state transition not allowed |
-| 305 | — | **Reserved (formerly allocated, now unused)** |
-| 306 | `InsufficientBalance` | Payer balance too low for payment |
-| 307 | `InvalidRecipient` | Recipient address invalid for payment |
-| 308 | `FeeCalculationFailed` | Fee split computation failed |
-| 309 | `GovernanceCallFailed` | Cross-contract governance call returned error |
-| 310 | `ScheduleNotFound` | Scheduled operation does not exist |
-| 311 | `ScheduleAlreadyExecuted` | Scheduled operation already executed |
-| 312 | `ScheduleNotReady` | Scheduled operation execution time not reached |
-| 313 | `RecoveryNotInitiated` | Recovery mode must be initiated before execution |
-| 314 | `RecoveryAlreadyActive` | Recovery mode already in progress |
-| 315 | `InvalidRecoveryState` | Recovery state transition not allowed |
-| 316 | `UpgradeHashMismatch` | Upgrade WASM hash does not match scheduled hash |
-| 317 | `AdminSetEmpty` | Stored admin list was empty when resolving primary admin |
-| 318 | `ReferenceAlreadyUsed` | Payment reference already exists (duplicate) |
-| 319-399 | — | **Reserved for future settlement errors** |
+| 300 | `MerchantExists` | `register_merchant` was called for an address that is already registered |
+| 301 | — | **Reserved (unassigned historical gap; reservation removed, issue #881)** |
+| 302 | `MerchantMissing` | The target merchant address is not registered |
+| 303 | `DuplicatePaymentReference` | `store_payment_reference` was called with a 32-byte reference that already exists |
+| 304 | `MerchantRuleNotSet` | No merchant-specific rule has been set; the default rule or bootstrap fallback applies |
+| 305 | — | **Reserved (unassigned historical gap; reservation removed, issue #881)** |
+| 306 | `ZeroAddress` | The supplied address is the zero-address |
+| 307 | `InvalidPaymentReference` | `store_payment_reference` was called with an all-zero (reserved) 32-byte reference |
+| 308 | `InvalidSettlementDelay` | `settlement_delay_ledger` exceeds `MAX_SETTLEMENT_DELAY_LEDGER` |
+| 309 | `InvalidGovernance` | Governance contract configuration is invalid |
+| 310 | `AmountOverflow` | Payment amount is large enough that multiplying by a fee's basis points would overflow `i128` |
+| 311 | `GovernanceCallFailed` | Cross-contract governance call failed |
+| 312 | `FeeExceedsGovernanceConfig` | Fee exceeds the governance-configured limit |
+| 313 | `AmountTooSmall` | Payment amount is below the minimum |
+| 314 | `BatchTooLarge` | Batch exceeds the maximum allowed size |
+| 315 | `PaymentOrphaned` | Merchant's payment records are orphaned while the merchant is unregistered or its archive tombstone is present |
+| 316 | `OperationHashCollision` | `schedule()` found a `sha256(operation)` key already holding a different pending operation, or `execute()`/`cancel()` was given an operation that does not match the stored one |
+| 317 | `AdminSetEmpty` | Stored admin list was empty when resolving the primary admin |
+| 318 | `PayloadTooLarge` | Scheduled operation's encoded XDR payload exceeds `MAX_SCHEDULED_OPERATION_PAYLOAD_LEN` (issue #993) |
+| 319 | `ExecutionDelayTooLong` | `schedule()` `execute_in` delay exceeds `MAX_TIMELOCK_DELAY_SECONDS` (issue #992) |
+| 320 | `InvalidPauseReason` | `pause()` reason code is above `MAX_PAUSE_REASON` (issue #991) |
+| 321-399 | — | **Reserved for future settlement errors** |
 
 ---
 
