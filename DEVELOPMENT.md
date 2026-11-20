@@ -7,13 +7,16 @@ the [README](README.md).
 ## Table of Contents
 
 - [Contract Upgrades](#contract-upgrades)
+- [Operator Runbook: Probe, Upgrade, Migrate, and Verify](#operator-runbook-probe-upgrade-migrate-and-verify)
 - [Storage Layout](#storage-layout)
+- [Lifecycle & Architecture Specifications](#lifecycle--architecture-specifications)
 - [Two Constraints That Shape Every Migration](#two-constraints-that-shape-every-migration)
 - [The Migration Pattern](#the-migration-pattern)
 - [Migrating Entries You Cannot Enumerate](#migrating-entries-you-cannot-enumerate)
 - [Worked Example: Adding a Field to `PaymentRecord`](#worked-example-adding-a-field-to-paymentrecord)
 - [Worked Example: Changing a `DataKey` Variant](#worked-example-changing-a-datakey-variant)
 - [TTL and Archived Entries](#ttl-and-archived-entries)
+- [Fuzzing Storage-Key Decoding](#fuzzing-storage-key-decoding)
 - [Testing a Migration](#testing-a-migration)
 - [Checklist](#checklist)
 
@@ -40,35 +43,193 @@ That is the whole reason this document exists. `upgrade` is safe precisely
 because it ignores storage, which means changing storage is a separate problem
 you have to solve deliberately.
 
+## Operator Runbook: Probe, Upgrade, Migrate, and Verify
+
+Follow these steps for each contract independently. The order is deliberate:
+probe the candidate Wasm, upgrade the contract, call its migration entry
+point, then verify before moving on. The upgrade entry point also probes the
+candidate itself and refuses a Wasm that does not implement the required
+interface.
+
+Set the network, IDs, and signer values for the deployment. `ADMIN_SIGNERS`
+must be a JSON array containing enough current admin addresses to meet that
+contract's stored multisig threshold; those admins must authorize the
+transaction. `DEPLOYER` is the funded CLI identity that submits and pays for
+the operator transactions.
+
+```bash
+export RPC="https://soroban-rpc.example"
+export PASS="network passphrase"
+export DEPLOYER="funded-operator-identity"
+export ADMIN_SIGNERS='["G...ADMIN_1","G...ADMIN_2"]'
+export SETTLEMENT_ID="C...SETTLEMENT"
+export GOVERNANCE_ID="C...GOVERNANCE"
+```
+
+1. **Build and upload the candidate Wasm.** Keep the previous deployed Wasm
+   artifacts and hashes for rollback analysis.
+
+   ```bash
+   make optimize
+   SETTLEMENT_WASM_HASH=$(soroban contract upload \
+     --wasm target/optimized/settlement_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   GOVERNANCE_WASM_HASH=$(soroban contract upload \
+     --wasm target/optimized/governance_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   ```
+
+2. **Probe each candidate.** Deploy a disposable instance of each uploaded
+   candidate, then invoke `supports_interface` on it without calling `init`.
+   The current required interface is `1` for both contracts:
+   `settlement_contract::SUPPORTED_INTERFACE_VERSION` and the governance
+   contract's `SUPPORTED_INTERFACE_VERSION`. Continue only when both calls
+   return `true`. The `upgrade` calls below repeat this check against the
+   uploaded Wasm before changing the live executable through
+   `bettapay_common::upgrade::probe_supports_interface`.
+
+   ```bash
+   SETTLEMENT_PROBE_ID=$(soroban contract deploy \
+     --wasm target/optimized/settlement_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   soroban contract invoke --id "$SETTLEMENT_PROBE_ID" \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     supports_interface --version 1
+
+   GOVERNANCE_PROBE_ID=$(soroban contract deploy \
+     --wasm target/optimized/governance_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   soroban contract invoke --id "$GOVERNANCE_PROBE_ID" \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     supports_interface --version 1
+   ```
+
+3. **Optionally pause writes before the upgrade.** Each `pause` call requires
+   the contract's current admin threshold. Settlement takes a bounded
+   `reason`; governance uses its unspecified-reason default.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     pause --signers "$ADMIN_SIGNERS" --reason 1
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     pause --signers "$ADMIN_SIGNERS"
+   ```
+
+   `upgrade` is permitted while paused, but both contracts reject `migrate`
+   while paused. If you pause, unpause after the code swap and before the
+   migration; arrange an external write freeze if writes must remain stopped
+   across that interval.
+
+4. **Upgrade the live contracts.** Each entry point is named `upgrade` and
+   requires a `signers` vector meeting the current admin threshold.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     upgrade --signers "$ADMIN_SIGNERS" --new_wasm_hash "$SETTLEMENT_WASM_HASH"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     upgrade --signers "$ADMIN_SIGNERS" --new_wasm_hash "$GOVERNANCE_WASM_HASH"
+   ```
+
+5. **Unpause if step 3 was used, then migrate each contract.** The
+   admin-gated `migrate(signers)` entry point must be called on each contract,
+   with enough current admins to satisfy its threshold. It advances that
+   contract's instance-storage `SchemaVersion` marker through
+   `CURRENT_SCHEMA_VERSION` and emits `migrated` with the resulting version.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     unpause --signers "$ADMIN_SIGNERS"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     unpause --signers "$ADMIN_SIGNERS"
+
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     migrate --signers "$ADMIN_SIGNERS"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     migrate --signers "$ADMIN_SIGNERS"
+   ```
+
+   Run the `unpause` calls only for contracts paused in step 3.
+
+6. **Verify before declaring success.** Confirm each migration invocation
+   succeeded and inspect its `migrated` event data for the expected schema
+   version. `version` reports the deployed build's schema version; it is not
+   a read of the stored marker. Read representative contract state through
+   the new public getters and compare it with pre-upgrade records. Confirm
+   both contracts' expected behavior before proceeding with unrelated
+   deployments or upgrades.
+
+7. **Rollback deliberately.** Keep the old Wasm and its hash available.
+   Rolling code back is another admin-threshold `upgrade` to the old hash,
+   and is safe only if that old code can read the current storage schema.
+   Storage writes made by `migrate` are not automatically undone. If the
+   schema has changed incompatibly, do not blindly restore old Wasm; use a
+   compatible forward fix or a reviewed reverse migration first.
+
 ## Storage Layout
 
-What is on the ledger today, and which storage kind holds it.
+What is on the ledger today, and which storage kind holds it. See [`docs/storage-key-ownership.md`](docs/storage-key-ownership.md) for authoritative cross-crate ownership and TTL policies.
 
 ### Settlement contract
 
 | Key | Storage | Holds |
 | --- | --- | --- |
-| `Admin` | instance | `Address` |
-| `RecoveryAddress` | instance | `Address` |
-| `PendingRecovery` | instance | `PendingRecovery` |
+| `Admin` | instance | `Vec<Address>` |
+| `Initializing` | instance | sentinel set during `init` to prevent reentrancy, removed once complete |
 | `Governance` | instance | `Address` |
-| `Paused` | instance | `bool` |
-| `DefaultRule` | persistent | `SettlementRule` |
-| `Merchant(Address)` | persistent | merchant registration |
-| `Rule(Address)` | persistent | `SettlementRule` |
-| `Payment(BytesN<32>)` | persistent | `PaymentRecord` |
+| `Deployer` | instance | `Address` (gates `init` front-running prevention, issue #684) |
+| `SchemaVersion` | instance | `u32` (schema version written at `init`, issue #507, #704) |
+| `CachedGovRule` | instance | `Option<SettlementRule>` (cached governance fee rule, issue #744) |
+| `DefaultRule` | instance | `SettlementRule` (global default settlement rule) |
+| `Merchant(Address)` | persistent | `bool` (merchant registration status) |
+| `Rule(Address)` | persistent | `SettlementRule` (merchant-specific settlement rule) |
+| `ArchivedMerchant(Address)` | persistent | `bool` (tombstone written when merchant unregisters, issue #490) |
+| `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` (scoped by merchant and reference, issue #493) |
+| `ScheduledOperation(BytesN<32>)` | persistent | `ScheduledOp` (timelocked operation payload and execute_at) |
+| `PendingOperationCount` | instance | `u32` (pending timelock queue depth, issue #887) |
+
+#### Shared Keys (`CommonDataKey`)
+The following instance keys are shared across contracts via `bettapay_common::storage::CommonDataKey`:
+
+| Key | Storage | Holds |
+| --- | --- | --- |
+| `RecoveryAddress` | instance (`CommonDataKey`) | `Address` (authorised recovery address) |
+| `PendingRecovery` | instance (`CommonDataKey`) | `PendingRecovery` (in-flight recovery record) |
+| `Paused` | instance (`CommonDataKey`) | `bool` (pause flag) |
+| `Threshold` | instance (`CommonDataKey`) | `u32` (multisig admin threshold) |
+
+Note that `RecoveryAddress`, `PendingRecovery`, `Paused`, and `Threshold` are shared through `CommonDataKey` (from `bettapay_common::storage`), while `Admin` remains local (`Vec<Address>`) under each contract's own `DataKey`. See [Storage Key Ownership](docs/storage-key-ownership.md) and [Recovery Lifecycle](docs/recovery-lifecycle.md).
+
+The payment reference's fixed `BytesN<32>` length is named as
+`MAX_PAYMENT_REFERENCE_LEN` (32) rather than left as a bare literal.
 
 ### Governance contract
 
 | Key | Storage | Holds |
 | --- | --- | --- |
-| `Admin` | instance | `Address` |
-| `RecoveryAddress` | instance | `Address` |
-| `PendingRecovery` | instance | `PendingRecovery` |
-| `Paused` | instance | `bool` |
-| `FeeConfig` | persistent | fee configuration |
-| `Anchor(Address)` | persistent | anchor address per asset |
-| `SystemParam(Symbol)` | persistent | numeric system parameter |
+| `Admin` | instance | `Vec<Address>` |
+| `FeeConfig` | instance | `FeeConfig` (protocol fee ceilings) |
+| `SchemaVersion` | instance | `u32` (written at `init`, issue #507) |
+| `Deployer` | instance | `Address` (gates `init` front-running prevention, issue #684) |
+| `Anchor(Address)` | persistent | `Address` (anchor address per asset) |
+| `SystemParam(Symbol)` | persistent | `i128` (numeric system parameter) |
+
+#### Shared Keys (`CommonDataKey`)
+The following instance keys are shared across contracts via `bettapay_common::storage::CommonDataKey`:
+
+| Key | Storage | Holds |
+| --- | --- | --- |
+| `RecoveryAddress` | instance (`CommonDataKey`) | `Address` (authorised recovery address) |
+| `PendingRecovery` | instance (`CommonDataKey`) | `PendingRecovery` (in-flight recovery record) |
+| `Paused` | instance (`CommonDataKey`) | `bool` (pause flag) |
+| `Threshold` | instance (`CommonDataKey`) | `u32` (multisig admin threshold) |
 
 The split matters for migrations:
 
@@ -79,6 +240,14 @@ The split matters for migrations:
   `SystemParam(_)`) — one entry per address, reference or symbol, and the set
   of live keys is not recorded anywhere on-chain. These are the hard case, and
   the [section below](#migrating-entries-you-cannot-enumerate) is about them.
+
+## Lifecycle & Architecture Specifications
+
+For detailed architectural lifecycles, timing rules, and collision models:
+- **[Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md)**: Defines states (`Unscheduled`, `Scheduled`, `Executed`, `Cancelled`), SHA-256 indexing with stored byte checks, duplicate reschedule (`OperationAlreadyScheduled` 12) vs. genuine hash collision (`OperationHashCollision` 316), minimum 7-day delay (`ExecutionNotReady` 10), recovery veto, permissionless execution, and the 9 operation variants.
+- **[Admin Recovery Lifecycle](docs/recovery-lifecycle.md)**: End-to-end admin recovery sequence across actors (recovery address, admin multisig, permissionless executor), 7-day `RECOVERY_DELAY_SECONDS`, cancellation rules, failure modes (`RecoveryNotPending` 8, `RecoveryDelayActive` 9, `RecoveryAlreadyPending` 15), and timelock veto semantics.
+- **[Bootstrap Fallback Semantics](docs/bootstrap-fallback.md)**: Details the 4-tier settlement fallback chain (merchant → default → governance → bootstrap), trigger conditions, constant values (`100` platform bps, `5` network bps, `0` delay, `auto_settle` false), and event emission rules.
+- **[Storage Key Ownership and TTL Policies](docs/storage-key-ownership.md)**: Comprehensive mapping of all storage keys across `bettapay_common`, `settlement_contract`, and `governance_contract`.
 
 ## Two Constraints That Shape Every Migration
 
@@ -93,11 +262,13 @@ no "scan the prefix". Every read requires the caller to already know the exact
 key.
 
 This is visible in the existing API surface: `get_payments` takes
-`references: Vec<BytesN<32>>` from the caller rather than returning all
-payments, because returning all payments is not something the contract can do.
+`merchant` plus `references: Vec<BytesN<32>>` from the caller rather than
+returning all payments, because returning all payments is not something the
+contract can do.
 
 So "read the old-format data from storage" is only a well-defined instruction
-for fixed keys. For `Payment(BytesN<32>)` the contract does not and cannot know
+for fixed keys. For `Payment(Address, BytesN<32>)` the contract does not and
+cannot know
 which references exist.
 
 ### 2. A contract can only touch its own storage
@@ -123,7 +294,7 @@ contract of its own.
 
 ## The Migration Pattern
 
-*Note: Neither `migrate` nor `SchemaVersion` is currently implemented in the contracts. This section serves as a theoretical template for contributors when the first breaking change arises.*
+*Note: Both contracts ship a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issues #507, #704). Since issue #984, `migrate` is rejected while paused and, when the stored version is below `CURRENT_SCHEMA_VERSION`, calls a `migrate_step(env, from_version)` hook once per version crossed and then advances the marker. At `CURRENT_SCHEMA_VERSION` it is a no-op. To ship a conversion, bump `CURRENT_SCHEMA_VERSION` and add its step to that hook in each affected contract. The order is always: upgrade the Wasm, call `migrate`, verify.*
 
 Ordering is the point: the code that can read both formats has to be deployed
 before anything is rewritten.
@@ -160,7 +331,7 @@ become.
 ### 3. Upgrade
 
 ```bash
-stellar contract invoke --id "$SETTLEMENT_ID" -- upgrade \
+soroban contract invoke --id "$SETTLEMENT_ID" -- upgrade \
   --signers '["G...ADMIN"]' \
   --new_wasm_hash "$NEW_WASM_HASH"
 ```
@@ -172,25 +343,29 @@ old-format data. Keep the window short, and see
 ### 4. Migrate
 
 ```bash
-stellar contract invoke --id "$SETTLEMENT_ID" -- migrate
+soroban contract invoke --id "$SETTLEMENT_ID" -- migrate
 ```
 
 `migrate` reads with the old type, writes with the new one, removes superseded
-keys, and sets `SchemaVersion` to the new value. It must be idempotent and must
-reject a re-run — see the example below.
+keys, and sets `SchemaVersion` to the new value. It is idempotent; calling it
+again when the marker is current is a no-op — see the example below.
 
 ### 5. Verify before moving on
 
 Read back a representative sample through the new getters and confirm the
-values match what was there before. Confirm `SchemaVersion` advanced. Only then
-treat the migration as done.
+values match what was there before. The `migrated` event includes the schema
+version written by the call; `version()` reports the deployed build's
+compile-time version, not the stored marker. Only treat the migration as done
+after checking the event and representative state.
 
 ### 6. Consider pausing for the window
 
 Both contracts have `pause`/`unpause`. If the old and new formats cannot
-coexist safely for the duration — for instance if a write in the old format
-during the window would be missed by the migration — pause before the upgrade
-and unpause after verification.
+coexist safely during the upgrade, pause before it. `migrate` is rejected
+while paused, so unpause before migrating; arrange an external write freeze if
+mutations must remain blocked through the migration. See the
+[operator runbook](#operator-runbook-probe-upgrade-migrate-and-verify) for
+both contracts' commands.
 
 ### 7. Strip the migration code in a later upgrade
 
@@ -239,6 +414,23 @@ batch calls above.
 **Rule of thumb:** use lazy migration for parameterised keys and an eager
 `migrate` for fixed keys. They compose — one `migrate` call for the singletons,
 lazy conversion for the long tail.
+
+## PaymentRecord Schema Versioning
+
+As of issue #967, `PaymentRecord` includes a `version: u32` field written at
+storage time. New records are written with `version = 1`.
+
+**Old records:** Entries stored before this field existed have no `version` key
+and are detected by the field's absence during deserialization. Callers must
+treat missing `version` as `version = 0`. The field is encoded by name in the
+`#[contracttype]` map, so older contract versions will not decode the entry at
+all if the field is present (name-based encoding protects against silent
+corruption).
+
+**Future migrations:** The `version` field supports deterministic evolution
+without renaming the struct. When adding new fields, increment the version and
+pair it with a conversion function that maps old shapes to new ones,
+following the lazy-migration pattern shown in the next section.
 
 ## Worked Example: Adding a Field to `PaymentRecord`
 
@@ -304,8 +496,8 @@ impl PaymentRecordV1 {
 Updating the actual contract getter entry point [`get_payment_reference`](settlement_contract/src/payments.rs) to convert in place on read:
 
 ```rust,ignore
-pub fn get_payment_reference(env: Env, reference: BytesN<32>) -> Option<PaymentRecord> {
-    let key = DataKey::Payment(reference);
+pub fn get_payment_reference(env: Env, merchant: Address, reference: BytesN<32>) -> Option<PaymentRecord> {
+    let key = DataKey::Payment(merchant, reference);
 
     // New format first: after conversion this is the only branch taken.
     if let Some(record) = env.storage().persistent().get::<_, PaymentRecord>(&key) {
@@ -384,6 +576,23 @@ consequences for migrations:
    first, or skip and record it — do not let one archived entry abort a batch
    that would otherwise succeed.
 
+## Fuzzing Storage-Key Decoding
+
+The settlement contract's DataKey decode regression harness checks every
+`DataKey` and `CommonDataKey` variant for an XDR round-trip, exercises
+arbitrary byte strings generated by proptest, and mutates valid encodings.
+Decode failures are expected for malformed input; a panic is not, and reports
+the offending input in hexadecimal.
+
+Run the harness with:
+
+```bash
+cargo test -p settlement_contract data_key_decode
+```
+
+Proptest reports the seed and case needed to reproduce a random counterexample;
+the deterministic mutation test reports its exact input.
+
 ## Testing a Migration
 
 The test that matters writes data in the old format and reads it through the
@@ -397,7 +606,8 @@ new code. In `soroban_sdk::testutils` terms:
 4. Assert values survived: not just that reads succeed, but that amounts,
    addresses and fee splits are unchanged. A migration that returns defaults
    everywhere also "succeeds".
-5. Assert `migrate` a second time panics rather than re-applying.
+5. Assert `migrate` a second time leaves the schema marker unchanged and
+   emits one `migrated` event for that invocation.
 6. Assert an entry that was already in the new format is left alone.
 
 Point 4 is the one worth insisting on. A conversion that quietly zeroes an

@@ -2,9 +2,9 @@ name: Clippy
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,11 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.85.0"
           components: clippy
       
       - uses: Swatinem/rust-cache@v2
-      
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: make clippy

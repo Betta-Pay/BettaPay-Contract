@@ -4,29 +4,42 @@
 //! the same pair of structured payload types (`AdminTransferred`,
 //! `PendingRecovery`). Putting them here so the two contracts cannot diverge.
 
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
+
+use crate::types::SettlementRule;
 
 /// Structured payload emitted with the `admin_transferred` event so that
-/// off-chain consumers can read the old and new admin by field name rather
-/// than by positional order.
+/// off-chain consumers can read the old and new admin **sets** by field name
+/// rather than by positional order, and reconstruct an authorization
+/// transition without a separate storage scan (issue #977).
+///
+/// Both fields carry the full multisig admin set, not just the primary
+/// (index `0`) admin, so a threshold change that accompanies the transfer is
+/// also visible directly from the event. Field order is fixed as old then
+/// new.
 #[derive(Clone)]
 #[contracttype]
 pub struct AdminTransferred {
-    pub old_admin: Address,
-    pub new_admin: Address,
+    pub old_admins: Vec<Address>,
+    pub new_admins: Vec<Address>,
 }
 
 /// In-flight recovery operation. Lives between `initiate_recovery` and a
 /// successful `execute_recovery` (or a `cancel_recovery`).
 ///
-/// Both contracts use exactly this shape; the struct is encoded by field name
-/// so any historical instance written with a copy of this struct in
-/// `governance_contract` remains readable via `bettapay_common`.
+/// `initiated_by` records the address that started this specific recovery -
+/// the recovery address that authenticated at initiation time (issue #560) -
+/// so `cancel_recovery` can validate the cancellation against it and
+/// off-chain consumers can audit who initiated. Both contracts use exactly
+/// this shape; the struct is encoded by field name so any historical
+/// instance written with a copy of this struct in `governance_contract`
+/// remains readable via `bettapay_common`.
 #[derive(Clone)]
 #[contracttype]
 pub struct PendingRecovery {
     pub new_admin: Address,
     pub execute_after: u64,
+    pub initiated_by: Address,
 }
 
 // Event-topic registry.
@@ -75,7 +88,13 @@ pub const CONTRACT_UPGRADED_EVENT: &str = "contract_upgraded";
 /// Topic emitted when the multisig admin threshold changes.
 pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 
+/// Topic emitted when the recovery address is rotated (issue #694).
+pub const RECOVERY_ADDRESS_UPDATED_EVENT: &str = "recovery_address_updated";
+
 // --- governance_contract only ---
+
+/// Topic emitted when `migrate` completes (schema version management).
+pub const MIGRATED_EVENT: &str = "migrated";
 
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";
@@ -97,6 +116,11 @@ pub const GOVERNANCE_UPDATED_EVENT: &str = "governance_updated";
 /// Topic emitted when a merchant is registered.
 pub const MERCHANT_REGISTERED_EVENT: &str = "merchant_registered";
 
+/// Topic emitted alongside `merchant_registered`, marking that the merchant
+/// itself authorized its own registration (`merchant.require_auth()`), as
+/// distinct from the admin action that invoked `register_merchant` (issue #978).
+pub const MERCHANT_CONSENT_EVENT: &str = "merchant_consent";
+
 /// Topic emitted when a merchant is unregistered.
 pub const MERCHANT_UNREGISTERED_EVENT: &str = "merchant_unregistered";
 
@@ -106,6 +130,10 @@ pub const SETTLEMENT_RULE_UPDATED_EVENT: &str = "settlement_rule_updated";
 /// Topic emitted when a merchant-specific settlement rule is cleared —
 /// either explicitly via `clear_settlement_rule`, or as a side effect of
 /// `unregister_merchant` removing a merchant that had one set.
+///
+/// Both removal paths publish through [`emit_settlement_rule_cleared`], so
+/// the data payload is always the same canonical triple
+/// `(admin, removed, fallback)` (issue #491).
 pub const SETTLEMENT_RULE_CLEARED_EVENT: &str = "settlement_rule_cleared";
 
 /// Topic emitted when the global default settlement rule is updated.
@@ -120,6 +148,19 @@ pub const BOOTSTRAP_FALLBACK_EVENT: &str = "bootstrap_fallback";
 /// `store_payment_reference`.
 pub const PAYMENT_STORED_EVENT: &str = "payment_stored";
 
+/// Topic emitted once per `prune_payments` call. Data is
+/// `(admin, removed_count)`.
+pub const PAYMENTS_PRUNED_EVENT: &str = "payments_pruned";
+
+/// Topic emitted when a single payment record is removed by `prune_payment`.
+///
+/// Topics: `(Symbol("payment_pruned"), Address merchant, BytesN<32> reference)`
+/// Data:   `(Address merchant, BytesN<32> reference)`
+///
+/// Emitted only when a record actually existed and was removed; pruning a
+/// missing record is a no-op and stays silent (issue #890).
+pub const PAYMENT_PRUNED_EVENT: &str = "payment_pruned";
+
 /// Topic emitted when a timelocked administrative operation is scheduled.
 pub const OP_SCHEDULED_EVENT: &str = "op_scheduled";
 
@@ -129,11 +170,57 @@ pub const OP_EXECUTED_EVENT: &str = "op_executed";
 /// Topic emitted when a scheduled administrative operation is cancelled.
 pub const OP_CANCELLED_EVENT: &str = "op_cancelled";
 
+/// Topic emitted when `validate_fee_against_governance` rejects a fee rule
+/// that exceeds governance's configured ceiling.
+pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
+
+/// Every topic name defined in this registry, across all groups (shared,
+/// governance-only, settlement-only).
+///
+/// Each contract's event-topic tests pin this complete set and assert every
+/// emitted `topic[0]` belongs to it, so additions are deliberate and call
+/// sites cannot silently drift from the registry.
+pub const ALL_EVENT_TOPICS: &[&str] = &[
+    // Shared
+    INITIALIZED_EVENT,
+    ADMIN_TRANSFERRED_EVENT,
+    PAUSED_EVENT,
+    UNPAUSED_EVENT,
+    RECOVERY_INITIATED_EVENT,
+    RECOVERY_CANCELLED_EVENT,
+    RECOVERY_EXECUTED_EVENT,
+    CONTRACT_UPGRADED_EVENT,
+    THRESHOLD_CHANGED_EVENT,
+    RECOVERY_ADDRESS_UPDATED_EVENT,
+    // governance_contract only
+    MIGRATED_EVENT,
+    SYS_PARAM_UPDATED_EVENT,
+    FEE_CONFIG_UPDATED_EVENT,
+    ANCHOR_UPSERTED_EVENT,
+    ANCHOR_REMOVED_EVENT,
+    // settlement_contract only
+    GOVERNANCE_UPDATED_EVENT,
+    MERCHANT_REGISTERED_EVENT,
+    MERCHANT_CONSENT_EVENT,
+    MERCHANT_UNREGISTERED_EVENT,
+    SETTLEMENT_RULE_UPDATED_EVENT,
+    SETTLEMENT_RULE_CLEARED_EVENT,
+    DEFAULT_RULE_UPDATED_EVENT,
+    BOOTSTRAP_FALLBACK_EVENT,
+    PAYMENT_STORED_EVENT,
+    PAYMENTS_PRUNED_EVENT,
+    PAYMENT_PRUNED_EVENT,
+    OP_SCHEDULED_EVENT,
+    OP_EXECUTED_EVENT,
+    OP_CANCELLED_EVENT,
+    FEE_CEILING_REJECTED_EVENT,
+];
+
 /// Emits the `admin_transferred` event with the structured
 /// [`AdminTransferred`] payload.
 ///
 /// Topics: `(Symbol("admin_transferred"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, ADMIN_TRANSFERRED_EVENT),),
@@ -144,10 +231,17 @@ pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
 /// Emits the `paused` event.
 ///
 /// Topics: `(Symbol("paused"),)`
-/// Data:    `(admin_address, true)`
-pub fn emit_paused(env: &Env, admin: &Address) {
-    env.events()
-        .publish((Symbol::new(env, PAUSED_EVENT),), (admin.clone(), true));
+/// Data:    `(admin_address, true, reason)`
+///
+/// `reason` is a bounded numeric code (issue #991) — see
+/// [`crate::constants::MAX_PAUSE_REASON`] — carrying the machine-readable
+/// cause of the pause for incident forensics. Callers that don't expose a
+/// reason to their own callers pass [`crate::constants::PAUSE_REASON_NONE`].
+pub fn emit_paused(env: &Env, admin: &Address, reason: u32) {
+    env.events().publish(
+        (Symbol::new(env, PAUSED_EVENT),),
+        (admin.clone(), true, reason),
+    );
 }
 
 /// Emits the `unpaused` event.
@@ -178,20 +272,50 @@ pub fn emit_recovery_initiated(
 /// Emits the `recovery_cancelled` event.
 ///
 /// Topics: `(Symbol("recovery_cancelled"),)`
-/// Data:    `admin_address`
-pub fn emit_recovery_cancelled(env: &Env, admin: &Address) {
-    env.events()
-        .publish((Symbol::new(env, RECOVERY_CANCELLED_EVENT),), admin.clone());
+/// Data:    `canceller` - the address that cancelled the recovery: an admin,
+///          or the initiator cancelling its own recovery (issue #560).
+pub fn emit_recovery_cancelled(env: &Env, canceller: &Address) {
+    env.events().publish(
+        (Symbol::new(env, RECOVERY_CANCELLED_EVENT),),
+        canceller.clone(),
+    );
 }
 
 /// Emits the `recovery_executed` event.
 ///
 /// Topics: `(Symbol("recovery_executed"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_recovery_executed(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, RECOVERY_EXECUTED_EVENT),),
         payload.clone(),
+    );
+}
+
+/// Emits the `settlement_rule_cleared` event with the canonical payload.
+///
+/// Topics: `(Symbol("settlement_rule_cleared"), Address merchant)`
+/// Data:    `(Address admin, SettlementRule removed, SettlementRule fallback)`
+///
+/// Every path that removes a merchant-specific settlement rule must publish
+/// through this helper — `clear_settlement_rule` and the side effect of
+/// `unregister_merchant` — so an indexer always sees the same data arity for
+/// the topic (issue #491). `removed` is the rule that was stored; `fallback`
+/// is the rule the merchant falls back to (default rule, or the bootstrap
+/// rule when none is stored).
+pub fn emit_settlement_rule_cleared(
+    env: &Env,
+    merchant: &Address,
+    admin: &Address,
+    removed: &SettlementRule,
+    fallback: &SettlementRule,
+) {
+    env.events().publish(
+        (
+            Symbol::new(env, SETTLEMENT_RULE_CLEARED_EVENT),
+            merchant.clone(),
+        ),
+        (admin.clone(), removed.clone(), fallback.clone()),
     );
 }
 
@@ -207,18 +331,18 @@ mod tests {
     #[test]
     fn admin_transferred_payload_shape_is_canonical() {
         let env = Env::default();
-        let old_admin = Address::generate(&env);
-        let new_admin = Address::generate(&env);
+        let old_admins = Vec::from_array(&env, [Address::generate(&env)]);
+        let new_admins = Vec::from_array(&env, [Address::generate(&env)]);
         let payload = AdminTransferred {
-            old_admin: old_admin.clone(),
-            new_admin: new_admin.clone(),
+            old_admins: old_admins.clone(),
+            new_admins: new_admins.clone(),
         };
 
         let val: Val = payload.try_into_val(&env).unwrap();
         let fields: Map<Symbol, Val> = Map::try_from_val(&env, &val).unwrap();
 
-        assert!(fields.contains_key(Symbol::new(&env, "old_admin")));
-        assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
+        assert!(fields.contains_key(Symbol::new(&env, "old_admins")));
+        assert!(fields.contains_key(Symbol::new(&env, "new_admins")));
         assert_eq!(fields.len(), 2);
     }
 
@@ -229,6 +353,7 @@ mod tests {
         let payload = PendingRecovery {
             new_admin,
             execute_after: 123,
+            initiated_by: Address::generate(&env),
         };
 
         let val: Val = payload.try_into_val(&env).unwrap();
@@ -236,6 +361,7 @@ mod tests {
 
         assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
         assert!(fields.contains_key(Symbol::new(&env, "execute_after")));
-        assert_eq!(fields.len(), 2);
+        assert!(fields.contains_key(Symbol::new(&env, "initiated_by")));
+        assert_eq!(fields.len(), 3);
     }
 }

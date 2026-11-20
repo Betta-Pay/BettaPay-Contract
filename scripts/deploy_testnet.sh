@@ -42,6 +42,9 @@ log_info "Checking friendbot funding status..."
 curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
 
 # Build contracts
+log_info "Building and optimizing settlement and governance contracts..."
+make optimize
+log_success "Optimized build completed successfully."
 log_info "Building settlement and governance contracts..."
 make optimize
 log_success "Build completed successfully."
@@ -76,26 +79,20 @@ GOVERNANCE_ID="$(
 assert_contract_id "$GOVERNANCE_ID" "Governance Contract ID"
 log_success "Governance contract deployed: $GOVERNANCE_ID"
 
+# Deployment order and one-shot init recovery notes: see ../DEPLOYMENT.md.
+# Initialize settlement before governance; settlement stores the governance
+# address without calling it, but a successful init must not be repeated.
 # Initialize settlement contract
-log_info "Initializing Settlement contract with admin..."
-soroban contract invoke \
-  --id "$SETTLEMENT_ID" \
-  --source-account "$BETTAPAY_IDENTITY" \
-  --rpc-url "$SOROBAN_RPC_URL" \
-  --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
-  -- \
-  init --admin "$ADMIN_ADDRESS" --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
+log_info "Initializing Settlement contract with admin set..."
+ADMINS="[\"${ADMIN_ADDRESS}\"]"
+invoke_contract_init "$SETTLEMENT_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+  --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
-log_info "Initializing Governance contract with admin..."
-soroban contract invoke \
-  --id "$GOVERNANCE_ID" \
-  --source-account "$BETTAPAY_IDENTITY" \
-  --rpc-url "$SOROBAN_RPC_URL" \
-  --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
-  -- \
-  init --admin "$ADMIN_ADDRESS" --recovery-address "$RECOVERY_ADDRESS"
+log_info "Initializing Governance contract with admin set..."
+invoke_contract_init "$GOVERNANCE_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+  --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 
 # Print summary

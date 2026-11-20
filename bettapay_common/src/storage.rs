@@ -3,11 +3,13 @@
 //! Each contract keeps its own private `DataKey` enum for keys that are
 //! contract-specific (e.g. settlement's `Merchant(Address)` or governance's
 //! `Anchor(Address)`). The keys that are semantically shared — the pause
-//! flag, the recovery address, and the pending recovery operation — live in
-//! [`CommonDataKey`] so every contract reads and writes them in exactly the
-//! same shape. The admin role is *not* one of these: both contracts store it
-//! as a multisig `Vec<Address>` under their own `DataKey::Admin`, so there is
-//! no single-`Address` shape for this crate to own.
+//! flag, the recovery address, the pending recovery operation, and the
+//! multisig threshold — are declared exactly once, in [`CommonDataKey`]
+//! below; neither contract redeclares its own `Paused` / `RecoveryAddress` /
+//! `PendingRecovery` / `Threshold` variant. The admin role is *not* one of
+//! these: both contracts store it as a multisig `Vec<Address>` under their
+//! own `DataKey::Admin`, so there is no single-`Address` shape for this
+//! crate to own.
 //!
 //! The on-chain SCVal encoding of a Soroban `#[contracttype]` enum is based on
 //! the variant name only; the parent enum's Rust name is not part of the
@@ -15,6 +17,24 @@
 //! reads back identically through `bettapay_common::CommonDataKey::Paused`,
 //! which is what allows both contracts to share this enum without disturbing
 //! any existing storage entry.
+//!
+//! ## Pause helpers
+//!
+//! The full pause lifecycle — flag storage, event emission, and idempotency
+//! semantics — is consolidated here so neither contract re-implements it:
+//!
+//! | Helper | What it does |
+//! |---|---|
+//! | [`is_paused`] | Reads the flag (no TTL bump) |
+//! | [`set_paused`] | Writes the flag (raw; no event) |
+//! | [`apply_pause`] | Writes `true` **and** emits `paused` event |
+//! | [`apply_unpause`] | Writes `false` **and** emits `unpaused` event |
+//!
+//! Contracts call [`apply_pause`] / [`apply_unpause`] from their `pause` /
+//! `unpause` entry-points after verifying admin auth and idempotency (which
+//! must panic with contract-specific error types and therefore cannot live
+//! here). The `assert_not_paused` guards in each contract remain thin
+//! wrappers that call [`is_paused`] and panic with their own `Error::Paused`.
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
@@ -37,22 +57,20 @@ pub enum CommonDataKey {
     /// Pause-flag `bool` controlling whether mutating operations are blocked
     /// (instance storage).
     Paused,
+    /// Multisig admin threshold (instance storage).
+    Threshold,
 }
 
 /// Returns `true` if the contract is currently paused.
 ///
-/// Bumps the instance TTL on every call, the same way [`read_admin`] does.
-/// Soroban's instance storage is a single ledger entry shared by every
-/// instance key (`Admin`, `Paused`, `RecoveryAddress`, ...), so in practice
-/// any instance read on a live contract keeps the whole entry — including
-/// the pause flag — warm. But a contract path that checks `is_paused`
-/// without also touching another instance key (or one that's simply quiet
-/// for a long stretch while paused) had no guaranteed keep-alive of its
-/// own, and a missing entry silently reads back as `unpaused` via
-/// `unwrap_or(false)` below rather than failing loudly. Bumping here removes
-/// that dependency on call order.
+/// This is a plain read: it does **not** bump the instance TTL. Every
+/// mutating entry-point calls this via its `assert_not_paused` guard, so
+/// bumping here would extend the instance TTL on every mutating call in the
+/// contract, adding gas to paths that have nothing to do with keep-alive.
+/// Callers that specifically need to keep the instance entry warm (e.g. a
+/// path that only ever reads `is_paused` and no other instance key) should
+/// call [`bump_instance_ttl`] themselves.
 pub fn is_paused(env: &Env) -> bool {
-    bump_instance_ttl(env);
     env.storage()
         .instance()
         .get(&CommonDataKey::Paused)
@@ -66,11 +84,38 @@ pub fn set_paused(env: &Env, paused: bool) {
         .set(&CommonDataKey::Paused, &paused);
 }
 
+/// Atomically sets the pause flag and emits the canonical `paused` event.
+///
+/// This is the single implementation of the pause *action* shared by every
+/// BettaPay contract. Callers are still responsible for verifying admin
+/// auth and checking idempotency (via [`is_paused`]) before calling this,
+/// since those checks produce contract-specific errors that cannot live here.
+///
+/// `reason` is a bounded numeric code (issue #991) threaded through to
+/// [`crate::events::emit_paused`]. Callers must validate it against
+/// [`crate::constants::MAX_PAUSE_REASON`] themselves (with their own typed
+/// error) before calling this — out-of-range rejection cannot live here for
+/// the same reason the admin-auth/idempotency checks can't.
+pub fn apply_pause(env: &Env, admin: &Address, reason: u32) {
+    set_paused(env, true);
+    crate::events::emit_paused(env, admin, reason);
+}
+
+/// Atomically clears the pause flag and emits the canonical `unpaused` event.
+///
+/// This is the single implementation of the unpause *action* shared by every
+/// BettaPay contract. Callers are still responsible for verifying admin
+/// auth and checking idempotency (via [`is_paused`]) before calling this.
+pub fn apply_unpause(env: &Env, admin: &Address) {
+    set_paused(env, false);
+    crate::events::emit_unpaused(env, admin);
+}
+
 /// Returns the first entry of a stored multisig admin list.
 ///
 /// Both `governance_contract` and `settlement_contract` store their admin
 /// role as a `Vec<Address>` (under their own contract-specific `DataKey`,
-/// not [`CommonDataKey::Admin`]) and treat index `0` as the "primary" admin
+/// not `CommonDataKey::Admin`) and treat index `0` as the "primary" admin
 /// for single-address contexts — the address recorded on events, and the
 /// caller compared against in `schedule`/`cancel` ownership checks. Each
 /// contract previously reimplemented `admins.get(0).unwrap()` for this; this
@@ -84,10 +129,18 @@ pub fn primary_admin(admins: &Vec<Address>) -> Option<Address> {
     admins.get(0)
 }
 
+/// The canonical zero-address Stellar strkey sentinel.
+pub const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+/// Constructs the zero-address `Address` sentinel for the current environment.
+pub fn zero_address(env: &Env) -> Address {
+    Address::from_string(&String::from_str(env, ZERO_ADDRESS_STRKEY))
+}
+
 /// Returns `true` if `address` is the network's zero address.
 ///
-/// The Soroban zero-address is the well-known string
-/// `"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"` (a `G...`
+/// The Soroban zero-address is the well-known string [`ZERO_ADDRESS_STRKEY`]
+/// (`"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"`, a `G...`
 /// Stellar-style address whose 32-byte key is all zeros). Both contracts need
 /// to reject this on admin transfer, merchant registration, etc., so the
 /// comparison lives here and callers translate a `true` result into their own
@@ -103,11 +156,8 @@ pub fn primary_admin(admins: &Vec<Address>) -> Option<Address> {
 /// (`Address`'s `PartialEq` delegates to the host's `obj_cmp`) with no
 /// per-call `String` allocation on the hot path.
 pub fn is_zero_address(env: &Env, address: &Address) -> bool {
-    let zero_address = Address::from_string(&String::from_str(
-        env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
-    address == &zero_address
+    let zero = zero_address(env);
+    address == &zero
 }
 
 /// Bump the instance-storage TTL using the policy defined in
@@ -126,7 +176,55 @@ pub fn bump_instance_ttl(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, vec};
+    use soroban_sdk::{contract, testutils::Address as _, vec};
+
+    /// No-op contract used only to obtain a real, registered contract
+    /// address for [`Env::as_contract`] — instance storage helpers like
+    /// [`is_paused`]/[`set_paused`] can only be exercised inside a
+    /// registered contract's storage context.
+    #[contract]
+    struct DummyContract;
+
+    #[test]
+    fn is_paused_defaults_to_false_and_round_trips_via_common_data_key() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            // No entry written yet — CommonDataKey::Paused is the *only*
+            // pause key either contract can read, so a missing entry must
+            // read back as unpaused rather than panicking.
+            assert!(!is_paused(&env));
+
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn two_contract_instances_have_independent_paused_flags() {
+        // Instance storage is scoped per contract address, so pausing one
+        // instance under CommonDataKey::Paused must not affect another
+        // instance that happens to share the same key type — this is what
+        // "storage separation" means despite governance_contract and
+        // settlement_contract both using CommonDataKey.
+        let env = Env::default();
+        let governance_like = env.register_contract(None, DummyContract);
+        let settlement_like = env.register_contract(None, DummyContract);
+
+        env.as_contract(&governance_like, || {
+            set_paused(&env, true);
+        });
+
+        env.as_contract(&settlement_like, || {
+            assert!(!is_paused(&env));
+        });
+        env.as_contract(&governance_like, || {
+            assert!(is_paused(&env));
+        });
+    }
 
     #[test]
     fn primary_admin_returns_first_entry() {
@@ -142,5 +240,82 @@ mod tests {
         let env = Env::default();
         let admins: Vec<Address> = vec![&env];
         assert_eq!(primary_admin(&admins), None);
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use soroban_sdk::{contracttype, Env, IntoVal, Val};
+
+    // The legacy shape of DataKey in settlement/governance contracts had
+    // data variants, so Soroban encoded unit variants as Symbols, not u32s.
+    #[derive(Clone)]
+    #[contracttype]
+    enum LegacyDataKey {
+        Admin,
+        Threshold,
+        RecoveryAddress,
+        PendingRecovery,
+        Governance,
+        Merchant(soroban_sdk::Address),
+    }
+
+    #[test]
+    fn common_data_key_encoding_matches_legacy() {
+        let env = Env::default();
+        let mut map: soroban_sdk::Map<Val, u32> = soroban_sdk::Map::new(&env);
+
+        map.set(LegacyDataKey::RecoveryAddress.into_val(&env), 1u32);
+        assert_eq!(
+            map.get(CommonDataKey::RecoveryAddress.into_val(&env)),
+            Some(1u32),
+            "RecoveryAddress encoding mismatch"
+        );
+
+        map.set(LegacyDataKey::PendingRecovery.into_val(&env), 2u32);
+        assert_eq!(
+            map.get(CommonDataKey::PendingRecovery.into_val(&env)),
+            Some(2u32),
+            "PendingRecovery encoding mismatch"
+        );
+
+        // Note: Paused was also a unit variant in the legacy DataKey.
+        // We'll just define another legacy enum for it or reuse the same.
+        #[derive(Clone)]
+        #[contracttype]
+        enum LegacyDataKey2 {
+            Paused,
+            SystemParam(soroban_sdk::Symbol),
+        }
+
+        map.set(LegacyDataKey2::Paused.into_val(&env), 3u32);
+        assert_eq!(
+            map.get(CommonDataKey::Paused.into_val(&env)),
+            Some(3u32),
+            "Paused encoding mismatch"
+        );
+
+        map.set(LegacyDataKey::Threshold.into_val(&env), 4u32);
+        assert_eq!(
+            map.get(CommonDataKey::Threshold.into_val(&env)),
+            Some(4u32),
+            "Threshold encoding mismatch"
+        );
+    }
+
+    #[test]
+    fn zero_address_sentinel_and_detection() {
+        let env = Env::default();
+        let zero = zero_address(&env);
+        assert!(is_zero_address(&env, &zero));
+
+        let non_zero = Address::generate(&env);
+        assert!(!is_zero_address(&env, &non_zero));
+
+        assert_eq!(
+            ZERO_ADDRESS_STRKEY,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+        );
     }
 }

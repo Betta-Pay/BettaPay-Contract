@@ -1,1 +1,9 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Report a Security Vulnerability
+    url: https://github.com/Betta-Pay/BettaPay-Contract/security/advisories/new
+    about: >-
+      Do not report security vulnerabilities through public GitHub issues.
+      Use GitHub Security Advisories (link above) or email
+      security@bettapay.com. See SECURITY.md for the full policy and report
+      template.

@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,20 +27,126 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy, rust-src
 
+      # Caches ~/.cargo registry, git checkouts and target/. The key includes
+      # the Cargo.lock hash; on a lockfile miss rust-cache restores the newest
+      # cache for this job as a partial warm start.
       - uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ hashFiles('Cargo.lock') }}
           cache-on-failure: true
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: make fmt
 
       - name: Check compilation
-        run: cargo check --workspace --all-targets
+        run: make check
+
+      - name: Run Clippy
+        run: make clippy
 
       - name: Run unit and integration tests
-        run: cargo test --workspace -- --test-threads=1
+        run: make test
         env:
           RUST_BACKTRACE: short
 
+      - name: Run script smoke tests
+        run: make test_scripts
+
+      - name: Install Soroban CLI (version pinned in Makefile)
+        run: make install_soroban
+
+      - name: Check Soroban CLI version
+        run: make check_soroban
+
+      - name: Validate CODEOWNERS
+        run: make check_codeowners
+
+      - name: Check interface version parity
+        run: make check_interface_parity
+
+      - name: Check storage layout docs
+        run: make check_storage_docs
+
       - name: Make All
         run: make all
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read MSRV from rust-toolchain.toml
+        id: msrv
+        run: echo "version=$(make -s print_msrv)" >> "$GITHUB_OUTPUT"
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Check and test under MSRV ${{ steps.msrv.outputs.version }}
+        run: make msrv
+
+  coverage:
+    name: Workspace coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Measure workspace test coverage
+        shell: bash
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info 2>&1 | tee target/coverage/summary.txt
+
+      - name: Record coverage summary
+        run: |
+          echo "## Workspace coverage baseline" >> "$GITHUB_STEP_SUMMARY"
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-coverage
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 30
+
+  doc:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Build docs with warnings as errors
+        run: make doc

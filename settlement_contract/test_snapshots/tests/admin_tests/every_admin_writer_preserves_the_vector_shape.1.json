@@ -1,10 +1,43 @@
 {
   "generators": {
-    "address": 6,
+    "address": 7,
     "nonce": 0
   },
   "auth": [
     [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "function_name": "init",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "u32": 1
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ],
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
         {
@@ -13,6 +46,9 @@
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
               "function_name": "init",
               "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
                 {
                   "vec": [
                     {
@@ -46,7 +82,11 @@
               "function_name": "schedule",
               "args": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
                 },
                 {
                   "vec": [
@@ -54,12 +94,19 @@
                       "symbol": "TransferAdmin"
                     },
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+                        }
+                      ]
+                    },
+                    {
+                      "u32": 1
                     }
                   ]
                 },
                 {
-                  "u64": 172800
+                  "u64": 604800
                 }
               ]
             }
@@ -74,7 +121,7 @@
   "ledger": {
     "protocol_version": 21,
     "sequence_number": 0,
-    "timestamp": 172800,
+    "timestamp": 604800,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -87,7 +134,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 801925984706572462
+                "nonce": 1033654523790656264
               }
             },
             "durability": "temporary"
@@ -102,7 +149,7 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 801925984706572462
+                    "nonce": 1033654523790656264
                   }
                 },
                 "durability": "temporary",
@@ -213,9 +260,21 @@
                         "val": {
                           "vec": [
                             {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Deployer"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                         }
                       },
                       {
@@ -234,24 +293,24 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "Paused"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "bool": false
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
                               "symbol": "RecoveryAddress"
                             }
                           ]
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
                         }
                       },
                       {
@@ -273,7 +332,40 @@
             },
             "ext": "v0"
           },
-          100000
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 801925984706572462
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 801925984706572462
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
         ]
       ],
       [
@@ -294,7 +386,7 @@
             },
             "ext": "v0"
           },
-          100000
+          518400
         ]
       ]
     ]
@@ -320,6 +412,9 @@
             ],
             "data": {
               "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
                 {
                   "vec": [
                     {
@@ -352,71 +447,6 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000004"
-              },
-              {
-                "symbol": "get_fee_config"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000004",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "get_fee_config"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "initialized"
-              }
-            ],
-            "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
                 "symbol": "fn_return"
               },
               {
@@ -450,7 +480,11 @@
             "data": {
               "vec": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
                 },
                 {
                   "vec": [
@@ -458,12 +492,19 @@
                       "symbol": "TransferAdmin"
                     },
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+                        }
+                      ]
+                    },
+                    {
+                      "u32": 1
                     }
                   ]
                 },
                 {
-                  "u64": 172800
+                  "u64": 604800
                 }
               ]
             }
@@ -484,7 +525,7 @@
                 "symbol": "op_scheduled"
               },
               {
-                "bytes": "591764cf6145c78b857d4b7d02ac14467deb33778cc6348a3c39478d9f204b6b"
+                "bytes": "e14c3d348e31b85b910eb1f0cbc9a2043b3d41f1bcb6da7066cc67c971e3da04"
               }
             ],
             "data": {
@@ -493,7 +534,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "u64": 172800
+                  "u64": 604800
                 }
               ]
             }
@@ -544,10 +585,24 @@
             "data": {
               "vec": [
                 {
-                  "symbol": "TransferAdmin"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                  "vec": [
+                    {
+                      "symbol": "TransferAdmin"
+                    },
+                    {
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+                        }
+                      ]
+                    },
+                    {
+                      "u32": 1
+                    }
+                  ]
                 }
               ]
             }
@@ -575,7 +630,7 @@
                     "symbol": "new_admin"
                   },
                   "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                   }
                 },
                 {
@@ -605,7 +660,7 @@
                 "symbol": "op_executed"
               },
               {
-                "bytes": "591764cf6145c78b857d4b7d02ac14467deb33778cc6348a3c39478d9f204b6b"
+                "bytes": "e14c3d348e31b85b910eb1f0cbc9a2043b3d41f1bcb6da7066cc67c971e3da04"
               }
             ],
             "data": "void"
@@ -677,7 +732,7 @@
             "data": {
               "vec": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                 }
               ]
             }

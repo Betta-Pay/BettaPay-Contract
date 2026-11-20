@@ -13,14 +13,14 @@ source "${SCRIPT_DIR}/lib/common.sh"
 WARN_LIMIT=65536
 ERROR_LIMIT=131072 # 128KB hard boundary
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WASM_DIR="$ROOT_DIR/target/wasm32-unknown-unknown/release"
+ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+WASM_DIR="${WASM_DIR:-$ROOT_DIR/target/optimized}"
 
 log_info "Auditing Wasm binary sizes in $WASM_DIR..."
 
 if [ ! -d "$WASM_DIR" ]; then
-  log_error "Wasm release directory not found."
-  log_info "Please build contracts first: cargo build --target wasm32-unknown-unknown --release"
+  log_error "Optimized Wasm directory not found."
+  log_info "Please optimize contracts first: make optimize"
   exit 1
 fi
 
@@ -39,7 +39,7 @@ EXCEEDED_ERROR=0
 EXCEEDED_WARN=0
 
 echo "================================================================"
-echo -e "${BOLD}Checking compiled Wasm binaries...${NC}"
+echo -e "${BOLD}Checking deployed, optimized Wasm binaries...${NC}"
 echo "================================================================"
 
 for FILE in "${WASM_FILES[@]}"; do

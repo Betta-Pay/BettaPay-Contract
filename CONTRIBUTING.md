@@ -8,10 +8,17 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Workspace Configuration](#workspace-configuration)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
-- [Upgrades and Storage Migrations](DEVELOPMENT.md)
+- [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
+- [Upgrades and Storage Migrations](DEVELOPMENT.md#operator-runbook-probe-upgrade-migrate-and-verify)
+- [Event Topic Convention](docs/event-topics.md)
 - [Testing](#testing)
+- [Coverage](#coverage)
+- [Dependency auditing](#dependency-auditing)
+- [Deployment initialization order](DEPLOYMENT.md)
+- [Fee rounding guarantees](FEE_ROUNDING.md)
 - [Building WASM Binaries](#building-wasm-binaries)
 - [Optional: Soroban CLI Scripts](#optional-soroban-cli-scripts)
+- [Code Ownership and Review Process](#code-ownership-and-review-process)
 - [Pull Request Checklist](#pull-request-checklist)
 - [Commit Message Conventions](#commit-message-conventions)
 - [Reporting Issues](#reporting-issues)
@@ -24,7 +31,7 @@ Install the following before working on this repository:
 |------|---------|-------|
 | [Rust](https://rustup.rs/) | Build and test contracts | Version pinned in `rust-toolchain.toml` (currently **1.85.0**) |
 | `wasm32-unknown-unknown` target | Compile Soroban WASM | Installed automatically via `rust-toolchain.toml` |
-| [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools/cli) | Deploy and simulate on testnet | Required only for `scripts/` workflows |
+| [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools/cli) | Deploy, simulate and optimize WASM | Pinned to **21.5.0** in the `Makefile` (see [Toolchain pins](#toolchain-pins)) |
 
 Clone the repository and enter the workspace root:
 
@@ -34,6 +41,38 @@ cd BettaPay-Contract
 ```
 
 Rustup reads `rust-toolchain.toml` on first `cargo` invocation and installs the correct toolchain and WASM target.
+
+### Toolchain pins
+
+**soroban-cli.** The `Makefile` holds the only copy of the pinned version:
+
+```make
+SOROBAN_VERSION := 21.5.0
+```
+
+CI installs the CLI through the same Makefile target, so local and CI versions
+always match. To install and verify it locally:
+
+```bash
+make install_soroban   # cargo install --locked soroban-cli --version 21.5.0
+make check_soroban     # fails if `soroban --version` differs from the pin
+```
+
+`make optimize` runs `check_soroban` first. On a mismatch it stops with a
+message naming both versions, for example
+`soroban-cli version mismatch: local 22.0.0, pinned 21.5.0.` To bump the
+version, change `SOROBAN_VERSION` and nothing else.
+
+**MSRV.** The minimum supported Rust version is **1.85.0**, the `channel` in
+`rust-toolchain.toml`. It is the oldest compiler the workspace is guaranteed to
+build and test on, and a dependency bump that needs a newer compiler must raise
+it explicitly. The `MSRV` CI job runs the same check you can run locally:
+
+```bash
+make msrv   # cargo +1.85.0 check --workspace, then the unit tests
+```
+
+When it fails, the cargo error names the crate that no longer compiles.
 
 ## Workspace Configuration
 
@@ -136,7 +175,7 @@ cargo build
 cargo build --target wasm32-unknown-unknown --release
 
 # Run the full test suite
-cargo test --all
+cargo test --workspace
 ```
 
 If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` handles the rest.
@@ -154,6 +193,53 @@ If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` ha
 4. **Run local checks** before pushing (see [Testing](#testing) and [Pull Request Checklist](#pull-request-checklist)).
 5. **Open a pull request** against `main` with a clear description and test plan.
 
+## Error-Code Numbering Scheme
+
+Error codes across BettaPay contracts are canonically defined and registered in `bettapay_common::error_codes` to avoid numeric drift and cross-contract collisions (issue #963):
+
+- **`1..=99`**: Shared error concepts across contracts (e.g., `AlreadyInitialized`, `Unauthorized`, `SameAdmin`).
+- **`200..=299`**: Reserved exclusively for `governance_contract` errors (e.g., `AnchorMissing`, `InvalidParamValue`).
+- **`300..=399`**: Reserved exclusively for `settlement_contract` errors (e.g., `MerchantExists`, `PaymentOrphaned`).
+
+When introducing a new error:
+1. **Shared concepts**: Add the constant to `bettapay_common/src/error_codes.rs` in the `1..=99` range and include it in `SHARED_CODES`. Use the constant as the discriminant in each contract's error enum.
+2. **Contract-specific concepts**: Pick the next unused number in that contract's reserved range (`200..=299` for governance, `300..=399` for settlement).
+3. Validate by running `assert_no_code_collisions` to ensure no overlapping discriminants exist.
+## Optional: Pre-Commit Hook
+
+Contributors can optionally configure a local pre-commit hook to catch formatting and lint errors before committing and pushing.
+
+### Checks Performed
+
+The hook automatically runs:
+- `cargo fmt --all --check`
+- `make clippy` (or `cargo clippy --workspace --all-targets --all-features -- -D warnings`)
+
+The hook is scoped to only run when staged changes include Rust source files (`.rs`), ensuring non-Rust commits (such as documentation or configuration updates) remain fast and unblocked.
+
+### Setup Instructions
+
+You can set up the hook using either native Git hooks or the `pre-commit` framework:
+
+**Option 1: Native Git hook (no extra dependencies)**
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+**Option 2: Using `pre-commit`**
+If you have `pre-commit` installed:
+```bash
+pre-commit install
+```
+
+### Skipping the Hook
+
+The hook is strictly optional. If needed, you can bypass the hook using `--no-verify`:
+```bash
+git commit --no-verify -m "commit message"
+```
+
 ## Testing
 
 Contract logic is tested with Soroban's in-memory `Env` in each crate's `#[cfg(test)] mod tests` block inside `src/lib.rs`.
@@ -164,7 +250,13 @@ Contract logic is tested with Soroban's in-memory `Env` in each crate's `#[cfg(t
 
 ```bash
 cargo build --target wasm32-unknown-unknown --release
-cargo test --all
+cargo test --workspace
+```
+
+Or invoke the Makefile test target, which runs all workspace tests across `settlement_contract`, `governance_contract`, and `bettapay_common` in both debug and release modes:
+
+```bash
+make test
 ```
 
 ### Run tests for a single contract
@@ -177,38 +269,110 @@ cargo test -p governance_contract
 ### Run a specific test by name
 
 ```bash
-cargo test -p settlement_contract registers_merchant_and_persists_flag
+cargo test -p settlement_contract merchant_lifecycle_uses_canonical_topics
 ```
 
 ### Test snapshots
 
-Some tests write JSON snapshots under `test_snapshots/tests/`. If you intentionally change contract behavior that affects emitted events or storage layout, update snapshots as part of your PR and explain the change in the PR description.
+The full snapshot workflow, including intentional-drift review and CI behavior,
+is documented in [docs/test-snapshots.md](docs/test-snapshots.md).
+
+Soroban's `Env` test harness writes a JSON snapshot for every `#[test]` under each crate's `test_snapshots/` directory. The path always mirrors the test's Rust module path — keep that in mind when adding or moving test files:
+
+- Tests declared directly inside `#[cfg(test)] mod tests { ... }` (in `src/lib.rs`, or in a crate's `src/tests/mod.rs`) land in `test_snapshots/tests/<test_name>.json`.
+- A dedicated test file declared as its own top-level module (`#[cfg(test)] mod foo_tests;`) lands in `test_snapshots/foo_tests/<test_name>.json`. Do not additionally wrap that file's contents in `mod tests { ... }` — that adds a redundant `tests/` segment to the path (`foo_tests/tests/<test_name>.json`) that doesn't match any sibling module and just adds confusion.
+- A crate that groups its test files under one `src/tests/` directory (`settlement_contract/src/tests/`) will legitimately see `test_snapshots/tests/<submodule>/<test_name>.json` — that nesting reflects a real `tests::<submodule>` module path, not a layout bug.
+
+If you intentionally change contract behavior that affects emitted events or storage layout, update snapshots as part of your PR (re-run `cargo test --workspace` to regenerate them, or `make check_snapshots`) and explain the change in the PR description.
 
 ### CI parity
 
-GitHub Actions (`.github/workflows/auto-merge.yml`) runs these checks on every pull request:
+GitHub Actions (`.github/workflows/auto-merge.yml`) runs the contributor gate on every pull request:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all
-cargo build --target wasm32-unknown-unknown --release
+make all
 ```
 
-Run the same commands locally to avoid CI failures.
+This deterministically runs formatting, workspace compilation, Clippy with all
+targets and features, workspace tests, a test-snapshot drift check, script
+smoke tests, WASM optimization, and the deployed-artifact size check. Run the
+same command locally to avoid CI failures.
+
+### Documentation build
+
+The `Docs` CI job builds rustdoc for every crate and fails on any rustdoc
+warning, such as a broken intra-doc link. It is a separate check, so a doc
+failure never hides test results. Reproduce it locally with:
+
+```bash
+make doc
+# RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
+#   cargo doc --workspace --no-deps --document-private-items
+```
+
+Private items are documented because the contract modules are private, and the
+module docs link to them on purpose.
+
+### Security documentation checks
+
+`scripts/tests/security_docs_test.sh` is a lightweight check that `SECURITY.md`
+still documents the vulnerability report template, the report owners, and the
+90-day disclosure window, and that `README.md` links to it. Run it after
+editing either file:
+
+```bash
+bash scripts/tests/security_docs_test.sh
+```
+
+## Coverage
+
+The `Workspace coverage` job in `.github/workflows/tests.yml` runs the test
+suite across the Cargo workspace with `cargo-llvm-cov` and uploads an LCOV
+report and text summary as the `workspace-coverage` workflow artifact. Coverage
+is reported in the GitHub Actions run summary as a reviewable baseline figure,
+but is not gated by a minimum percentage.
+
+Install `cargo-llvm-cov` and the Rust LLVM tools, then measure coverage locally:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+make coverage
+```
+
+The LCOV report is written to `target/coverage/lcov.info`, which is ignored
+with the rest of `target/`.
+
+## Dependency auditing
+
+`deny.toml` defines the workspace's advisory, license, banned-dependency, and
+source policies. CI runs `cargo deny check` for pull requests alongside
+`cargo audit`; an advisory or license-policy failure blocks the CI check.
+
+To reproduce the check locally:
+
+```bash
+cargo install cargo-deny --locked
+cargo deny check
+```
+
+When adding a dependency, run `cargo deny check`. If it introduces a new
+license, verify the dependency's license terms and add the SPDX identifier to
+the `[licenses].allow` list in `deny.toml` only after review. Do not suppress
+an advisory or broaden allowed sources as a workaround for a failed check.
 
 ## Building WASM Binaries
 
-Release WASM artifacts are required for deployment:
+Optimized WASM artifacts are required for deployment:
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+make optimize
 ```
 
 Output paths:
 
-- `target/wasm32-unknown-unknown/release/settlement_contract.wasm`
-- `target/wasm32-unknown-unknown/release/governance_contract.wasm`
+- `target/optimized/settlement_contract_opt.wasm`
+- `target/optimized/governance_contract_opt.wasm`
 
 Build a single contract:
 
@@ -234,6 +398,10 @@ Deploys both contracts, initializes admin, and writes contract IDs to `.soroban/
 bash scripts/deploy_testnet.sh
 ```
 
+Both scripts initialize settlement before governance. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the required order, one-shot initialization,
+and partial-deployment recovery behavior.
+
 Environment variables (all optional, with defaults for testnet):
 
 | Variable | Default |
@@ -244,18 +412,74 @@ Environment variables (all optional, with defaults for testnet):
 | `SOROBAN_SOURCE` | `bettapay-sim` (simulate script) |
 
 Never commit Soroban identity keys or `.soroban/` directory contents.
+Fee split rounding and clamp behavior are documented in
+[FEE_ROUNDING.md](FEE_ROUNDING.md).
+
+## Code Ownership and Review Process
+
+Some paths in this repository are cross-cutting: a change there can silently
+affect both contracts, or change the process the whole project relies on.
+These paths are listed in [`CODEOWNERS`](CODEOWNERS) at the repo root, using
+GitHub's [CODEOWNERS syntax](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
+
+Currently mapped paths include:
+
+- `/adr/` — Architecture Decision Records
+- `bettapay_common/src/constants.rs` and any `**/constants.rs` — shared
+  protocol constants (fee bounds, TTL policy, recovery delay) used by both
+  contracts
+- `/scripts/` and `/Makefile` — deployment, simulation, and CI-support
+  tooling
+- `CODEOWNERS`, `SECURITY.md`, `CONTRIBUTING.md`, and `.github/workflows/**`
+  — repo governance and CI configuration itself
+
+**What this means for contributors:**
+
+- If your PR touches any file under one of the mapped paths, GitHub will
+  automatically request review from the listed owner(s) — check the
+  "Reviewers" panel on your PR, or run `git diff --name-only main...HEAD`
+  against `CODEOWNERS` yourself before opening the PR if you want to know in
+  advance.
+- A PR that touches an owned path is expected to get sign-off from the
+  mapped owner(s) before it merges, in addition to any other review the
+  branch protection rules require. This keeps ADRs, shared constants, and
+  process/CI files from drifting without someone accountable looking at the
+  change.
+- If you believe a path should be owned (or the current owner is stale),
+  open a PR against `CODEOWNERS` itself — that file is self-owned, so it
+  goes through the same review it enforces on everything else.
+
+**Keeping CODEOWNERS honest:** every pattern in `CODEOWNERS` is expected to
+resolve to a real file or directory in the repo, and every entry must name
+at least one `@`-prefixed owner. Run this locally before pushing:
+
+```bash
+bash scripts/check_codeowners.sh
+# or, via the Makefile target used by CI:
+make check_codeowners
+```
+
+This also runs as part of `make all` (the same gate CI runs on every PR), so
+a stale or malformed `CODEOWNERS` fails CI rather than rotting silently.
 
 ## Pull Request Checklist
 
 Before requesting review, confirm:
 
-- [ ] `cargo fmt --all -- --check` passes
-- [ ] `cargo clippy --all-targets -- -D warnings` passes
-- [ ] `cargo test --all` passes
-- [ ] `cargo build --target wasm32-unknown-unknown --release` succeeds
+- [ ] `cargo fmt --all --check` passes
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `bash scripts/tests/tooling_smoke_test.sh` passes
+- [ ] `bash scripts/check_codeowners.sh` passes (if you touched `CODEOWNERS` or an owned path)
+- [ ] `make wasm_size` succeeds
 - [ ] New behavior has corresponding unit tests
 - [ ] Snapshot changes (if any) are intentional and documented
 - [ ] PR description references the related issue (e.g. `Closes #125`)
+
+Formatting uses the checked-in [`rustfmt.toml`](rustfmt.toml) configuration;
+`make fmt` runs the same workspace-wide `cargo fmt --all --check` command used
+in CI.
+- [ ] If your change touches a path listed in [`CODEOWNERS`](CODEOWNERS), you've flagged it for the mapped owner(s)
 
 ## Commit Message Conventions
 

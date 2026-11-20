@@ -2,6 +2,15 @@
 
 Soroban smart contracts for the BettaPay payment infrastructure on Stellar.
 
+## Payment reference read access
+
+`get_payment_reference` and `get_payments` are intentionally public so
+off-chain settlement indexers and composing contracts can verify a payment
+without a merchant signature. A payment reference is a 32-byte value supplied
+by the merchant and must be generated with cryptographically secure randomness;
+it functions as a bearer capability for lookup. Indexers may consume
+`payment_stored` events for discovery and use these endpoints for targeted
+verification; raw Soroban state reads remain an equivalent alternative.
 
 ## Structure
 
@@ -14,11 +23,32 @@ BettaPay-Contract/
 ├── governance_contract/        # Fee config, anchor registry, system params
 │   ├── Cargo.toml
 │   └── src/lib.rs
+├── bettapay_common/            # Shared constants, types, error codes, and storage keys
+├── docs/                       # Core protocol architecture and lifecycle specifications
+│   ├── scheduled-operation-lifecycle.md # Timelocked queue, collision rules, and 9 operations
+│   ├── recovery-lifecycle.md   # Emergency recovery flow, delays, and failure modes
+│   ├── bootstrap-fallback.md   # 4-tier settlement rule fallback chain and emission rules
+│   ├── storage-key-ownership.md # Storage key matrix, ownership, and TTL policies
+│   ├── contract-limits.md      # Protocol constants and bounds reference
+│   └── archive-and-tombstones.md # Merchant archiving and tombstone semantics
 ├── scripts/
 │   ├── deploy_testnet.sh       # Build + deploy both contracts + init admin
-│   └── simulate.sh             # Simulate contract calls locally
+│   ├── simulate.sh             # Simulate contract calls locally
+│   ├── export_events.sh        # Dump contract events over a ledger range
+│   ├── list_pending_ops.sh     # Show pending timelocked operations
+│   ├── verify_wasm_hash.sh     # Compare deployed Wasm hash to local build
+│   └── check_interface_parity.sh # Fail when the two contracts' interface versions drift
 └── DEVELOPMENT.md              # Upgrade and storage-migration guide
 ```
+
+## Core Documentation
+
+- **[Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md)**: State machine, allowed transitions, duplicate vs. genuine hash collision (codes `12` and `316`), minimum 7-day timelock delay, emergency recovery veto, permissionless execution, and reference for all nine `Operation` variants.
+- **[Admin Recovery Lifecycle](docs/recovery-lifecycle.md)**: End-to-end recovery sequence, actors, 7-day `RECOVERY_DELAY_SECONDS`, cancellation rules, failure modes (`RecoveryNotPending` `8`, `RecoveryDelayActive` `9`, `RecoveryAlreadyPending` `15`), and scheduled operation veto semantics.
+- **[Bootstrap Fallback Semantics](docs/bootstrap-fallback.md)**: The 4-tier resolution chain (merchant → default → governance → bootstrap), trigger conditions, field values (`100` platform bps, `5` network bps, `0` delay, `auto_settle` false), and event emission rules.
+- **[Storage Key Ownership and TTL Policies](docs/storage-key-ownership.md)**: Authoritative mapping of all settlement, governance, and `CommonDataKey` keys to owning crates, storage kinds, and TTL bump policies.
+- **[Contract Limits](docs/contract-limits.md)**: Numeric bounds, fee limits, batch limits, and their enforcement points.
+- **[Event Topic Convention](docs/event-topics.md)**: The canonical topic registry, emitted topic set, and indexer-facing naming rules.
 
 ## Deployed Addresses (Testnet)
 
@@ -29,6 +59,16 @@ BettaPay-Contract/
 | Admin       | `GCCHHKNI7GRA5QWC7RCTT3OHO7SKAUMKQA6IBWEQEO2SXI3GF376UHDD` |
 
 Network: `Test SDF Network ; September 2015`
+
+## Toolchain Requirements
+
+- **Rust (MSRV): 1.85.0.** The minimum supported Rust version is the channel
+  pinned in `rust-toolchain.toml`. CI builds and tests the workspace on it in a
+  separate MSRV job; reproduce it locally with `make msrv`.
+- **soroban-cli: 21.5.0.** Pinned once as `SOROBAN_VERSION` in the `Makefile`.
+  Install it with `make install_soroban` and check it with `make check_soroban`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#toolchain-pins) for details.
 
 ## Quick Start
 
@@ -69,7 +109,7 @@ cargo test -p settlement_contract
 cargo test -p governance_contract
 
 # Run a specific test by name
-cargo test registers_merchant_and_persists_flag -p settlement_contract
+cargo test merchant_lifecycle_uses_canonical_topics -p settlement_contract
 ```
 
 ### Deploy to Testnet
@@ -82,19 +122,19 @@ bash scripts/deploy_testnet.sh
 # 1. Generate and fund a key
 soroban keys generate bettapay-admin --fund
 
-# 2. Build WASM
-cargo build --target wasm32-unknown-unknown --release
+# 2. Build and optimize WASM
+make optimize
 
 # 3. Deploy settlement contract
 SETTLEMENT_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/settlement_contract.wasm \
+  --wasm target/optimized/settlement_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
 
 # 4. Deploy governance contract
 GOVERNANCE_ID=$(soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/governance_contract.wasm \
+  --wasm target/optimized/governance_contract_opt.wasm \
   --source-account bettapay-admin \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015")
@@ -109,7 +149,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 
 soroban contract invoke \
   --id "$GOVERNANCE_ID" \
@@ -117,7 +157,7 @@ soroban contract invoke \
   --rpc-url https://soroban-testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
   -- \
-  init --admin "$ADMIN" --recovery-address "$RECOVERY_ADDRESS"
+  init --admins "[\"$ADMIN\"]" --threshold 1 --recovery-address "$RECOVERY_ADDRESS"
 ```
 
 ### Invoke Settlement Contract
@@ -362,6 +402,30 @@ soroban contract invoke --id "$SETTLEMENT_ID" --source-account bettapay-admin \
 ```
 
 
+## Operator Scripts
+
+Operator-facing helper scripts (full flags documented in each script's `--help`):
+
+```bash
+# Verify a deployed contract matches the local optimized Wasm artifact
+bash scripts/verify_wasm_hash.sh --contract-id "$SETTLEMENT_ID" \
+  --wasm target/optimized/settlement_contract_opt.wasm
+
+# Export contract events over a ledger range to JSON or CSV
+# (re-uses soroban_events.py helpers; --from-file replays a saved response)
+bash scripts/export_events.sh --contract-id "$SETTLEMENT_ID" \
+  --start-ledger 1000 --end-ledger 3000 --format csv --output events.csv
+
+# List pending timelocked operations (from op_scheduled/op_executed/op_cancelled events)
+bash scripts/list_pending_ops.sh --contract-id "$SETTLEMENT_ID" --format table
+
+# Fail when the two contracts advertise different interface versions
+make check_interface_parity
+```
+
+Event topic names are decoded against the constants in `bettapay_common/src/events.rs`
+so exporters and indexers cannot drift from the contracts.
+
 ## Detailed API Specification
 
 This section documents the public entry points, parameter types, return values, authorization rules, and error states for each contract. All financial amounts and fees (bps) are handled using integer types (`i128` and `u32` respectively) to maintain determinism on-chain.
@@ -426,29 +490,46 @@ pub struct PaymentRecord {
 
 | Function | Inputs | Output | Auth / Guard | Error Panics (`SettlementError`) | Description |
 |---|---|---|---|---|---|
-| `init` | `admin: Address`, `governance: Address`, `recovery_address: Address` | `()` | `admin` | `AlreadyInitialized`, `InvalidGovernance`, `InvalidRecoveryAddress` | Initializes the contract and stores the administrator, governance contract, and backup recovery address. Can only be called once. |
-| `get_admin` | None | `Address` | None | `NotInitialized` | Returns the current admin address. |
+| `init` | `deployer: Address`, `admins: Vec<Address>`, `threshold: u32`, `governance: Address`, `recovery_address: Address` | `()` | `deployer` and every initial admin | `AlreadyInitialized`, `InvalidAdmin`, `InvalidThreshold`, `InvalidGovernance`, `InvalidRecoveryAddress`, `ZeroAddress` | Initializes the contract, admin multisig, governance contract, and backup recovery address. Can only be called once. |
+| `is_initialized` | None | `bool` | None | None | Returns whether initialization has completed. |
+| `get_admin` | None | `Vec<Address>` | None | `NotInitialized` | Returns the current admin set. |
+| `get_threshold` | None | `u32` | None | `NotInitialized` | Returns the configured admin multisig threshold. |
 | `get_governance` | None | `Address` | None | `NotInitialized` | Returns the configured governance contract address. |
-| `update_governance` | `new_governance: Address` | `()` | Stored Admin, not paused | `NotInitialized`, `Paused`, `InvalidGovernance` | Updates the governance contract address after validating `get_fee_config`. |
-| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin` | Starts delayed admin recovery. |
-| `cancel_recovery` | None | `()` | Stored Admin | `NotInitialized`, `RecoveryNotPending` | Cancels a pending recovery during the delay. |
-| `execute_recovery` | None | `()` | None | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. |
-| `transfer_admin` | `new_admin: Address` | `()` | Stored Admin | `NotInitialized`, `InvalidAddress`, `InvalidAdmin` | Transfers the administrative control to a new address. `new_admin` cannot be zero or the current admin. |
-| `pause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Halts mutating operations (e.g. register merchant, store payment reference). |
-| `unpause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Resumes mutating contract operations. |
+| `get_recovery_address` | None | `Address` | None | `NotInitialized` | Returns the configured backup recovery address. |
+| `update_governance` | `signers: Vec<Address>`, `new_governance: Address` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidGovernance`, `GovernanceCallFailed` | Updates the governance contract address after validating `get_fee_config`. |
+| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin`, `RecoveryAlreadyPending` | Starts delayed admin recovery. Vetoes all pending scheduled operations. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `cancel_recovery` | `signers: Vec<Address>` | `()` | Initiator or Admin Multisig | `NotInitialized`, `Unauthorized`, `RecoveryNotPending` | Cancels a pending recovery during the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `execute_recovery` | None | `()` | None (Permissionless) | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after 7-day delay elapses. Consumes pending state atomically. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `update_recovery_address` | `signers: Vec<Address>`, `new_recovery: Address` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidRecoveryAddress` | Updates the backup recovery address. |
+| `transfer_admin` | `signers: Vec<Address>`, `new_admins: Vec<Address>`, `new_threshold: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidAdmin`, `InvalidThreshold`, `SameAdmin` | Transfers administrative control and multisig threshold. |
+| `change_threshold` | `signers: Vec<Address>`, `new_threshold: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidThreshold`, `SameAdmin` | Changes the admin multisig threshold. |
+| `upgrade` | `signers: Vec<Address>`, `new_wasm_hash: BytesN<32>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidWasmInterface` | Replaces the contract Wasm after verifying the required interface. |
+| `pause` | `signers: Vec<Address>`, `reason: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `AlreadyPaused`, `InvalidPauseReason` | Halts mutating operations with a bounded reason code. |
+| `unpause` | `signers: Vec<Address>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `AlreadyUnpaused` | Resumes mutating contract operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the contract is currently paused. |
-| `register_merchant`| `merchant: Address` | `()` | Stored Admin | `Paused`, `InvalidAddress`, `MerchantExists` | Registers a new merchant. The merchant must not already exist and cannot be the zero address. |
-| `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry and deletes their specific rule. |
-| `set_settlement_rule`| `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin | `Paused`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
-| `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
-| `set_default_rule` | `new_rule: SettlementRule` | `()` | Stored Admin | `InvalidFeeBps`, `InvalidSettlementDelay` | Configures the global fallback rule applied when no merchant-specific rule exists. |
+| `migrate` | `signers: Vec<Address>` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Unauthorized`, `Paused` | Advances the stored schema version and emits `migrated`. |
+| `schedule` | `signers: Vec<Address>`, `operation: Operation`, `execute_in: u64` | `()` | Stored Admin multisig threshold | `Paused`, `Unauthorized`, `ExecutionNotReady`, `ExecutionDelayTooLong`, `PayloadTooLarge`, `InvalidThreshold`, `InvalidSettlementDelay`, `GovernanceCallFailed`, `OperationAlreadyScheduled`, `OperationHashCollision` | Schedules a timelocked administrative operation. Enforces the configured delay bounds (`MIN_TIMELOCK_DELAY_SECONDS` and `MAX_TIMELOCK_DELAY_SECONDS`). See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
+| `execute` | `executor: Address, operation: Operation` | `()` | None (Permissionless) | `Paused`, `OperationNotScheduled`, `ExecutionNotReady`, `RecoveryDelayActive` | Permissionlessly executes a scheduled operation after timelock delay. Vetoed if recovery is pending (except `CancelRecovery`). See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
+| `dry_run` | `operation: Operation` | `()` | None (Permissionless, read-only) | `Paused`, `OperationNotScheduled`, `ExecutionNotReady`, `RecoveryDelayActive` | Simulates `execute`'s validation (same checks and errors, including the recovery veto) without consuming the scheduled operation, running it, or emitting events. |
+| `cancel` | `signers: Vec<Address>, operation: Operation` | `()` | Stored Admin multisig threshold | `Paused`, `Unauthorized`, `OperationNotScheduled` | Cancels a scheduled operation prior to execution. See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
+| `get_pending_operation_count` | None | `u32` | None | None | Returns the number of scheduled operations currently pending in the timelock queue. Read-only and TTL-neutral; maintained by `schedule`, `execute`, `cancel`, and `cancel_all`. See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md#7-queue-depth-metric). |
+| `register_merchant`| `signers: Vec<Address>`, `merchant: Address` | `()` | Stored Admin multisig and merchant consent; not paused | `NotInitialized`, `Paused`, `Unauthorized`, `ZeroAddress`, `InvalidAdmin`, `MerchantExists` | Registers a new merchant. The merchant must not already exist, cannot be an admin or the zero address, and must consent. |
+| `unregister_merchant`| `signers: Vec<Address>`, `merchant: Address`| `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `MerchantMissing` | Removes a merchant from the registry, deletes their specific rule, and orphans their payment records — post-unregister reads of those records fail with `PaymentOrphaned`. |
+| `set_settlement_rule`| `signers: Vec<Address>`, `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `ZeroAddress`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay`, `GovernanceCallFailed`, `FeeExceedsGovernanceConfig` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
+| `clear_settlement_rule`| `signers: Vec<Address>`, `merchant: Address`| `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
+| `set_default_rule` | `signers: Vec<Address>`, `new_rule: SettlementRule` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidFeeBps`, `InvalidSettlementDelay`, `GovernanceCallFailed`, `FeeExceedsGovernanceConfig` | Configures the global fallback rule applied when no merchant-specific rule exists. |
 | `get_default_rule` | None | `Option<SettlementRule>` | None | None | Fetches the global default settlement rule configuration, if any. |
-| `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant` | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `InvalidAmount`, `DuplicatePaymentReference` | Records a payment hash on-chain and returns the fee split. `amount` must be $\ge 100$. |
-| `is_merchant_registered`| `merchant: Address` | `bool` | None | None | Checks if a merchant is present in the registry. |
+| `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant`, not paused | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `AmountTooSmall`, `DuplicatePaymentReference`, `AmountOverflow`, `GovernanceCallFailed`, `FeeExceedsGovernanceConfig` | Records a payment hash on-chain and returns the fee split. Emits `bootstrap_fallback` when falling back to unconfigured bootstrap defaults. See [Bootstrap Fallback Semantics](docs/bootstrap-fallback.md). |
+| `is_merchant_registered`| `merchant: Address` | `bool` | None | `NotInitialized` | Checks if a merchant is present in the registry. |
 | `get_settlement_rule`| `merchant: Address` | `Option<SettlementRule>` | None | None | Reads the merchant-specific settlement rule override. |
-| `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. |
-| `get_payment_reference`| `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the logged payment record. Refreshes the entry's TTL when queried. |
-| `get_payments` | `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves logged payment records. Missing references are ignored. |
+| `get_settlement_rule_no_bump`| `merchant: Address` | `Option<SettlementRule>` | None | None | Reads the merchant-specific override without extending its TTL. |
+| `get_effective_rule`| `merchant: Address` | `SettlementRule` | None | None | Returns the rule selected by the default → governance → bootstrap fallback chain without extending TTL. |
+| `get_rule_provenance`| `merchant: Address` | `EffectiveRule` | None | None | Same resolution as `get_effective_rule`, plus a `RuleProvenance` (`Merchant`, `Default`, `Governance`, `Bootstrap`) naming the source of the fees. TTL-neutral. |
+| `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `AmountTooSmall`, `AmountOverflow` | Performs a dry-run calculation of fees for the merchant without mutating storage. Read-only and never emits events. See [Bootstrap Fallback Semantics](docs/bootstrap-fallback.md). |
+| `get_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `signers: Vec<Address>` | `Option<PaymentRecord>` | Merchant or admin multisig | `Unauthorized`, `PaymentOrphaned` | Returns the merchant's logged payment record for the reference. Refreshes the entry's TTL when queried. |
+| `get_payments` | `merchant: Address`, `refs: Vec<BytesN<32>>`, `cursor: u32`, `signers: Vec<Address>` | `PaymentsPage` | Merchant or admin multisig | `Unauthorized`, `PaymentOrphaned`, `BatchTooLarge` | Batch retrieves the merchant's logged payment records and returns a pagination cursor. Missing references are ignored. |
+| `prune_payment` | `signers: Vec<Address>`, `merchant: Address`, `reference: BytesN<32>` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized` | Removes one payment record and emits one `payment_pruned` event with topics `(symbol, merchant, reference)` and data `(merchant, reference)`; removing a missing record is a no-op and emits nothing. |
+| `prune_payments` | `signers: Vec<Address>`, `merchant: Address`, `refs: Vec<BytesN<32>>` | `u32` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `BatchTooLarge` | Removes up to 100 of one merchant's payment records in one call. Missing or repeated references are skipped, so cleanup can be retried. Emits one `payments_pruned` event with the removed count. |
 
 ---
 
@@ -480,24 +561,29 @@ pub struct AdminTransferred {
 
 | Function | Inputs | Output | Auth / Guard | Error Panics (`GovernanceError`) | Description |
 |---|---|---|---|---|---|
-| `init` | `admin: Address`, `recovery_address: Address` | `()` | `admin` | `AlreadyInitialized`, `InvalidRecoveryAddress` | Initializes the governance contract and stores the administrator and backup recovery address. |
+| `supports_interface` | `version: u32` | `bool` | None | None | Returns whether the contract supports the requested interface version. |
+| `init` | `deployer: Address`, `admins: Vec<Address>`, `threshold: u32`, `recovery_address: Address` | `()` | `deployer` and every initial admin | `AlreadyInitialized`, `InvalidAdmin`, `InvalidThreshold`, `InvalidRecoveryAddress` | Initializes the governance contract and its admin multisig. |
 | `is_initialized` | None | `bool` | None | None | Returns `true` if initialization has been completed. |
-| `get_admin` | None | `Address` | None | `NotInitialized` | Returns the current admin address. |
+| `get_admin` | None | `Vec<Address>` | None | `NotInitialized` | Returns the current admin set. |
+| `get_threshold` | None | `u32` | None | `NotInitialized` | Returns the configured admin multisig threshold. |
 | `get_recovery_address` | None | `Address` | None | `NotInitialized` | Returns the configured backup recovery address. |
-| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin` | Starts delayed admin recovery. |
-| `cancel_recovery` | None | `()` | Stored Admin | `NotInitialized`, `RecoveryNotPending` | Cancels a pending recovery during the delay. |
-| `execute_recovery` | None | `()` | None | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. |
-| `upgrade` | `caller: Address`, `new_wasm_hash: BytesN<32>` | `()` | `caller == admin` | `Unauthorized` | Replaces the contract Wasm code with a new binary, leaving storage unchanged. Changing a stored type needs a migration — see [DEVELOPMENT.md](DEVELOPMENT.md). |
-| `transfer_admin` | `_caller: Address`, `new_admin: Address` | `()` | Stored Admin | `InvalidAdmin` | Assigns the admin role to `new_admin`. Address cannot be zero or the current admin. |
-| `pause` | `caller: Address` | `()` | `caller == admin` | `Unauthorized` | Halts mutating governance config operations. |
-| `unpause` | `caller: Address` | `()` | `caller == admin` | `Unauthorized` | Resumes governance operations. |
+| `update_recovery_address` | `signers: Vec<Address>`, `new_recovery: Address` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidRecoveryAddress` | Updates the backup recovery address. |
+| `upgrade` | `signers: Vec<Address>`, `new_wasm_hash: BytesN<32>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidWasmInterface` | Replaces the contract Wasm after verifying the required interface. |
+| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin`, `RecoveryAlreadyPending` | Starts delayed admin recovery. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `cancel_recovery` | `signers: Vec<Address>` | `()` | Initiator or Admin Multisig | `NotInitialized`, `Unauthorized`, `RecoveryNotPending` | Cancels a pending recovery during the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `execute_recovery` | None | `()` | None (Permissionless) | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `transfer_admin` | `signers: Vec<Address>`, `new_admins: Vec<Address>`, `new_threshold: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidAdmin`, `InvalidThreshold`, `SameAdmin` | Transfers the admin set and multisig threshold. |
+| `change_threshold` | `signers: Vec<Address>`, `new_threshold: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidThreshold` | Changes the admin multisig threshold. |
+| `pause` | `signers: Vec<Address>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `AlreadyPaused` | Halts mutating governance config operations. |
+| `unpause` | `signers: Vec<Address>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `AlreadyUnpaused` | Resumes governance operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the governance modifications are halted. |
-| `update_system_param` | `caller: Address`, `key: Symbol`, `value: i128` | `()` | `caller == admin` | `Unauthorized`, `InvalidParamValue` | Stores or overrides a numeric parameter `value` (must be $\ge 0$) under `key`. |
+| `migrate` | `signers: Vec<Address>` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Unauthorized`, `Paused` | Advances the stored schema version and emits `migrated`. |
+| `update_system_param` | `signers: Vec<Address>`, `key: Symbol`, `value: i128` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidParamValue` | Stores or overrides a numeric parameter `value` (must be $\ge 0$) under `key`. |
 | `get_system_param` | `key: Symbol` | `Option<i128>` | None | None | Fetches the system parameter value. Refreshes storage TTL on reads. |
-| `set_fee_config` | `caller: Address`, `config: FeeConfig` | `()` | `caller == admin` | `Unauthorized`, `InvalidFeeBps` | Updates the global default fee configuration. Limits: $5 \text{ bps} \le \text{bps} \le 5000 \text{ bps}$. |
+| `set_fee_config` | `signers: Vec<Address>`, `config: FeeConfig` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidFeeBps` | Updates the global default fee configuration. Limits: $5 \text{ bps} \le \text{bps} \le 5000 \text{ bps}$. |
 | `get_fee_config` | None | `Option<FeeConfig>` | None | None | Fetches the active system fee config. |
-| `upsert_anchor` | `caller: Address`, `asset: Address`, `anchor: Address` | `()` | `caller == admin` | `Unauthorized` | Registers or updates a trusted off-chain anchor address for a token asset. |
-| `remove_anchor` | `caller: Address`, `asset: Address` | `()` | `caller == admin` | `Unauthorized`, `AnchorMissing` | Removes the trusted anchor config for a token asset. |
+| `upsert_anchor` | `signers: Vec<Address>`, `asset: Address`, `anchor: Address` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidAdmin` | Registers or updates a trusted off-chain anchor address for a token asset. |
+| `remove_anchor` | `signers: Vec<Address>`, `asset: Address` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `AnchorMissing` | Removes the trusted anchor config for a token asset. |
 | `get_anchor` | `asset: Address` | `Option<Address>` | None | None | Reads the trusted anchor address associated with an asset. |
 
 ---
@@ -535,3 +621,10 @@ This diagram highlights the main interaction pattern: the backend and operators 
 ## Dependencies
 
 No cross-contract calls. Both contracts are independently deployable and stateless across each other. The backend services call them via Stellar RPC.
+
+## Security
+
+Found a security vulnerability? Please do **not** open a public GitHub issue.
+See [`SECURITY.md`](SECURITY.md) for the reporting process (GitHub Security
+Advisories preferred, email fallback), the vulnerability report template, the
+list of report owners, and our 90-day responsible disclosure window.

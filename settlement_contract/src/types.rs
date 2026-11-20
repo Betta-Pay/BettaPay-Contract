@@ -1,92 +1,10 @@
-use bettapay_common::constants::BPS_DENOMINATOR;
-use soroban_sdk::{contracttype, Address, BytesN};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Vec};
 
-/// A type-safe wrapper around basis points (`u32`).
-///
-/// Provides explicit conversion methods and fee arithmetic helpers to prevent
-/// ad-hoc inline casting (`as i128`) and potential truncation or calculation errors.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[contracttype]
-pub struct Bps(pub u32);
-
-impl Bps {
-    /// Constructs a new `Bps` instance.
-    pub const fn new(value: u32) -> Self {
-        Self(value)
-    }
-
-    /// Returns the underlying `u32` basis point value.
-    pub const fn value(self) -> u32 {
-        self.0
-    }
-
-    /// Converts basis points to `i128` for safe fee arithmetic.
-    pub const fn as_i128(self) -> i128 {
-        self.0 as i128
-    }
-
-    /// Calculates ceil-rounded fee amount for a given gross amount:
-    /// `ceil(amount * bps / BPS_DENOMINATOR) = (amount * bps + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR`.
-    pub fn calculate_fee_ceil(self, amount: i128) -> i128 {
-        let denom = BPS_DENOMINATOR as i128;
-        (amount * self.as_i128() + denom - 1) / denom
-    }
-}
-
-impl From<u32> for Bps {
-    fn from(value: u32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Bps> for u32 {
-    fn from(bps: Bps) -> Self {
-        bps.0
-    }
-}
-
-/// Configuration governing how merchant payments are settled.
-///
-/// This struct defines the fee allocation and settlement timing for a merchant,
-/// including the platform and network fee shares as well as whether
-/// settlement is processed automatically after a delay.
-#[derive(Clone)]
-#[contracttype]
-pub struct SettlementRule {
-    /// Platform fee charged on each payment, expressed in basis points.
-    ///
-    /// One basis point is 0.01%, and 100 basis points equals 1%.
-    /// This value is used when calculating the platform's share of a payment.
-    pub platform_fee_bps: u32,
-    /// Network fee charged on each payment, expressed in basis points.
-    ///
-    /// This represents the portion reserved for network or protocol-related
-    /// costs and is combined with other fees as validated elsewhere in the contract.
-    pub network_fee_bps: u32,
-    /// Number of ledger closes to wait before settlement becomes eligible.
-    ///
-    /// A value of `0` enables immediate settlement, while larger values delay
-    /// settlement until the specified number of ledgers has elapsed.
-    pub settlement_delay_ledger: u32,
-    /// Indicates whether settlement should occur automatically.
-    ///
-    /// When set to `true`, settlements may be processed automatically after
-    /// the configured settlement delay has elapsed; when `false`, settlement
-    /// requires manual or external triggering.
-    pub auto_settle: bool,
-}
-
-impl SettlementRule {
-    /// Returns the platform fee as a typed `Bps` wrapper.
-    pub fn platform_bps(&self) -> Bps {
-        Bps::new(self.platform_fee_bps)
-    }
-
-    /// Returns the network fee as a typed `Bps` wrapper.
-    pub fn network_bps(&self) -> Bps {
-        Bps::new(self.network_fee_bps)
-    }
-}
+// `Bps` and `SettlementRule` are defined in `bettapay_common::types` (moved
+// there so the shared event builders can take a typed payload, see issue
+// #491) and re-exported here so every existing `crate::types::*` import in
+// this contract keeps working unchanged.
+pub use bettapay_common::types::{Bps, SettlementRule};
 
 #[derive(Clone)]
 #[contracttype]
@@ -94,20 +12,75 @@ pub struct FeeSplit {
     /// The total gross amount of the payment.
     /// Mirrors the `amount` parameter passed to `store_payment_reference`.
     pub gross_amount: i128,
-    /// Portion of the settlement fee allocated to the platform.
+    /// Portion of the settlement fee allocated to the platform recipient.
     /// This amount is calculated by applying the platform fee basis points to the gross amount.
     pub platform_fee_amount: i128,
-    /// Portion of the settlement fee allocated to the network.
+    /// Portion of the settlement fee allocated to the network recipient.
     /// This amount is calculated by applying the network fee basis points to the gross amount.
     pub network_fee_amount: i128,
-    /// Net amount allocated to the merchant.
+    /// Net amount allocated to and received by the merchant.
     /// This derived output is calculated as the gross amount minus the rounded platform and network fee amounts.
-    pub merchant_amount: i128,
+    pub merchant_payout_amount: i128,
+}
+
+/// Where an effective settlement rule came from (issue #997).
+///
+/// Mirrors the resolution chain used by the write and payment paths:
+/// merchant-specific rule → global default → governance fee config →
+/// bootstrap fallback. Provenance is a property of the *source*, not the
+/// values: a governance config that happens to equal the bootstrap values
+/// still reports [`Governance`](Self::Governance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[contracttype]
+pub enum RuleProvenance {
+    /// A rule stored for this specific merchant.
+    Merchant = 0,
+    /// The admin-configured global default rule.
+    Default = 1,
+    /// Governance's fee config, either read live or served from the
+    /// last-good cache during a governance outage.
+    Governance = 2,
+    /// The compiled-in bootstrap fallback; nothing else was configured.
+    Bootstrap = 3,
+}
+
+/// An effective settlement rule together with its [`RuleProvenance`].
+#[derive(Clone)]
+#[contracttype]
+pub struct EffectiveRule {
+    /// The resolved rule, identical to what `get_effective_rule` returns.
+    pub rule: SettlementRule,
+    /// Which source in the resolution chain produced `rule`.
+    pub provenance: RuleProvenance,
+}
+
+/// A single page of results from [`SettlementContract::get_payments`](crate::SettlementContract::get_payments).
+///
+/// Soroban cannot enumerate persistent storage keys, so pagination is over the
+/// caller-supplied `refs` vector rather than server-side merchant state: the
+/// caller advances `cursor` by the number of refs consumed on each call.
+#[derive(Clone)]
+#[contracttype]
+pub struct PaymentsPage {
+    /// The resolved records for this page, in the same relative order as the
+    /// `refs` the caller supplied.
+    pub records: Vec<PaymentRecord>,
+    /// `Some(next_cursor)` when this page was exactly
+    /// [`MAX_PAYMENTS_BATCH`](crate::MAX_PAYMENTS_BATCH) refs long, signalling
+    /// the caller's reference set may extend further; `None` once a
+    /// shorter-than-cap page confirms there is nothing left to fetch.
+    pub next_cursor: Option<u32>,
 }
 
 #[derive(Clone)]
 #[contracttype]
 pub struct PaymentRecord {
+    /// The merchant the payment belongs to.
+    ///
+    /// Payments are keyed by `(merchant, reference)` (see [`DataKey::Payment`])
+    /// and this field makes the ownership explicit on every record so callers
+    /// and indexers never have to infer it from the storage key.
+    pub merchant: Address,
     /// The total gross amount of the payment processed.
     /// Set upon payment creation and used to derive the fee split.
     pub amount: i128,
@@ -117,9 +90,9 @@ pub struct PaymentRecord {
     /// The exact amount deducted for the network fee.
     /// Calculated and stored at payment creation to lock in the fee value.
     pub network_fee_amount: i128,
-    /// The net payout amount owed to the merchant.
+    /// The net payout amount owed to and received by the merchant.
     /// Calculated at payment creation to ensure deterministic settlement value.
-    pub merchant_amount: i128,
+    pub merchant_payout_amount: i128,
     /// The platform fee rate (in basis points) applied to this payment.
     /// Snapshot taken from the active settlement rule during creation.
     pub platform_fee_bps: u32,
@@ -135,26 +108,72 @@ pub struct PaymentRecord {
     /// Indicates if the payment should participate in automated settlement batches.
     /// Set from the active rule and used by external auto-settlement processes.
     pub auto_settle: bool,
+    /// Schema version of the PaymentRecord.
+    /// Written at storage time to support future migrations.
+    /// Records written before this field existed default to version 0 on read.
+    pub version: u32,
 }
 
+/// The fee configuration schema as returned by the governance contract.
+///
+/// This type exists solely for decoding cross-contract calls from governance.
+/// It is never written to settlement's own storage.
+///
+/// **Design note (issue #484):** Governance provides protocol-level fee
+/// ceilings only (`platform_fee_bps`, `network_fee_bps`). Settlement timing
+/// parameters (`settlement_delay_ledger`, `auto_settle`) are intentionally
+/// **not** part of the governance fee config. These are per-merchant or
+/// admin-configured operational concerns, not protocol-wide governance
+/// policy. When a governance rule is resolved in
+/// [`read_governance_fee_rule`][crate::storage::read_governance_fee_rule],
+/// `settlement_delay_ledger` is fixed at `0` (immediate settlement) and
+/// `auto_settle` is fixed at `false` (no automatic settlement). This
+/// matches the bootstrap default. If protocol-level settlement timing
+/// governance is needed in the future, extend this struct and the
+/// governance contract's `FeeConfig` in a coordinated upgrade.
 #[derive(Clone)]
 #[contracttype]
-pub struct FeeConfig {
+pub struct GovFeeConfig {
     pub platform_fee_bps: u32,
     pub network_fee_bps: u32,
 }
 
-// Admin, RecoveryAddress, PendingRecovery, and Paused live in
+/// Storage value for a pending [`Operation`] scheduled via `schedule()`.
+///
+/// The `sha256` of the operation's XDR encoding is used as the storage key
+/// (see `DataKey::ScheduledOperation`) purely as a fixed-size index — it is
+/// not trusted as the sole proof of what was scheduled. The full
+/// `operation_xdr` is kept alongside `execute_at` so `execute()`/`cancel()`
+/// can verify the operation they were given is byte-for-byte the one that
+/// was scheduled under that hash, rather than assuming a hash match implies
+/// content equality (issue #570: a hash collision must not let an
+/// unscheduled operation silently ride an unrelated pending slot).
+#[derive(Clone)]
+#[contracttype]
+pub struct ScheduledOp {
+    pub operation_xdr: Bytes,
+    pub execute_at: u64,
+}
+
+// RecoveryAddress, PendingRecovery, Paused, and Threshold live in
 // `bettapay_common::storage::CommonDataKey` instead of here - see that
 // type's doc comment for why a shared key type is safe to mix with this
-// contract's own storage without a migration.
+// contract's own storage without a migration, and for what "storage
+// separation" means for a key type shared this way. Admin stays local:
+// this contract stores it as a multisig `Vec<Address>` under its own
+// `DataKey::Admin`, which CommonDataKey does not own.
 
 #[derive(Clone)]
 #[contracttype]
 pub enum Operation {
     UpdateGovernance(Address),
     CancelRecovery,
-    TransferAdmin(Address),
+    /// Carries the full new admin set and multisig threshold, matching the
+    /// shape of the direct `transfer_admin(signers, new_admins, new_threshold)`
+    /// entry point exactly. Both paths now accept the same data, closing the
+    /// storage-corruption window where the timelocked path could only carry a
+    /// single address.
+    TransferAdmin(Vec<Address>, u32),
     Upgrade(BytesN<32>),
     RegisterMerchant(Address),
     UnregisterMerchant(Address),
@@ -163,29 +182,71 @@ pub enum Operation {
     SetDefaultRule(SettlementRule),
 }
 
+/// Storage key layout for settlement_contract.
+///
+/// **Naming Convention (Issue #966):**
+/// All `DataKey` variants follow the UpperCamelCase singular noun convention
+/// without ad-hoc abbreviations (e.g., `Admin`, `Initializing`, `Governance`,
+/// `Merchant`, `Rule`, `ArchivedMerchant`, `DefaultRule`, `Payment`,
+/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`,
+/// `PaymentCount`, `PendingOperationCount`).
+///
+/// **Stability Notice:**
+/// In Soroban, contracttype enum variants are serialized into ledger keys using
+/// their exact identifier as an `SCVal::Symbol`. Changing existing variant
+/// names breaks binary compatibility with deployed ledger entries. All
+/// existing variant names MUST remain strictly unchanged.
 #[derive(Clone)]
 #[contracttype]
 pub(crate) enum DataKey {
     /// Instance — singleton, read on every mutating call.
     Admin,
-    /// Instance — singleton u32 threshold for multisig operations.
-    Threshold,
-    /// Instance — singleton address, rarely changes.
-    RecoveryAddress,
-    /// Instance — singleton boolean flag, read on every mutating call.
-    PendingRecovery,
+    /// Instance — set during `init` before any external call to prevent
+    /// reentrant re-initialisation through a self-recursive governance contract.
+    /// Removed once init completes.
+    Initializing,
     /// Instance — singleton address, rarely changes.
     Governance,
     /// Persistent — one per merchant, many entries.
     Merchant(Address),
     /// Persistent — one per merchant, may expire.
     Rule(Address),
+    /// Persistent — tombstone written when a merchant is unregistered.
+    ///
+    /// Survives re-registration so a merchant can never resurrect the payment
+    /// history of an earlier registration (issue #490).
+    ArchivedMerchant(Address),
     /// Persistent — single value but may be updated.
     DefaultRule,
-    /// Persistent — one per payment, high volume.
-    Payment(BytesN<32>),
-    /// Instance — singleton boolean, read on every mutating call.
-    Paused,
+    /// Persistent — one per (merchant, reference), high volume.
+    ///
+    /// Reference uniqueness is scoped to the merchant (issue #493): the same
+    /// 32-byte reference may be used by two different merchants, so the key
+    /// carries the merchant alongside the reference.
+    Payment(Address, BytesN<32>),
     /// Storage key for a scheduled operation.
     ScheduledOperation(BytesN<32>),
+    /// Instance — stored at `init` to gate initialization to the deployer
+    /// and prevent front-running (issue #684).
+    Deployer,
+    /// Instance-storage schema version (u32) written at `init`. Baseline for
+    /// the first storage migration, mirroring governance_contract's
+    /// `DataKey::SchemaVersion` (issue #507, issue #704).
+    SchemaVersion,
+    /// Instance — caches the last-good governance fee config to reduce
+    /// cross-contract call failures and gas overhead (issue #744).
+    /// Stores `Option<SettlementRule>` where `None` means no successful
+    /// governance fetch has occurred yet.
+    CachedGovRule,
+    /// Persistent — one per merchant, tracks the number of `Payment` records
+    /// currently stored for that merchant (issue #980). Incremented by
+    /// `store_payment_reference`, decremented by `prune_payment` /
+    /// `prune_payments`. Absence means zero, matching a registered merchant
+    /// that has never stored a payment.
+    PaymentCount(Address),
+    /// Instance — number of scheduled operations currently pending in the
+    /// timelock queue (issue #887). Incremented by `schedule`, decremented by
+    /// `execute`, `cancel`, and `cancel_all`. Absence means zero, so a fresh
+    /// contract reports an empty queue without an initialisation write.
+    PendingOperationCount,
 }

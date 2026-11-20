@@ -6,32 +6,33 @@
 
 pub mod admin_tests;
 pub mod conformity_tests;
+pub mod data_key_fuzz_tests;
 pub mod event_topic_conformity_tests;
+pub mod event_topic_registry_tests;
+pub mod fee_bounds_parity_tests;
+pub mod fee_config_ordering_tests;
+pub mod governance_error_tests;
 pub mod integration_tests;
+pub mod interface_tests;
+pub mod mock_governance;
+#[path = "../../../tests/test_invariant_issue_723.rs"]
+mod issue_invariant_tests;
+pub mod operation_roundtrip_tests;
 pub mod recovery_admin_set_tests;
+pub mod reentrant_governance;
+pub mod rule_provenance_tests;
+pub mod schedule_collision_tests;
 pub mod timelock_tests;
+pub mod ttl_tests;
+
+pub use mock_governance::{
+    register_governance, register_governance_with_config, register_governance_with_mode,
+    MockGovMode, MockGovernance,
+};
 
 use crate::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
-
-/// A minimal governance stub that returns `None` from `get_fee_config`.
-/// This satisfies `validate_governance` in `init`, which requires the
-/// governance address to be a deployed contract exposing that function.
-#[contract]
-pub struct MockGovernance;
-
-#[contractimpl]
-impl MockGovernance {
-    pub fn get_fee_config(_env: Env) -> Option<FeeConfig> {
-        None
-    }
-}
-
-/// Registers a fresh `MockGovernance` contract and returns its address.
-pub fn register_governance(env: &Env) -> Address {
-    env.register_contract(None, MockGovernance)
-}
+use soroban_sdk::{Address, Env, Vec};
 
 /// Creates a fully initialised settlement contract environment.
 ///
@@ -58,6 +59,22 @@ pub fn setup() -> (
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     let admins = soroban_sdk::vec![&env, admin];
-    client.init(&admins, &1, &governance, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
     (env, client, admins, merchant)
+}
+
+/// Asserts two rules are equal field by field. `SettlementRule` derives
+/// neither `PartialEq` nor `Debug`, so the fields are compared as a tuple to
+/// get a readable diff on failure.
+pub fn assert_rule_eq(actual: &SettlementRule, expected: &SettlementRule, context: &str) {
+    let fields = |r: &SettlementRule| {
+        (
+            r.platform_fee_bps,
+            r.network_fee_bps,
+            r.settlement_delay_ledger,
+            r.auto_settle,
+        )
+    };
+    assert_eq!(fields(actual), fields(expected), "{context}");
 }

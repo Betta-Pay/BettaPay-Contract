@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -e
+
+# Only run checks if staged files contain Rust source files
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+
+if [ -n "$STAGED_RS" ]; then
+    echo "Running pre-commit checks on staged Rust files..."
+    echo "-> cargo fmt --all --check"
+    cargo fmt --all --check
+    echo "-> make clippy"
+    make clippy
+fi

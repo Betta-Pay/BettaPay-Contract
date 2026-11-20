@@ -1,0 +1,17 @@
+# Pre-commit configuration (optional)
+# See https://pre-commit.com for more information
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: make-clippy
+        name: make clippy
+        entry: make clippy
+        language: system
+        types: [rust]
+        pass_filenames: false

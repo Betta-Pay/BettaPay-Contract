@@ -1,0 +1,1173 @@
+{
+  "generators": {
+    "address": 6,
+    "nonce": 0
+  },
+  "auth": [
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "function_name": "init",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "u32": 1
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ],
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "function_name": "init",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "u32": 1
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "function_name": "schedule",
+              "args": [
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "SetDefaultRule"
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "auto_settle"
+                          },
+                          "val": {
+                            "bool": true
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "network_fee_bps"
+                          },
+                          "val": {
+                            "u32": 5000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "platform_fee_bps"
+                          },
+                          "val": {
+                            "u32": 6000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "settlement_delay_ledger"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "u64": 172800
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    []
+  ],
+  "ledger": {
+    "protocol_version": 21,
+    "sequence_number": 0,
+    "timestamp": 172800,
+    "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "base_reserve": 0,
+    "min_persistent_entry_ttl": 4096,
+    "min_temp_entry_ttl": 16,
+    "max_entry_ttl": 6312000,
+    "ledger_entries": [
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 4837995959683129791
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 4837995959683129791
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 5541220902715666415
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 5541220902715666415
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+            "key": "ledger_key_contract_instance",
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+                "key": "ledger_key_contract_instance",
+                "durability": "persistent",
+                "val": {
+                  "contract_instance": {
+                    "executable": {
+                      "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    },
+                    "storage": null
+                  }
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "ScheduledOperation"
+                },
+                {
+                  "bytes": "188a8fa2fb25df7626c0f44d59921e2803b5caba84e1f67e914a3b41a31dafe5"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "ScheduledOperation"
+                    },
+                    {
+                      "bytes": "188a8fa2fb25df7626c0f44d59921e2803b5caba84e1f67e914a3b41a31dafe5"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "execute_at"
+                      },
+                      "val": {
+                        "u64": 172800
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "operation_xdr"
+                      },
+                      "val": {
+                        "bytes": "0000001000000001000000020000000f0000000e53657444656661756c7452756c6500000000001100000001000000040000000f0000000b6175746f5f736574746c650000000000000000010000000f0000000f6e6574776f726b5f6665655f6270730000000003000013880000000f00000010706c6174666f726d5f6665655f62707300000003000017700000000f00000017736574746c656d656e745f64656c61795f6c6564676572000000000300000007"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+            "key": "ledger_key_contract_instance",
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+                "key": "ledger_key_contract_instance",
+                "durability": "persistent",
+                "val": {
+                  "contract_instance": {
+                    "executable": {
+                      "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    },
+                    "storage": [
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Admin"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Deployer"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Governance"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "RecoveryAddress"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Threshold"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 801925984706572462
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 801925984706572462
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_code": {
+            "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_code": {
+                "ext": "v0",
+                "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "code": ""
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ]
+    ]
+  },
+  "events": [
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
+              },
+              {
+                "symbol": "init"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "u32": 1
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000004"
+              },
+              {
+                "symbol": "get_fee_config"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000004",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "get_fee_config"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "init"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
+              },
+              {
+                "symbol": "set_default_rule"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "auto_settle"
+                      },
+                      "val": {
+                        "bool": true
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 6000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "settlement_delay_ledger"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "failing with contract error"
+                },
+                {
+                  "u32": 4
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "string": "escalating error to panic"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "string": "caught error from function"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "contract try_call failed"
+                },
+                {
+                  "symbol": "set_default_rule"
+                },
+                {
+                  "vec": [
+                    {
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "auto_settle"
+                          },
+                          "val": {
+                            "bool": true
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "network_fee_bps"
+                          },
+                          "val": {
+                            "u32": 5000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "platform_fee_bps"
+                          },
+                          "val": {
+                            "u32": 6000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "settlement_delay_ledger"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
+              },
+              {
+                "symbol": "schedule"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  ]
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "SetDefaultRule"
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "auto_settle"
+                          },
+                          "val": {
+                            "bool": true
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "network_fee_bps"
+                          },
+                          "val": {
+                            "u32": 5000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "platform_fee_bps"
+                          },
+                          "val": {
+                            "u32": 6000
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "settlement_delay_ledger"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "u64": 172800
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "op_scheduled"
+              },
+              {
+                "bytes": "188a8fa2fb25df7626c0f44d59921e2803b5caba84e1f67e914a3b41a31dafe5"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                {
+                  "u64": 172800
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "schedule"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
+              },
+              {
+                "symbol": "execute"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "symbol": "SetDefaultRule"
+                },
+                {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "auto_settle"
+                      },
+                      "val": {
+                        "bool": true
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "network_fee_bps"
+                      },
+                      "val": {
+                        "u32": 5000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "platform_fee_bps"
+                      },
+                      "val": {
+                        "u32": 6000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "settlement_delay_ledger"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "failing with contract error"
+                },
+                {
+                  "u32": 4
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "string": "escalating error to panic"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "string": "caught error from function"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 4
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "contract try_call failed"
+                },
+                {
+                  "symbol": "execute"
+                },
+                {
+                  "vec": [
+                    {
+                      "vec": [
+                        {
+                          "symbol": "SetDefaultRule"
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "auto_settle"
+                              },
+                              "val": {
+                                "bool": true
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "network_fee_bps"
+                              },
+                              "val": {
+                                "u32": 5000
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "platform_fee_bps"
+                              },
+                              "val": {
+                                "u32": 6000
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "settlement_delay_ledger"
+                              },
+                              "val": {
+                                "u32": 7
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    }
+  ]
+}

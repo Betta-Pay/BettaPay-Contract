@@ -50,6 +50,25 @@ pub const TTL_THRESHOLD_LEDGERS: u32 = LEDGERS_PER_DAY * 14;
 pub const TTL_BUMP_LEDGERS: u32 = LEDGERS_PER_DAY * 30;
 
 /// Cooldown between `initiate_recovery` and `execute_recovery`: seven days,
-/// expressed in seconds. Both contracts use the same delay window so they can
-/// share a single definition.
+/// expressed in seconds. Scheduled settlement administrative operations use a
+/// delay of at least this long. This ordering is part of the threat model:
+/// recovery must be able to veto compromised-admin upgrades and admin
+/// transfers before they execute.
 pub const RECOVERY_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// Reserved pause-reason code meaning "no reason given" (issue #991).
+///
+/// Used by callers that don't expose a reason to their own callers — e.g.
+/// `governance_contract::pause`, which is out of scope for issue #991 and
+/// keeps its unparameterized signature — so they still have a valid code to
+/// pass through to [`crate::storage::apply_pause`].
+pub const PAUSE_REASON_NONE: u32 = 0;
+
+/// Highest value accepted as a pause-reason code (issue #991).
+///
+/// `pause` entry points that accept a caller-supplied reason must reject any
+/// value above this bound with a typed error before calling
+/// [`crate::storage::apply_pause`]. Bounding the range (rather than allowing
+/// any `u32`) keeps the code machine-readable and cheap to document, in place
+/// of a free-text reason string.
+pub const MAX_PAUSE_REASON: u32 = 99;

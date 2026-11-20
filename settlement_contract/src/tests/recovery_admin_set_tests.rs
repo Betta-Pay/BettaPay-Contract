@@ -21,11 +21,10 @@ use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env, Vec};
 
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
+use bettapay_common::events::PendingRecovery;
+use bettapay_common::storage::{CommonDataKey, ZERO_ADDRESS_STRKEY};
 
 use super::{register_governance, setup};
-
-/// Stellar's zero-address (all-zero ed25519 public key) in strkey form.
-const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
 fn zero_address(env: &Env) -> Address {
     Address::from_string(&soroban_sdk::String::from_str(env, ZERO_ADDRESS_STRKEY))
@@ -48,7 +47,14 @@ fn setup_with_admins(
     let governance = register_governance(env);
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(env, &contract_id);
-    client.init(admins, &threshold, &governance, &recovery_address);
+    let deployer = Address::generate(env);
+    client.init(
+        &deployer,
+        admins,
+        &threshold,
+        &governance,
+        &recovery_address,
+    );
     (client, recovery_address)
 }
 
@@ -295,3 +301,182 @@ fn rejected_duplicate_transfer_leaves_recovered_admin_set_intact() {
     );
     assert_eq!(client.get_threshold(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// recovery initiator (issue #560)
+// ---------------------------------------------------------------------------
+
+// The pending recovery must record the address that initiated it, so
+// `cancel_recovery` can validate the cancellation against the initiator and
+// off-chain consumers can audit who started the recovery.
+#[test]
+fn pending_recovery_records_initiating_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, recovery_address) = setup_with_admins(&env, &admins, 1);
+    let new_admin = Address::generate(&env);
+
+    client.initiate_recovery(&new_admin);
+
+    let pending: PendingRecovery = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+            .unwrap()
+    });
+    assert_eq!(pending.initiated_by, recovery_address);
+    assert_eq!(pending.new_admin, new_admin);
+}
+
+// The address that initiated a recovery may cancel it directly. The admin
+// gate is unchanged, so this is an additional canceller, not a replacement.
+#[test]
+fn cancel_recovery_by_initiator_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, recovery_address) = setup_with_admins(&env, &admins, 1);
+    let new_admin = Address::generate(&env);
+    client.initiate_recovery(&new_admin);
+
+    client.cancel_recovery(&soroban_sdk::vec![&env, recovery_address]);
+
+    assert!(
+        !env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)),
+        "a cancelled recovery must be removed from storage"
+    );
+}
+
+// The initiator path is still authenticated: with no real authorization the
+// cancel attempt is refused even by the recorded initiator.
+#[test]
+fn initiator_cancellation_requires_real_authorization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, recovery_address) = setup_with_admins(&env, &admins, 1);
+    let new_admin = Address::generate(&env);
+    client.initiate_recovery(&new_admin);
+
+    env.mock_auths(&[]);
+    assert!(client
+        .try_cancel_recovery(&soroban_sdk::vec![&env, recovery_address])
+        .is_err());
+}
+
+// A caller that is neither an admin nor the recorded initiator is refused,
+// and the pending recovery survives the refused attempt.
+#[test]
+fn cancel_recovery_by_non_initiator_non_admin_is_refused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+    let new_admin = Address::generate(&env);
+    client.initiate_recovery(&new_admin);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_cancel_recovery(&soroban_sdk::vec![&env, stranger]);
+    assert_eq!(
+        result,
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+    assert!(
+        env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)),
+        "a refused cancellation must leave the pending recovery in place"
+    );
+}
+
+// The pre-existing admin path is preserved: the admin set can still cancel a
+// recovery it did not initiate.
+#[test]
+fn cancel_recovery_by_admin_still_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+    let new_admin = Address::generate(&env);
+    client.initiate_recovery(&new_admin);
+
+    client.cancel_recovery(&admins);
+
+    assert!(
+        !env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)),
+        "the admin path must still be able to cancel a pending recovery"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #823: Recovery veto blocks a scheduled upgrade
+// ---------------------------------------------------------------------------
+
+/// Verifies that a pending recovery vetoes a scheduled `Upgrade` operation
+/// even after the upgrade's timelock delay has elapsed.
+///
+/// The veto policy (issue #501): once `initiate_recovery` is called, `execute`
+/// rejects every `Operation` variant except `CancelRecovery` until the pending
+/// recovery is resolved. This test pins that policy specifically for the
+/// `Upgrade` variant, which is a high-value target during a key-compromise
+/// scenario.
+#[test]
+fn recovery_veto_blocks_scheduled_upgrade() {
+    use crate::{Operation, DEFAULT_TIMELOCK_DELAY_SECONDS};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+
+    // Upload an empty Wasm so the test host accepts the hash without needing a
+    // real contract binary; the upgrade is never applied because the veto fires
+    // first.
+    let empty_wasm = soroban_sdk::Bytes::from_slice(&env, &[]);
+    let empty_hash = env.deployer().upload_contract_wasm(empty_wasm);
+    let op = Operation::Upgrade(empty_hash);
+
+    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // Advance past the timelock delay so the upgrade would ordinarily be
+    // executable, then initiate a recovery in the same block.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.initiate_recovery(&Address::generate(&env));
+
+    // The upgrade's delay has elapsed, but the pending recovery must veto it.
+    assert!(
+        client.try_execute(&admins.get(0).unwrap(), &op).is_err(),
+        "execute must be vetoed by a pending recovery even after the timelock delay"
+    );
+
+    // Cancelling the recovery lifts the veto — the upgrade must now execute.
+    client.cancel_recovery(&admins);
+    client.execute(&admins.get(0).unwrap(), &op);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #884: read_admin returns SettlementError::AdminSetEmpty on empty admin set
+// ---------------------------------------------------------------------------
+
+/// Issue #884: read_admin must panic with typed SettlementError::AdminSetEmpty (317)
+/// when the stored admin set is empty, instead of producing an untyped host unwrap panic.
+#[test]
+#[should_panic(expected = "Error(Contract, #317)")]
+fn read_admin_panics_with_admin_set_empty_when_admin_set_is_empty() {
+    let (env, client, _admins, _merchant) = setup();
+    let empty: Vec<Address> = Vec::new(&env);
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::Admin, &empty);
+        crate::storage::read_admin(&env);
+    });
+}
+
