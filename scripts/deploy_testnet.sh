@@ -45,9 +45,6 @@ curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_A
 log_info "Building and optimizing settlement and governance contracts..."
 make optimize
 log_success "Optimized build completed successfully."
-log_info "Building settlement and governance contracts..."
-make optimize
-log_success "Build completed successfully."
 
 SETTLEMENT_WASM="${ROOT_DIR}/target/optimized/settlement_contract_opt.wasm"
 GOVERNANCE_WASM="${ROOT_DIR}/target/optimized/governance_contract_opt.wasm"
