@@ -193,6 +193,7 @@ What is on the ledger today, and which storage kind holds it. See [`docs/storage
 | `ArchivedMerchant(Address)` | persistent | `bool` (tombstone written when merchant unregisters, issue #490) |
 | `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` (scoped by merchant and reference, issue #493) |
 | `ScheduledOperation(BytesN<32>)` | persistent | `ScheduledOp` (timelocked operation payload and execute_at) |
+| `PaymentCount(Address)` | persistent | `u32` (number of `Payment` records currently stored for a merchant, issue #980) |
 | `PendingOperationCount` | instance | `u32` (pending timelock queue depth, issue #887) |
 
 #### Shared Keys (`CommonDataKey`)
