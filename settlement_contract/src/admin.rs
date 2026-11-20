@@ -135,6 +135,10 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`AlreadyInitialized`](SettlementError::AlreadyInitialized) — if the contract has already been initialized.
+    /// * [`ZeroAddress`](SettlementError::ZeroAddress) — if `deployer` is the zero address.
+    ///
+    /// `deployer` is stored under `DataKey::Deployer` for audit only; no entry
+    /// point reads it back.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -146,6 +150,7 @@ impl SettlementContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, SettlementError::AlreadyInitialized);
         }
+        validate_nonzero_address(&env, &deployer, SettlementError::ZeroAddress);
         // Gate initialization to the deployer to prevent front-running (issue #684).
         deployer.require_auth();
         if env.storage().instance().has(&DataKey::Initializing) {

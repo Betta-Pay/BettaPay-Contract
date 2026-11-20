@@ -74,6 +74,42 @@ fn upsert_anchor_update_also_emits_event() {
 }
 
 #[test]
+fn re_upserting_same_anchor_extends_ttl_without_event() {
+    use soroban_sdk::testutils::storage::Persistent;
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, client, admin) = setup();
+    let asset = Address::generate(&env);
+    let anchor = Address::generate(&env);
+    let key = crate::DataKey::Anchor(asset.clone());
+    let anchor_ttl =
+        || env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
+
+    client.upsert_anchor(&admin, &asset, &anchor);
+    // Keep the contract instance alive while the anchor entry ages.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(crate::ANCHOR_TTL_BUMP, crate::ANCHOR_TTL_BUMP);
+    });
+    let remaining = anchor_ttl();
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + remaining - crate::ANCHOR_TTL_THRESHOLD / 2);
+    assert!(anchor_ttl() < crate::ANCHOR_TTL_THRESHOLD);
+
+    let prev = env.events().all().len();
+    client.upsert_anchor(&admin, &asset, &anchor);
+    assert_eq!(
+        env.events().all().len(),
+        prev,
+        "no-op upsert emits no event"
+    );
+
+    assert_eq!(anchor_ttl(), crate::ANCHOR_TTL_BUMP);
+    assert_eq!(client.get_anchor(&asset), Some(anchor));
+}
+
+#[test]
 fn get_anchor_does_not_emit_event() {
     let (env, client, admin) = setup();
     let asset = Address::generate(&env);

@@ -794,6 +794,13 @@ impl GovernanceContract {
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
+        if old_anchor.as_ref() == Some(&anchor) {
+            // Same anchor again: keep the entry alive but emit nothing.
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+            return;
+        }
         env.storage().persistent().set(&key, &anchor);
         env.storage()
             .persistent()
@@ -847,6 +854,9 @@ fn read_admins(env: &Env) -> Vec<Address> {
 }
 
 fn read_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     env.storage()
         .instance()
         .get(&CommonDataKey::Threshold)
@@ -976,17 +986,6 @@ fn read_optional_admins(env: &Env) -> Vec<Address> {
         .instance()
         .get(&DataKey::Admin)
         .unwrap_or_else(|| Vec::new(env))
-}
-
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Preserved per ADR-004.
-#[allow(dead_code)] // Preserved for ADR-004 compatibility
-fn read_optional_primary_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| storage::zero_address(env))
 }
 
 /// Rejects the zero address with a caller-supplied `GovernanceError`.
