@@ -47,6 +47,9 @@ pub struct PendingRecovery {
 
 // --- Shared: emitted by both governance_contract and settlement_contract ---
 
+/// Topic emitted once, when either contract's `init` completes.
+pub const INITIALIZED_EVENT: &str = "initialized";
+
 /// Topic emitted when the admin role is transferred (also reused by
 /// `execute_recovery`).
 pub const ADMIN_TRANSFERRED_EVENT: &str = "admin_transferred";
@@ -73,9 +76,6 @@ pub const CONTRACT_UPGRADED_EVENT: &str = "contract_upgraded";
 pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 
 // --- governance_contract only ---
-
-/// Topic emitted once, when `GovernanceContract::init` completes.
-pub const INITIALIZED_EVENT: &str = "initialized";
 
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";

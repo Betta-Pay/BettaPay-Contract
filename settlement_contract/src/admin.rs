@@ -60,6 +60,15 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        // Seed the pause flag explicitly so a freshly deployed instance always
+        // has the complete canonical key set instead of relying on
+        // `is_paused`'s `unwrap_or(false)` fallback.
+        storage::set_paused(&env, false);
+        let primary_admin = admins.get(0).unwrap();
+        env.events().publish(
+            (Symbol::new(&env, events::INITIALIZED_EVENT),),
+            primary_admin,
+        );
     }
 
     pub fn is_initialized(env: Env) -> bool {
@@ -177,10 +186,16 @@ impl SettlementContract {
     }
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold + 1);
-
         let admins = read_admins(&env);
+        let current_threshold = read_threshold(&env);
+        // Require one more signer than the current threshold to broaden
+        // consensus where possible, but cap it at the admin count so an N-of-N
+        // multisig (e.g. 2-of-2) can still lower its threshold. Authenticate
+        // before validating `new_threshold` so unauthenticated callers cannot
+        // probe the admin set or current threshold via validation errors.
+        let required_signers = current_threshold.saturating_add(1).min(admins.len());
+        verify_admin_auth(&env, &signers, required_signers);
+
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, SettlementError::InvalidThreshold);
         }

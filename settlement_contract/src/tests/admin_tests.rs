@@ -3,10 +3,10 @@
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
-use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol, TryFromVal};
+use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol, TryFromVal, Vec};
 
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
-use bettapay_common::events::{AdminTransferred, PendingRecovery};
+use bettapay_common::events::{AdminTransferred, PendingRecovery, INITIALIZED_EVENT};
 use bettapay_common::storage::CommonDataKey;
 
 use super::{register_governance, setup};
@@ -33,9 +33,35 @@ fn emits_event_on_initialization() {
         &recovery,
     );
 
-    // init stores admin/governance/recovery; event emission may vary by version.
-    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, admin]);
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, admin.clone()]);
     assert_eq!(client.get_governance(), governance);
+    assert!(!client.is_paused());
+
+    // init publishes exactly one `initialized` event with the primary admin
+    // as its data, matching governance_contract::init.
+    let events = env.events().all();
+    assert_eq!(events.len(), 1, "exactly one event emitted on init");
+    let (_contract_id, topics, data) = events.get(0).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, INITIALIZED_EVENT)
+    );
+    assert_eq!(Address::from_val(&env, &data), admin);
+}
+
+#[test]
+fn init_seeds_paused_key_to_false() {
+    let (env, client, _admins, _merchant) = setup();
+    assert!(!client.is_paused());
+    env.as_contract(&client.address, || {
+        assert!(env.storage().instance().has(&CommonDataKey::Paused));
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, bool>(&CommonDataKey::Paused),
+            Some(false)
+        );
+    });
 }
 
 #[test]
@@ -55,6 +81,92 @@ fn get_admin_panics_before_init() {
     let contract_id = env.register_contract(None, SettlementContract);
     let client = SettlementContractClient::new(&env, &contract_id);
     client.get_admin();
+}
+
+// ---------------------------------------------------------------------------
+// change_threshold
+// ---------------------------------------------------------------------------
+
+fn contract_error(error: SettlementError) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(error as u32)
+}
+
+/// Registers a 2-of-2 settlement contract (both admins must sign admin calls).
+fn setup_two_of_two() -> (Env, SettlementContractClient<'static>, Vec<Address>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin1, admin2];
+    let governance = register_governance(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&admins, &2, &governance, &recovery);
+    (env, client, admins)
+}
+
+#[test]
+fn change_threshold_allows_2_of_2_to_lower_to_1() {
+    let (env, client, admins) = setup_two_of_two();
+
+    client.change_threshold(&admins, &1);
+    assert_eq!(client.get_threshold(), 1);
+    assert_eq!(
+        Symbol::from_val(&env, &env.events().all().last().unwrap().1.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::THRESHOLD_CHANGED_EVENT)
+    );
+}
+
+#[test]
+fn change_threshold_keeps_1_of_2_requirement_at_two_signers() {
+    let (env, client, admins) = setup_two_of_two();
+    client.change_threshold(&admins, &1);
+
+    // The cap only relaxes the N-of-N case; with two admins and threshold 1
+    // the old "+1" rule still requires both signatures.
+    let single_signer = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert_eq!(
+        client.try_change_threshold(&single_signer, &2),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+}
+
+#[test]
+fn change_threshold_rejects_sub_threshold_signers() {
+    let (env, client, admins) = setup_two_of_two();
+    let single_signer = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert_eq!(
+        client.try_change_threshold(&single_signer, &1),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+}
+
+#[test]
+fn change_threshold_authenticates_before_validating_new_threshold() {
+    let (env, client, admins) = setup_two_of_two();
+    let unauthorized = soroban_sdk::vec![&env, Address::generate(&env)];
+
+    // An unauthenticated caller must always see Unauthorized, never a
+    // validation error revealing the admin count or current threshold.
+    assert_eq!(
+        client.try_change_threshold(&unauthorized, &0),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+    assert_eq!(
+        client.try_change_threshold(&unauthorized, &2),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+
+    // Authorized callers still get the ordinary validation error.
+    assert_eq!(
+        client.try_change_threshold(&admins, &0),
+        Err(Ok(contract_error(SettlementError::InvalidThreshold)))
+    );
+    assert_eq!(
+        client.try_change_threshold(&admins, &3),
+        Err(Ok(contract_error(SettlementError::InvalidThreshold)))
+    );
 }
 
 // ---------------------------------------------------------------------------
