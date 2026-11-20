@@ -635,14 +635,33 @@ impl GovernanceContract {
         );
     }
 
+    /// Updates the multisig threshold required for admin operations.
+    ///
+    /// # Authorization
+    ///
+    /// Requires `current_threshold` distinct authorized admin signers (matching
+    /// the standard admin multisig quorum). Admin authorization is verified
+    /// before validating `new_threshold` bounds so unauthenticated callers
+    /// cannot probe the size of the admin set.
+    ///
+    /// # Errors
+    ///
+    /// - [`GovernanceError::Unauthorized`] if fewer than `current_threshold`
+    ///   valid, distinct admin signers authorize the call.
+    /// - [`GovernanceError::InvalidThreshold`] if `new_threshold == 0` or
+    ///   `new_threshold > admins.len()`.
+    /// - [`GovernanceError::SameAdmin`] if `new_threshold == current_threshold`.
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold);
+        if new_threshold == current_threshold {
+            panic_with_error!(&env, GovernanceError::SameAdmin);
+        }
 
         env.storage()
             .instance()
@@ -694,11 +713,12 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        run_migrations(&env);
-        env.events().publish(
-            (Symbol::new(&env, events::MIGRATED_EVENT),),
-            (admin, CURRENT_SCHEMA_VERSION),
-        );
+        if run_migrations(&env) {
+            env.events().publish(
+                (Symbol::new(&env, events::MIGRATED_EVENT),),
+                (admin, CURRENT_SCHEMA_VERSION),
+            );
+        }
     }
 
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
@@ -945,9 +965,11 @@ fn migrate_step(_env: &Env, from_version: u32) {
 }
 
 /// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
-/// [`migrate_step`] for each version crossed. A no-op when already current.
-fn run_migrations(env: &Env) {
-    let mut version = read_schema_version(env);
+/// [`migrate_step`] for each version crossed. Returns `true` if the stored
+/// version advanced, or `false` when already at `CURRENT_SCHEMA_VERSION`.
+fn run_migrations(env: &Env) -> bool {
+    let start_version = read_schema_version(env);
+    let mut version = start_version;
     while version < CURRENT_SCHEMA_VERSION {
         migrate_step(env, version);
         version += 1;
@@ -955,6 +977,7 @@ fn run_migrations(env: &Env) {
             .instance()
             .set(&DataKey::SchemaVersion, &version);
     }
+    version > start_version
 }
 
 /// Returns the instance-storage schema version, defaulting to the current

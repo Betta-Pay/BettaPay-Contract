@@ -803,8 +803,8 @@ fn gov_two_of_two_can_lower_threshold() {
     );
 }
 
-// Issue #565: setting a threshold above the admin count must surface
-// `InvalidThreshold` (#14), not `Unauthorized` (#3) from the auth gate.
+// Authorized caller setting a threshold above the admin count must surface
+// `InvalidThreshold` (#14).
 #[test]
 #[should_panic(expected = "Error(Contract, #14)")]
 fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
@@ -821,11 +821,11 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &recovery);
 
-    // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
+    // Threshold 3 > admins.len() 2 — authorized caller receives InvalidThreshold.
     client.change_threshold(&admins, &3);
 }
 
-// Issue #565: threshold == 0 must also be rejected before the auth gate.
+// Authorized caller setting threshold == 0 must surface `InvalidThreshold` (#14).
 #[test]
 #[should_panic(expected = "Error(Contract, #14)")]
 fn change_threshold_zero_rejects_with_invalid_threshold() {
@@ -843,6 +843,54 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     client.init(&deployer, &admins, &2, &recovery);
 
     client.change_threshold(&admins, &0);
+}
+
+#[test]
+fn change_threshold_unauthorized_caller_gets_unauthorized_even_when_out_of_bounds() {
+    let (env, client, _admins, _recovery) = setup_with(2, 1);
+    let non_admin = Address::generate(&env);
+    let caller = vec![&env, non_admin];
+
+    let zero_res = client.try_change_threshold(&caller, &0);
+    assert_eq!(
+        zero_res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+
+    let above_res = client.try_change_threshold(&caller, &99);
+    assert_eq!(
+        above_res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+}
+
+#[test]
+fn change_threshold_noop_rejects_with_same_admin_and_emits_no_event() {
+    let (env, client, admins, _recovery) = setup_with(3, 2);
+    let two_signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    let events_before = env.events().all().len();
+
+    let res = client.try_change_threshold(&two_signers, &2);
+    assert_eq!(res.unwrap_err().unwrap(), GovernanceError::SameAdmin.into());
+    assert_eq!(env.events().all().len(), events_before);
+}
+
+#[test]
+fn change_threshold_exact_quorum_boundary() {
+    let (env, client, admins, _recovery) = setup_with(3, 2);
+    let one_signer = vec![&env, admins.get(0).unwrap()];
+    let two_signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+
+    // current_threshold - 1 signers is rejected with Unauthorized.
+    let res = client.try_change_threshold(&one_signer, &3);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+
+    // Exactly current_threshold (2) signers succeeds without requiring current_threshold + 1.
+    client.change_threshold(&two_signers, &3);
+    assert_eq!(client.get_threshold(), 3);
 }
 
 // -----------------------------------------------------------------------
@@ -1103,6 +1151,7 @@ fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
     });
     assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
 
+    let events_before = env.events().all().len();
     client.migrate(&admins);
     client.migrate(&admins);
 
@@ -1112,17 +1161,17 @@ fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
             .get::<_, u32>(&DataKey::SchemaVersion)
     });
     assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
-
-    let (_, topics, _) = env.events().all().last().unwrap();
     assert_eq!(
-        Symbol::from_val(&env, &topics.get(0).unwrap()),
-        Symbol::new(&env, events::MIGRATED_EVENT)
+        env.events().all().len(),
+        events_before,
+        "no-op migrate must not emit MIGRATED_EVENT"
     );
 }
 
 /// Issue #984: version-bump simulation. A stored `SchemaVersion` below
 /// `CURRENT_SCHEMA_VERSION` (as after an upgrade that bumped the constant) is
-/// advanced by `migrate`, and a second call is then a no-op.
+/// advanced by `migrate` and emits `MIGRATED_EVENT`, while a second call is
+/// a no-op that emits no event.
 #[test]
 fn migrate_advances_schema_version_below_current() {
     let (env, client, admins, _recovery) = setup();
@@ -1141,11 +1190,24 @@ fn migrate_advances_schema_version_below_current() {
     });
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION - 1));
 
+    let events_before = env.events().all().len();
     client.migrate(&admins);
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(env.events().all().len(), events_before + 1);
+    let (_, topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::MIGRATED_EVENT)
+    );
 
+    let events_after_first = env.events().all().len();
     client.migrate(&admins);
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(
+        env.events().all().len(),
+        events_after_first,
+        "second migrate call is a no-op and must not emit MIGRATED_EVENT"
+    );
 }
 
 #[test]
