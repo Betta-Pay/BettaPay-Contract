@@ -4,8 +4,8 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP,
-    PAYMENT_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT,
+    MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
     assert_admin_and_not_paused, assert_not_paused, assert_payments_readable,
@@ -494,6 +494,8 @@ impl SettlementContract {
     /// * [`InvalidPaymentReference`](SettlementError::InvalidPaymentReference) — if `reference` is all zeros.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
     /// * [`DuplicatePaymentReference`](SettlementError::DuplicatePaymentReference) — if the reference already exists for this merchant.
+    /// * [`MaxPaymentsReached`](SettlementError::MaxPaymentsReached) — if the merchant already has
+    ///   [`MAX_PAYMENTS_PER_MERCHANT`] stored records and has not pruned any.
     /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
     ///   for either fee leg or for the combined platform + network fee rate.
     ///
@@ -536,6 +538,14 @@ impl SettlementContract {
         let payment_key = DataKey::Payment(merchant.clone(), reference.clone());
         if env.storage().persistent().has(&payment_key) {
             panic_with_error!(&env, SettlementError::DuplicatePaymentReference);
+        }
+
+        // Issue #1104: bound each merchant's persistent payment history. The
+        // counter is decremented by both prune entry points, so pruning frees
+        // capacity again. Check before writing the reentrancy-guard dummy so a
+        // rejected payment leaves no storage footprint.
+        if read_payment_count(&env, &merchant) >= MAX_PAYMENTS_PER_MERCHANT {
+            panic_with_error!(&env, SettlementError::MaxPaymentsReached);
         }
 
         // ISSUE 495: Reentrancy guard.
