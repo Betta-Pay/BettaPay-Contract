@@ -69,6 +69,9 @@ jobs:
 
       # The remaining targets from `make all` that are not run above, so every
       # check runs exactly once per CI run.
+      - name: Check documented constants
+        run: make check_constants
+
       - name: Check test snapshots
         run: make check_snapshots
 
