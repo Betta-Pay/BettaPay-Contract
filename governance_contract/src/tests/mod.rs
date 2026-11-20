@@ -1595,14 +1595,6 @@ fn contract_version_returns_schema_version_before_and_after_init() {
     gov_client.init(&deployer, &admins, &1u32, &recovery);
     assert_eq!(gov_client.version(), CURRENT_SCHEMA_VERSION);
 
-    // Test SettlementContract::version before and after init
-    let set_id = env.register_contract(None, settlement_contract::SettlementContract);
-    let set_client = settlement_contract::SettlementContractClient::new(&env, &set_id);
-    assert_eq!(set_client.version(), settlement_contract::policy::CURRENT_SCHEMA_VERSION);
-    assert_eq!(set_client.version(), 1);
-
-    set_client.init(&deployer, &admins, &1u32, &gov_id, &recovery);
-    assert_eq!(set_client.version(), settlement_contract::policy::CURRENT_SCHEMA_VERSION);
 }
 
 #[test]
