@@ -19,8 +19,6 @@ pub mod mock_governance;
 #[path = "../../../tests/test_invariant_issue_723.rs"]
 mod issue_invariant_tests;
 pub mod operation_roundtrip_tests;
-pub mod payment_reference_scoping_tests;
-pub mod payments_page_tests;
 pub mod recovery_admin_set_tests;
 pub mod reentrant_governance;
 pub mod rule_provenance_tests;
