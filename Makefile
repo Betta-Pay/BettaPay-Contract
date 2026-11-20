@@ -47,7 +47,7 @@ export_events:
 list_pending_ops:
 	@bash scripts/list_pending_ops.sh $(ARGS)
 
-.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts docs_check wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts docs_check wasm_size check_codeowners check_constants all
 
 fmt:
 	cargo fmt --all --check
@@ -61,6 +61,7 @@ check:
 
 clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --target wasm32-unknown-unknown --workspace --lib -- -D warnings
 
 print_msrv:
 	@echo $(MSRV)
@@ -95,4 +96,7 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_snapshots test_scripts docs_check check_codeowners check_interface_parity check_storage_docs wasm_size
+check_constants:
+	bash scripts/check_documented_constants.sh
+
+all: fmt check clippy test check_snapshots test_scripts docs_check check_codeowners check_interface_parity check_storage_docs check_constants wasm_size
