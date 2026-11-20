@@ -1390,6 +1390,74 @@ fn update_recovery_address_rotates_address_and_gates_access() {
 }
 
 // ---------------------------------------------------------------------------
+// recovery address separation of duties (admin/merchant exclusion, no-op)
+// ---------------------------------------------------------------------------
+
+/// `init` must reject a recovery address that is one of the initial admins.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn init_rejects_admin_as_recovery_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin.clone()];
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    client.init(&deployer, &admins, &1, &governance, &admin);
+}
+
+/// `update_recovery_address` must reject an active admin.
+#[test]
+fn update_recovery_address_rejects_active_admin() {
+    let (_env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+
+    let res = client.try_update_recovery_address(&admins, &admin);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+}
+
+/// `update_recovery_address` must reject a registered merchant.
+#[test]
+fn update_recovery_address_rejects_registered_merchant() {
+    let (_env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let res = client.try_update_recovery_address(&admins, &merchant);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+}
+
+/// A no-op update (`new_recovery == current`) must be rejected with a typed
+/// error, leave storage untouched and emit no `recovery_address_updated` event.
+#[test]
+fn update_recovery_address_rejects_identical_address_without_event() {
+    let (env, client, admins, _merchant) = setup();
+    let current = client.get_recovery_address();
+    let before = env.events().all().len();
+
+    let res = client.try_update_recovery_address(&admins, &current);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+
+    assert_eq!(client.get_recovery_address(), current);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "a no-op recovery address update must not emit an event"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // recovery
 // ---------------------------------------------------------------------------
 
@@ -1837,6 +1905,43 @@ fn update_governance_rejects_zero_address() {
     let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.update_governance(&admins, &zero_address);
+}
+
+/// `init` must reject the settlement contract itself as governance: setting
+/// governance to `env.current_contract_address()` breaks cross-contract calls
+/// such as `get_fee_config`.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn init_rejects_contract_address_as_governance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_address = Address::generate(&env);
+    let contract_id = env.register_contract(Some(&contract_address), SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
+
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &contract_address,
+        &recovery,
+    );
+}
+
+/// The direct `update_governance` path must reject the contract's own address.
+#[test]
+fn update_governance_rejects_contract_address() {
+    let (_env, client, admins, _merchant) = setup();
+    let self_address = client.address.clone();
+
+    let res = client.try_update_governance(&admins, &self_address);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidGovernance.into()
+    );
 }
 
 #[test]

@@ -185,6 +185,14 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
 /// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
+    // The settlement contract cannot be its own governance: cross-contract
+    // probes such as `get_fee_config` would call back into this contract and
+    // fail or misbehave. Reject the self-address here so every path that routes
+    // through this function (init, direct update, and the timelocked update)
+    // enforces the same rule.
+    if governance == &env.current_contract_address() {
+        panic_with_error!(env, SettlementError::InvalidGovernance);
+    }
 }
 
 /// Rejects the zero address with a caller-supplied `SettlementError`.
