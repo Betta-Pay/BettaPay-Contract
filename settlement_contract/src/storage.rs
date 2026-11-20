@@ -720,6 +720,11 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// Any call failure (contract trap or host error) is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 ///
+/// A rule that exceeds the configured ceiling panics with
+/// [`SettlementError::FeeExceedsGovernanceConfig`] and emits no event: Soroban
+/// discards all events from a failed invocation, so publishing a rejection
+/// event before the panic would only waste CPU and footprint (issue #1157).
+///
 /// # Hard-fail is intentional here (issue #742)
 ///
 /// This is the **write** path (`set_settlement_rule` / `set_default_rule` and
@@ -731,6 +736,13 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// writes fail loud.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
+
+    // Issue #1112: if emergency bypass is active, skip governance fee ceiling checks.
+    // Local bounds are still enforced by validate_rule_bounds.
+    if governance_bypass_enabled(env, &governance) {
+        return;
+    }
+
     let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let fee_config = match try_read_governance_fee_config(env, raw_val) {
@@ -742,13 +754,8 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     if rule.platform_fee_bps > fee_config.platform_fee_bps
         || rule.network_fee_bps > fee_config.network_fee_bps
     {
-        env.events().publish(
-            (
-                Symbol::new(env, bettapay_common::events::FEE_CEILING_REJECTED_EVENT),
-                rule.platform_fee_bps,
-            ),
-            rule.network_fee_bps,
-        );
+        // No event here: Soroban rolls back events on panic, so an event
+        // published immediately before this error is unobservable (issue #1157).
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }
