@@ -1549,9 +1549,51 @@ fn zero_address_and_empty_string_governance_validation() {
 
     // Empty-string address input fails conversion before invocation
     let empty_str = soroban_sdk::String::from_str(&env, "");
-    let empty_res = Address::try_from_string(&empty_str);
+    extern crate std;
+    let empty_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Address::from_string(&empty_str)
+    }));
     assert!(
         empty_res.is_err(),
         "empty string must fail Address conversion before contract invocation"
     );
+}
+
+#[test]
+fn update_recovery_address_authorization_and_event() {
+    let (env, client, admins, _old_recovery) = setup();
+    let new_recovery = Address::generate(&env);
+
+    // 1. Unauthorized signers fail
+    let non_admin = Address::generate(&env);
+    let unauthorized_signers = soroban_sdk::vec![&env, non_admin];
+    assert!(client
+        .try_update_recovery_address(&unauthorized_signers, &new_recovery)
+        .is_err());
+
+    // 2. Zero address fails with InvalidRecoveryAddress
+    let zero = bettapay_common::storage::zero_address(&env);
+    let res_zero = client.try_update_recovery_address(&admins, &zero);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    // 3. Valid admin signers update recovery address and emit event
+    let events_before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    assert_eq!(client.get_recovery_address(), new_recovery);
+
+    assert_eq!(env.events().all().len(), events_before + 1);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(
+        Address::from_val(&env, &topics.get(1).unwrap()),
+        new_recovery
+    );
+    let emitted_admin: Address = FromVal::from_val(&env, &data);
+    assert_eq!(emitted_admin, admins.get(0).unwrap());
 }
