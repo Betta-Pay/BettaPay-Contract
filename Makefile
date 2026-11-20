@@ -61,6 +61,7 @@ check:
 
 clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --target wasm32-unknown-unknown --workspace --lib -- -D warnings
 
 print_msrv:
 	@echo $(MSRV)
