@@ -65,4 +65,20 @@ fi
 [[ "$MISMATCH_OUTPUT" == *"local 21.5.0"*"pinned 99.0.0"* ]] ||
   fail "version mismatch message does not name both versions"
 
+# CLI scripts: --help exits 0, while missing --contract-id and unknown flags
+# exit non-zero so automation does not mistake usage errors for success.
+for script in verify_wasm_hash list_pending_ops export_events simulate; do
+  bash "$ROOT_DIR/scripts/${script}.sh" --help >/dev/null 2>&1 ||
+    fail "${script}.sh --help did not exit 0"
+
+  if bash "$ROOT_DIR/scripts/${script}.sh" --definitely-unknown-flag >/dev/null 2>&1; then
+    fail "${script}.sh accepted an unknown option"
+  fi
+done
+for script in verify_wasm_hash list_pending_ops export_events; do
+  if bash "$ROOT_DIR/scripts/${script}.sh" >/dev/null 2>&1; then
+    fail "${script}.sh exited 0 without --contract-id"
+  fi
+done
+
 echo "tooling smoke tests passed"

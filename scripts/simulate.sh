@@ -15,7 +15,10 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 # ---- Argument parsing -----------------------------------------------------
 usage() {
-  cat <<EOF
+  local code="${1:-0}"
+  local out=1
+  [ "$code" -eq 0 ] || out=2
+  cat >&"$out" <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
 Run a local simulation bootstrap for BettaPay contracts on Stellar.
@@ -31,7 +34,7 @@ Options:
 Environment variables SOROBAN_RPC_URL, SOROBAN_NETWORK_PASSPHRASE,
 SOROBAN_SOURCE, and FRIENDBOT_URL can also be used to override defaults.
 EOF
-  exit 0
+  exit "$code"
 }
 
 load_config() {
@@ -61,8 +64,7 @@ while [[ $# -gt 0 ]]; do
       usage ;;
     *)
       log_error "Unknown option: $1"
-      usage
-      exit 1 ;;
+      usage 2 ;;
   esac
 done
 
