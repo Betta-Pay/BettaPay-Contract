@@ -143,13 +143,13 @@ log_success "Governance contract deployed: $GOVERNANCE_ID"
 # Initialize settlement contract
 log_info "Initializing Settlement contract with admin set..."
 ADMINS="[\"${SOROBAN_SOURCE_ADDRESS}\"]"
-invoke_contract_init "$SETTLEMENT_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+invoke_contract_init "$SETTLEMENT_ID" "$SOROBAN_SOURCE" "$SOROBAN_SOURCE_ADDRESS" "$ADMINS" 1 \
   --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
 log_info "Initializing Governance contract with admin set..."
-invoke_contract_init "$GOVERNANCE_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+invoke_contract_init "$GOVERNANCE_ID" "$SOROBAN_SOURCE" "$SOROBAN_SOURCE_ADDRESS" "$ADMINS" 1 \
   --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 

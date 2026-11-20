@@ -75,12 +75,14 @@ assert_contract_id() {
 
 # Invoke a contract's multisig-aware init entry point. Keeping the shared flags
 # here prevents deployment scripts from drifting from the contract interface.
+# Usage: invoke_contract_init CONTRACT_ID SOURCE DEPLOYER ADMINS THRESHOLD [EXTRA_INIT_ARGS...]
 invoke_contract_init() {
   local contract_id="$1"
   local source_account="$2"
-  local admins="$3"
-  local threshold="$4"
-  shift 4
+  local deployer="$3"
+  local admins="$4"
+  local threshold="$5"
+  shift 5
 
   soroban contract invoke \
     --id "$contract_id" \
@@ -88,5 +90,5 @@ invoke_contract_init() {
     --rpc-url "$SOROBAN_RPC_URL" \
     --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
     -- \
-    init --admins "$admins" --threshold "$threshold" "$@"
+    init --deployer "$deployer" --admins "$admins" --threshold "$threshold" "$@"
 }

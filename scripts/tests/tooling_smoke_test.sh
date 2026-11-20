@@ -24,13 +24,14 @@ ADMIN_ADDRESS="GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
 invoke_contract_init \
   "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM" \
   "test-identity" \
+  "$ADMIN_ADDRESS" \
   "[\"${ADMIN_ADDRESS}\"]" \
   1 \
   --recovery-address "$ADMIN_ADDRESS"
 
 CAPTURED=" ${CAPTURED_ARGS[*]} "
-[[ "$CAPTURED" == *" init --admins [\"${ADMIN_ADDRESS}\"] --threshold 1 "* ]] ||
-  fail "init invocation does not pass --admins and --threshold"
+[[ "$CAPTURED" == *" init --deployer ${ADMIN_ADDRESS} --admins [\"${ADMIN_ADDRESS}\"] --threshold 1 "* ]] ||
+  fail "init invocation does not pass --deployer, --admins and --threshold"
 [[ "$CAPTURED" != *" --admin "* ]] || fail "legacy --admin flag is still present"
 
 TEST_ROOT="$(mktemp -d)"
