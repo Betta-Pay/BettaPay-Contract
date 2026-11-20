@@ -346,13 +346,22 @@ pub(crate) fn decrement_pending_operation_count(env: &Env, by: u32) {
 /// then falling back to the global default, then governance fee config, and finally using the bootstrap fallback.
 /// See `docs/bootstrap-fallback.md` for full semantics, trigger conditions, and emission rules.
 ///
-/// This is a **pure resolution** function — it does NOT emit events.
-/// Callers that need to signal an unconfigured deployment (e.g. mutating
-/// entry points such as `store_payment_reference` or `set_settlement_rule`)
-/// must check whether the returned rule equals [`BOOTSTRAP_DEFAULT_RULE`]
-/// and emit `bootstrap_fallback` explicitly. Read-only paths (e.g.
-/// `calculate_fee_split`) must not emit events.
+/// This is the rule-only view of [`read_effective_rule`]: it keeps the
+/// merchant-specific rule warm but discards provenance. Mutating callers that
+/// need to emit `bootstrap_fallback` must use [`read_effective_rule`] and test
+/// [`RuleProvenance::Bootstrap`] instead of comparing rule values (issue #1105).
+/// Read-only paths (e.g. `calculate_fee_split`) must not emit events.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
+    read_effective_rule(env, merchant).rule
+}
+
+/// Provenance-aware counterpart of [`read_rule_or_default`] (issue #1105).
+///
+/// Applies the same TTL-preserving merchant-rule read, then delegates to
+/// [`read_effective_rule_no_bump`] so callers can distinguish an unconfigured
+/// deployment from an explicitly configured rule that happens to carry the
+/// bootstrap values.
+pub(crate) fn read_effective_rule(env: &Env, merchant: Address) -> EffectiveRule {
     // Keep the merchant's rule warm so active merchants do not lose their
     // override to archival while authenticated paths keep reading it. The
     // bump happens only when the merchant-specific key exists, matching the
@@ -363,7 +372,7 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
             .persistent()
             .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
     }
-    read_rule_or_default_no_bump(env, merchant)
+    read_effective_rule_no_bump(env, merchant)
 }
 
 /// TTL-neutral variant of [`read_rule_or_default`] (issue #761): resolves the

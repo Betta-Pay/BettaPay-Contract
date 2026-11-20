@@ -10,10 +10,12 @@ use crate::policy::{
 use crate::storage::{
     assert_admin_and_not_paused, assert_not_paused, assert_payments_readable,
     decrement_payment_count, increment_payment_count, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_payment_count,
-    read_rule_or_default, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
+    is_merchant_registered_internal, read_effective_rule, read_min_payment_amount,
+    read_payment_count, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
-use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
+use crate::types::{
+    Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, RuleProvenance, SettlementRule,
+};
 use crate::SettlementContract;
 
 /// Clamps ceil-rounded fee legs against the gross and derives the merchant remainder.
@@ -131,11 +133,6 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     }
 }
 
-/// Returns true if `rule` matches the bootstrap default settlement rule across all fields.
-fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
-    rule == &BOOTSTRAP_DEFAULT_RULE
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,27 +148,6 @@ mod tests {
             Just(i128::MAX),
             1i128..=1_000_000_000i128,
         ]
-    }
-
-    #[test]
-    fn is_bootstrap_rule_identifies_matching_and_divergent_rules() {
-        assert!(is_bootstrap_rule(&BOOTSTRAP_DEFAULT_RULE));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.platform_fee_bps += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.network_fee_bps += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.settlement_delay_ledger += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.auto_settle = !BOOTSTRAP_DEFAULT_RULE.auto_settle;
-        assert!(!is_bootstrap_rule(&modified));
     }
 
     #[test]
@@ -568,8 +544,13 @@ impl SettlementContract {
         };
         env.storage().persistent().set(&payment_key, &dummy_record);
 
-        let rule = read_rule_or_default(&env, merchant.clone());
-        if is_bootstrap_rule(&rule) {
+        let effective = read_effective_rule(&env, merchant.clone());
+        let rule = effective.rule;
+        // Issue #1105: provenance, not field equality, identifies an
+        // unconfigured deployment. An admin or governance rule that happens to
+        // carry the bootstrap values is an explicit configuration and must stay
+        // silent on the hot path.
+        if effective.provenance == RuleProvenance::Bootstrap {
             env.events().publish(
                 (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
                 BOOTSTRAP_DEFAULT_RULE,

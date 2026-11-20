@@ -95,6 +95,22 @@ fn governance_config_reports_governance_provenance() {
 }
 
 #[test]
+fn default_rule_equal_to_bootstrap_values_is_still_default() {
+    // Issue #1105: provenance tracks the source, not the values. An admin that
+    // explicitly configures the bootstrap numbers must not be reported as an
+    // unconfigured deployment.
+    let (_env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let bootstrap = crate::policy::BOOTSTRAP_DEFAULT_RULE;
+    client.set_default_rule(&admins, &bootstrap);
+
+    let effective = client.get_rule_provenance(&merchant);
+
+    assert_eq!(effective.provenance, RuleProvenance::Default);
+    assert_rule_eq(&effective.rule, &bootstrap, "values match bootstrap");
+}
+
+#[test]
 fn governance_config_equal_to_bootstrap_values_is_still_governance() {
     // Provenance tracks the source, not the values: governance returning the
     // exact bootstrap numbers must not be mistaken for the bootstrap fallback.
