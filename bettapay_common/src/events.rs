@@ -83,6 +83,11 @@ pub const RECOVERY_EXECUTED_EVENT: &str = "recovery_executed";
 pub const CONTRACT_UPGRADED_EVENT: &str = "contract_upgraded";
 
 /// Topic emitted when the multisig admin threshold changes.
+///
+/// Both contracts publish the same canonical data payload through
+/// [`emit_threshold_changed`]: `(current_threshold, new_threshold)`. Keep the
+/// actor out of the payload so a single indexer decoder works for events from
+/// either contract.
 pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 
 /// Topic emitted when the recovery address is rotated (issue #694).
@@ -225,6 +230,23 @@ pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, ADMIN_TRANSFERRED_EVENT),),
         payload.clone(),
+    );
+}
+
+/// Emits the `threshold_changed` event with the canonical shared payload.
+///
+/// Topics: `(Symbol("threshold_changed"),)`
+/// Data:    `(current_threshold, new_threshold)` — both `u32`.
+///
+/// Both `governance_contract::change_threshold` and
+/// `settlement_contract::change_threshold` publish through this helper so the
+/// topic has one payload shape across the two contracts. Indexers decoding a
+/// `threshold_changed` event therefore never have to guess which contract
+/// emitted it (issue: align THRESHOLD_CHANGED_EVENT payloads).
+pub fn emit_threshold_changed(env: &Env, current_threshold: u32, new_threshold: u32) {
+    env.events().publish(
+        (Symbol::new(env, THRESHOLD_CHANGED_EVENT),),
+        (current_threshold, new_threshold),
     );
 }
 

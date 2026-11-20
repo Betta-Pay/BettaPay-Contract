@@ -187,6 +187,22 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
 }
 
+/// Rejects a governance update that targets the address already stored under
+/// `DataKey::Governance`.
+///
+/// Both the direct [`update_governance`](crate::SettlementContract::update_governance)
+/// path and the timelocked `_update_governance` path call this, so a no-op
+/// update fails identically with [`SettlementError::InvalidGovernance`]
+/// instead of storing the same value and emitting a redundant
+/// `governance_updated` event. `init` deliberately does **not** call this
+/// helper: at init time no governance address is stored yet, and writing the
+/// first one is valid.
+pub(crate) fn assert_governance_changed(env: &Env, new_governance: &Address) {
+    if read_governance(env) == *new_governance {
+        panic_with_error!(env, SettlementError::InvalidGovernance);
+    }
+}
+
 /// Rejects the zero address with a caller-supplied `SettlementError`.
 ///
 /// Backed by [`bettapay_common::storage::is_zero_address`] as the single detection primitive.

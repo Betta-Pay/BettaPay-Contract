@@ -136,6 +136,72 @@ fn threshold_changed_uses_canonical_topic() {
     );
 }
 
+/// The shared `threshold_changed` topic must have one cross-contract payload
+/// shape: `(current_threshold, new_threshold)`. Decoding it as a triple (the
+/// old settlement shape, which prefixed the caller) must fail, so indexers can
+/// use a single decoder for events from either contract.
+#[test]
+fn threshold_changed_payload_is_canonical() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env), Address::generate(&env)];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
+
+    client.change_threshold(&admins, &2);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT)
+    );
+    let (current, new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((current, new), (1, 2));
+}
+
+/// `cancel_all` emits no `op_cancelled` event when none of the supplied
+/// operations were pending, and exactly one `(caller, count)` event otherwise.
+#[test]
+fn cancel_all_emits_event_only_for_nonzero_count() {
+    let (env, client, admins, merchant) = setup();
+    let scheduled = Operation::RegisterMerchant(merchant);
+    client.schedule(&admins, &scheduled, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // An unscheduled operation matches nothing: return 0, emit nothing.
+    let unrelated = Operation::UnregisterMerchant(Address::generate(&env));
+    let before = env.events().all().len();
+    assert_eq!(
+        client.cancel_all(&admins, &soroban_sdk::vec![&env, unrelated]),
+        0
+    );
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "a no-op cancel_all must emit no event"
+    );
+
+    // Cancelling the actually scheduled operation emits one event.
+    let before = env.events().all().len();
+    assert_eq!(
+        client.cancel_all(&admins, &soroban_sdk::vec![&env, scheduled]),
+        1
+    );
+    let emitted = env.events().all();
+    assert_eq!(emitted.len() - before, 1);
+    let (_, topics, data) = emitted.get(emitted.len() - 1).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::OP_CANCELLED_EVENT)
+    );
+    let (caller, cancelled): (Address, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(caller, admins.get(0).unwrap());
+    assert_eq!(cancelled, 1);
+}
+
 #[test]
 fn upgrade_uses_canonical_topic() {
     // The `contract_upgraded` event is only emitted on a successful upgrade.

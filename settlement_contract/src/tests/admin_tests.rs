@@ -1839,6 +1839,18 @@ fn update_governance_rejects_zero_address() {
     client.update_governance(&admins, &zero_address);
 }
 
+/// Updating governance to the address already stored is a no-op that used to
+/// succeed and emit a redundant `governance_updated` event. Both update paths
+/// must reject it with `InvalidGovernance` (#309).
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn update_governance_rejects_current_governance() {
+    let (_env, client, admins, _merchant) = setup();
+    let current_governance = client.get_governance();
+
+    client.update_governance(&admins, &current_governance);
+}
+
 #[test]
 fn bps_newtype_conversions_and_arithmetic_helpers_work() {
     let bps = Bps::new(250);
