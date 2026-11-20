@@ -51,9 +51,16 @@ PAGE_LIMIT="200"
 FROM_FILE=""
 NOW_EPOCH=""
 
+# usage [EXIT_CODE]: help text goes to stdout on success (exit 0, e.g. --help)
+# and to stderr on error paths (exit 2) so automation sees the failure.
 usage() {
-  sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-  exit 0
+  local code="${1:-0}"
+  if [ "$code" -eq 0 ]; then
+    sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  else
+    sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  fi
+  exit "$code"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -78,12 +85,11 @@ while [[ $# -gt 0 ]]; do
       usage ;;
     *)
       log_error "Unknown option: $1"
-      usage
-      exit 1 ;;
+      usage 2 ;;
   esac
 done
 
-[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage; }
+[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage 2; }
 assert_contract_id "$CONTRACT_ID" "contract ID"
 
 case "$FORMAT" in
