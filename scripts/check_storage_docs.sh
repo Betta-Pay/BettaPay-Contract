@@ -47,6 +47,8 @@ SETTLEMENT_KEYS=(
   "Deployer"
   "SchemaVersion"
   "CachedGovRule"
+  "PendingOperationCount"
+  "PaymentCount"
 )
 
 for key in "${SETTLEMENT_KEYS[@]}"; do
