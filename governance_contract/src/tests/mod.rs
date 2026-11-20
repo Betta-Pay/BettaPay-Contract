@@ -1549,9 +1549,33 @@ fn zero_address_and_empty_string_governance_validation() {
 
     // Empty-string address input fails conversion before invocation
     let empty_str = soroban_sdk::String::from_str(&env, "");
-    let empty_res = Address::try_from_string(&empty_str);
+    extern crate std;
+    let empty_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Address::from_string(&empty_str)
+    }));
     assert!(
         empty_res.is_err(),
         "empty string must fail Address conversion before contract invocation"
     );
+}
+
+#[test]
+fn governance_get_deployer_returns_deployer_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.try_get_deployer().unwrap_err().unwrap(),
+        GovernanceError::NotInitialized.into()
+    );
+
+    let deployer = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    client.init(&deployer, &admins, &1u32, &recovery);
+
+    assert_eq!(client.get_deployer(), deployer);
 }

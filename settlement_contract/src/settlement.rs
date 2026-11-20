@@ -15,7 +15,7 @@ use crate::storage::{
     validate_fee_against_governance, validate_nonzero_address,
 };
 use crate::types::{DataKey, EffectiveRule, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Field-level bounds shared by the rule setters: each fee within
 /// `[MIN_FEE_BPS, MAX_FEE_BPS]` (and never above `BPS_DENOMINATOR`), the fee
@@ -104,6 +104,8 @@ impl SettlementContract {
     pub fn clear_settlement_rule(env: Env, signers: Vec<Address>, merchant: Address) {
         assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
+
+        validate_nonzero_address(&env, &merchant, SettlementError::ZeroAddress);
 
         let key = DataKey::Rule(merchant.clone());
         let removed = env
@@ -226,7 +228,7 @@ impl SettlementContract {
     }
 
     /// Returns the effective settlement rule for a merchant together with its
-    /// [`RuleProvenance`] (issue #997): whether the fees came from a
+    /// `RuleProvenance` (issue #997): whether the fees came from a
     /// merchant-specific rule, the global default, governance, or the
     /// bootstrap fallback.
     ///
