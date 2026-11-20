@@ -280,10 +280,14 @@ pub(crate) fn read_payment_count(env: &Env, merchant: &Address) -> u32 {
 /// `store_payment_reference` stores a new record. Keeps the counter entry
 /// warm on the same TTL policy as the merchant marker, since both live for
 /// as long as the merchant is active.
+///
+/// Saturates at [`u32::MAX`] like [`increment_pending_operation_count`], so a
+/// corrupted or manually seeded counter cannot panic the payment path with an
+/// arithmetic overflow (issue #1106).
 pub(crate) fn increment_payment_count(env: &Env, merchant: &Address) {
     let key = DataKey::PaymentCount(merchant.clone());
     let count = read_payment_count(env, merchant);
-    env.storage().persistent().set(&key, &(count + 1));
+    env.storage().persistent().set(&key, &count.saturating_add(1));
     env.storage()
         .persistent()
         .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
@@ -881,5 +885,73 @@ mod governance_fee_config_shape_tests {
             classify_governance_fee_config(&env, map.into_val(&env)),
             Err(SettlementError::GovernanceCallFailed)
         ));
+    }
+}
+
+#[cfg(test)]
+mod payment_count_tests {
+    //! Issue #1106: the payment counter must saturate at `u32::MAX`, matching
+    //! the pending-operation counter, instead of trapping on unchecked `+ 1`.
+
+    use super::{
+        increment_pending_operation_count, increment_payment_count, read_pending_operation_count,
+        read_payment_count,
+    };
+    use crate::tests::setup;
+    use crate::types::DataKey;
+
+    #[test]
+    fn increment_payment_count_increases_normally_below_max() {
+        let (env, client, _admins, merchant) = setup();
+
+        let count = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &(u32::MAX - 1));
+            increment_payment_count(&env, &merchant);
+            read_payment_count(&env, &merchant)
+        });
+
+        assert_eq!(count, u32::MAX);
+    }
+
+    #[test]
+    fn increment_payment_count_saturates_at_u32_max() {
+        let (env, client, _admins, merchant) = setup();
+
+        let count = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &u32::MAX);
+            increment_payment_count(&env, &merchant);
+            read_payment_count(&env, &merchant)
+        });
+
+        assert_eq!(count, u32::MAX);
+    }
+
+    #[test]
+    fn payment_count_overflow_behavior_matches_pending_operation_count() {
+        let (env, client, _admins, merchant) = setup();
+
+        let (payments, operations) = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &u32::MAX);
+            env.storage()
+                .instance()
+                .set(&DataKey::PendingOperationCount, &u32::MAX);
+
+            increment_payment_count(&env, &merchant);
+            increment_pending_operation_count(&env);
+
+            (
+                read_payment_count(&env, &merchant),
+                read_pending_operation_count(&env),
+            )
+        });
+
+        assert_eq!(payments, operations);
+        assert_eq!(payments, u32::MAX);
     }
 }
