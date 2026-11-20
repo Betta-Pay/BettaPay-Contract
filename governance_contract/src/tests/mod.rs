@@ -420,7 +420,7 @@ fn upserts_and_removes_anchor() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_with_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
     let zero_address = bettapay_common::storage::zero_address(&env);
@@ -430,7 +430,7 @@ fn rejects_upsert_anchor_with_zero_address_asset() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_with_zero_address_anchor() {
     let (env, client, admins, _recovery) = setup();
     let asset = Address::generate(&env);
@@ -440,7 +440,7 @@ fn rejects_upsert_anchor_with_zero_address_anchor() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_where_asset_equals_anchor() {
     let (env, client, admins, _recovery) = setup();
     let asset = Address::generate(&env);
@@ -1504,7 +1504,7 @@ fn paused_with_bad_auth_yields_paused_over_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_rejects_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
     let zero = bettapay_common::storage::zero_address(&env);
@@ -1553,5 +1553,57 @@ fn zero_address_and_empty_string_governance_validation() {
     assert!(
         empty_res.is_err(),
         "empty string must fail Address conversion before contract invocation"
+    );
+}
+
+#[test]
+fn get_fee_config_extends_instance_ttl_when_set() {
+    use soroban_sdk::testutils::storage::Instance as _;
+    let (env, client, admins, _recovery) = setup();
+    client.set_fee_config(
+        &admins,
+        &FeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        },
+    );
+
+    // Advance ledger close to TTL threshold so get_fee_config must extend instance TTL.
+    let target_seq = env.ledger().sequence() + TTL_BUMP_LEDGERS - TTL_THRESHOLD_LEDGERS + 100;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = target_seq;
+    });
+
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    let cfg = client.get_fee_config().expect("fee config must be present");
+    assert_eq!(cfg.platform_fee_bps, 100);
+    assert_eq!(cfg.network_fee_bps, 50);
+
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        ttl_after > ttl_before,
+        "get_fee_config must extend governance instance TTL (before={ttl_before}, after={ttl_after})"
+    );
+}
+
+#[test]
+fn upsert_anchor_returns_invalid_anchor_for_zero_or_self_addresses() {
+    let (env, client, admins, _recovery) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+    let asset = Address::generate(&env);
+    let anchor = Address::generate(&env);
+    let expected: soroban_sdk::Error = GovernanceError::InvalidAnchor.into();
+
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &zero, &anchor),
+        Err(Ok(expected))
+    );
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &asset, &zero),
+        Err(Ok(expected))
+    );
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &asset, &asset),
+        Err(Ok(expected))
     );
 }

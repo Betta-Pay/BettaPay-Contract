@@ -30,7 +30,7 @@ fn upsert_anchor_emits_no_event_when_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_emits_no_event_when_zero_asset() {
     let (env, client, admins) = setup();
     let anchor = Address::generate(&env);
@@ -42,7 +42,7 @@ fn upsert_anchor_emits_no_event_when_zero_asset() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_emits_no_event_when_zero_anchor() {
     let (env, client, admins) = setup();
     let asset = Address::generate(&env);
