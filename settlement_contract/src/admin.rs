@@ -18,6 +18,7 @@ use crate::policy::{
     RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
     SUPPORTED_INTERFACE_VERSION,
 };
+use crate::settlement::validate_rule_bounds;
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
     decrement_pending_operation_count, increment_pending_operation_count,
@@ -429,6 +430,13 @@ impl SettlementContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
+        // Issue #1101: reject the all-zero hash before probing, matching the
+        // timelocked `_upgrade` path. No Wasm exists at that hash, so the
+        // probe would only burn compute to reach the same error.
+        if new_wasm_hash == BytesN::from_array(&env, &[0; 32]) {
+            panic_with_error!(&env, SettlementError::InvalidWasmInterface);
+        }
+
         // Verify the new Wasm supports the required BettaPay interface
         // (version 1) before overwriting the running code. See
         // `bettapay_common::upgrade::probe_supports_interface`.
@@ -580,16 +588,29 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::ExecutionDelayTooLong);
         }
 
-        // Validate scheduled operation bounds at schedule time (issues #810, #811)
-        if let Operation::TransferAdmin(new_admins, t) = &operation {
-            if *t == 0 || *t > new_admins.len() {
-                panic_with_error!(&env, SettlementError::InvalidThreshold);
+        // Validate scheduled operation arguments at schedule time (issues #810,
+        // #811, #1100) so an invalid payload cannot occupy the timelock queue
+        // for the full delay and only fail at execute time. Each arm mirrors
+        // the validation its `execute` counterpart performs; state-dependent
+        // checks (merchant registration, governance ceilings) stay at execute.
+        match &operation {
+            Operation::TransferAdmin(new_admins, t) => {
+                if *t == 0 || *t > new_admins.len() {
+                    panic_with_error!(&env, SettlementError::InvalidThreshold);
+                }
             }
-        }
-        if let Operation::SetSettlementRule(_, r) = &operation {
-            if r.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-                panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
+            Operation::UpdateGovernance(new_gov) => {
+                validate_governance(&env, new_gov);
             }
+            Operation::RegisterMerchant(merchant) => {
+                validate_nonzero_address(&env, merchant, SettlementError::ZeroAddress);
+            }
+            Operation::SetSettlementRule(merchant, rule) => {
+                validate_nonzero_address(&env, merchant, SettlementError::ZeroAddress);
+                validate_rule_bounds(&env, rule);
+            }
+            Operation::SetDefaultRule(rule) => validate_rule_bounds(&env, rule),
+            _ => {}
         }
 
         let operation_xdr = operation.clone().to_xdr(&env);

@@ -398,12 +398,10 @@ fn paused_timelock_operations_are_rejected_and_queue_survives() {
 
 /// The scheduled path (`Operation::UpdateGovernance` executed through the
 /// timelock) must enforce the exact same `validate_governance` check as the
-/// direct `update_governance` entry point. `schedule` is admin-gated but does
-/// not inspect the operation payload, so a zero governance address must be
-/// rejected with `InvalidGovernance` (#309) at execution time instead of
-/// being stored.
+/// direct `update_governance` entry point. Issue #1100 moves that check to
+/// `schedule`, so a zero governance address is rejected with
+/// `InvalidGovernance` (#309) before it can occupy the timelock queue.
 #[test]
-#[should_panic(expected = "Error(Contract, #309)")]
 fn scheduled_update_governance_rejects_zero_address() {
     let (env, client, admins, _) = setup();
     let zero_address = Address::from_string(&soroban_sdk::String::from_str(
@@ -412,13 +410,16 @@ fn scheduled_update_governance_rejects_zero_address() {
     ));
     let operation = Operation::UpdateGovernance(zero_address);
 
-    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-
-    // The scheduled path must fail the same validation the direct path does.
-    client.execute(&admins.get(0).unwrap(), &operation);
+    let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        SettlementError::InvalidGovernance.into()
+    );
+    assert_eq!(
+        client.get_pending_operation_count(),
+        0,
+        "a rejected operation must not occupy the queue"
+    );
 }
 
 /// The scheduled path accepts a governance address that passes
@@ -449,15 +450,13 @@ fn scheduled_register_merchant_rejects_zero_address_without_writing_storage() {
     ));
     let operation = Operation::RegisterMerchant(zero_address.clone());
 
-    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-
-    let result = client.try_execute(&admins.get(0).unwrap(), &operation);
+    // Issue #1100: rejected at schedule time, before a queue slot is written.
+    let result = client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert_eq!(
         result.unwrap_err().unwrap(),
         SettlementError::ZeroAddress.into()
     );
+    assert_eq!(client.get_pending_operation_count(), 0);
 
     let merchant_key = DataKey::Merchant(zero_address.clone());
     let archived_key = DataKey::ArchivedMerchant(zero_address);
@@ -465,6 +464,56 @@ fn scheduled_register_merchant_rejects_zero_address_without_writing_storage() {
         assert!(!env.storage().persistent().has(&merchant_key));
         assert!(!env.storage().persistent().has(&archived_key));
     });
+}
+
+/// Issue #1100: out-of-bounds settlement rules are rejected by `schedule`
+/// instead of waiting out the timelock and failing in `execute`.
+#[test]
+fn schedule_rejects_out_of_bounds_settlement_and_default_rules() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let invalid_fee_rule = SettlementRule {
+        platform_fee_bps: 0,
+        network_fee_bps: 0,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let invalid_delay_rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: u32::MAX,
+        auto_settle: false,
+    };
+
+    for operation in [
+        Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone()),
+        Operation::SetSettlementRule(merchant.clone(), invalid_delay_rule.clone()),
+        Operation::SetDefaultRule(invalid_fee_rule),
+        Operation::SetDefaultRule(invalid_delay_rule),
+    ] {
+        assert!(
+            client
+                .try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+                .is_err(),
+            "schedule must reject an out-of-bounds rule"
+        );
+    }
+    assert_eq!(client.get_pending_operation_count(), 0);
+
+    // A valid rule still schedules and executes.
+    let valid_rule = SettlementRule {
+        platform_fee_bps: 100,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let operation = Operation::SetSettlementRule(merchant.clone(), valid_rule);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap(), &operation);
+    assert!(client.get_settlement_rule(&merchant).is_some());
 }
 
 // ---------------------------------------------------------------------------

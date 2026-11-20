@@ -1,15 +1,15 @@
 use soroban_sdk::{panic_with_error, Address, Env, IntoVal, Map, Symbol, TryFromVal, Val, Vec};
 
 use bettapay_common::{
+    constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS},
     events::PendingRecovery,
     storage::{self, CommonDataKey},
 };
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
-    RULE_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
+    READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
 use crate::types::{DataKey, EffectiveRule, GovFeeConfig, RuleProvenance, SettlementRule};
 
@@ -474,6 +474,11 @@ fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
 /// call fails, that cached rule is returned instead of `None`, so payments
 /// keep the last good governance fees through an outage (issue #744).
 ///
+/// A config whose fee legs fall outside `[MIN_FEE_BPS, MAX_FEE_BPS]`, exceed
+/// `BPS_DENOMINATOR`, or sum above it is treated like an unavailable config
+/// (issue #1103): the last good cached rule is returned when present and the
+/// invalid values are never cached.
+///
 /// The bypass circuit-breaker (issue #743) is checked first: when governance's
 /// `bypass_gov_fees` system parameter is `1`, this returns `None` without
 /// calling `get_fee_config` at all.
@@ -528,15 +533,21 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
 
     let config = try_read_governance_fee_config(env, raw_val)?;
 
+    // Issue #1103: validate governance's fee bounds here rather than relying
+    // on the dead `settlement_delay_ledger` check this function used to run
+    // (governance never supplies a delay). A misconfigured or custom
+    // governance contract must not poison `CachedGovRule` with out-of-bounds
+    // fees; fall back to the last good cached rule, or bootstrap when none.
+    if !governance_fee_config_in_bounds(&config) {
+        return read_cached_governance_fee_rule(env);
+    }
+
     let rule = SettlementRule {
         platform_fee_bps: config.platform_fee_bps,
         network_fee_bps: config.network_fee_bps,
         settlement_delay_ledger: 0,
         auto_settle: false,
     };
-    if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-        panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-    }
 
     // Cache the successful config for fallback on next governance failure (issue #744)
     env.storage()
@@ -544,6 +555,24 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         .set(&DataKey::CachedGovRule, &Some(rule.clone()));
 
     Some(rule)
+}
+
+/// Returns whether a governance fee config is inside the same bounds the
+/// admin rule setters enforce locally (issue #1103): each leg within
+/// `[MIN_FEE_BPS, MAX_FEE_BPS]` and at or below `BPS_DENOMINATOR`, and the two
+/// legs together no more than `BPS_DENOMINATOR`. The sum is overflow-checked.
+fn governance_fee_config_in_bounds(config: &GovFeeConfig) -> bool {
+    let platform = config.platform_fee_bps;
+    let network = config.network_fee_bps;
+    platform >= MIN_FEE_BPS
+        && platform <= MAX_FEE_BPS
+        && platform <= BPS_DENOMINATOR
+        && network >= MIN_FEE_BPS
+        && network <= MAX_FEE_BPS
+        && network <= BPS_DENOMINATOR
+        && platform
+            .checked_add(network)
+            .is_some_and(|sum| sum <= BPS_DENOMINATOR)
 }
 
 /// Returns the last governance-derived rule cached by a successful
@@ -558,7 +587,8 @@ fn read_cached_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
 
 /// Reads the minimum payment amount from the governance contract's system
 /// parameters, falling back to [`crate::MIN_PAYMENT_AMOUNT`] (100) when the
-/// parameter is unset or governance is unreachable (issue #690).
+/// parameter is unset, non-positive, or governance is unreachable (issues
+/// #690, #1102).
 pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
     let governance: Option<Address> = env.storage().instance().get(&DataKey::Governance);
     let Some(governance) = governance else {
@@ -571,7 +601,12 @@ pub(crate) fn read_min_payment_amount(env: &Env) -> i128 {
         &Symbol::new(env, "get_system_param"),
         args,
     ) {
-        Ok(Ok(Some(min))) => min,
+        // Issue #1102: a non-positive governance parameter would otherwise
+        // let `store_payment_reference` accept zero or negative amounts and
+        // store records with clamped-zero payouts. Governance's own setter
+        // rejects negatives, but a custom governance contract may not, so
+        // clamp here and fall back to the compiled-in floor.
+        Ok(Ok(Some(min))) if min > 0 => min,
         _ => crate::MIN_PAYMENT_AMOUNT,
     }
 }
