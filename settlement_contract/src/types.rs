@@ -216,7 +216,8 @@ pub(crate) enum DataKey {
     /// Survives re-registration so a merchant can never resurrect the payment
     /// history of an earlier registration (issue #490).
     ArchivedMerchant(Address),
-    /// Persistent — single value but may be updated.
+    /// Instance — singleton global default rule, read on fallback paths and
+    /// updated by `set_default_rule`.
     DefaultRule,
     /// Persistent — one per (merchant, reference), high volume.
     ///
