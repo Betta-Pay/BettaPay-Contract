@@ -6,7 +6,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
 /// Derived as `BPS_DENOMINATOR / 100`. Each fee leg rounds up
-/// ([`Bps::calculate_fee_ceil`]) and so over-collects by strictly less than one
+/// (`Bps::calculate_fee_ceil`) and so over-collects by strictly less than one
 /// unit; at 100 units that unit is 1 % of the gross, capping the inflation of a
 /// leg's effective rate below 100 bps over its configured bps. Below the floor the
 /// distortion is unbounded — 1 unit charged the minimum legal fee (`MIN_FEE_BPS`,
@@ -15,7 +15,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 /// exact. Nothing but dust is excluded: on a 7-decimal Soroban asset, 100 base
 /// units is 10^-5 of one token.
 ///
-/// Enforced by [`SettlementContract::store_payment_reference`], which panics with
+/// Enforced by `SettlementContract::store_payment_reference`, which panics with
 /// [`AmountTooSmall`](crate::errors::SettlementError::AmountTooSmall). It does **not** guarantee a
 /// non-negative merchant payout — extreme fee rules can still make the two
 /// rounded-up legs exceed the gross; see `calculate_split` for that edge case.

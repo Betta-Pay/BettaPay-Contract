@@ -226,7 +226,7 @@ impl SettlementContract {
     }
 
     /// Returns the effective settlement rule for a merchant together with its
-    /// [`RuleProvenance`] (issue #997): whether the fees came from a
+    /// `RuleProvenance` (issue #997): whether the fees came from a
     /// merchant-specific rule, the global default, governance, or the
     /// bootstrap fallback.
     ///
