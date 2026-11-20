@@ -104,6 +104,11 @@ for value in "$START_LEDGER" "$END_LEDGER"; do
   fi
 done
 
+if [[ ! "$PAGE_LIMIT" =~ ^0*[1-9][0-9]*$ ]]; then
+  log_error "--limit must be a positive integer (got '$PAGE_LIMIT')."
+  exit 1
+fi
+
 assert_file_exists "$EVENTS_SRC"
 assert_command "python3"
 
