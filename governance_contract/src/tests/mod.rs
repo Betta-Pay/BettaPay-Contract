@@ -1555,3 +1555,169 @@ fn zero_address_and_empty_string_governance_validation() {
         "empty string must fail Address conversion before contract invocation"
     );
 }
+
+// -----------------------------------------------------------------------
+// Issues #1068-#1071: schema marker persistence and system parameters
+// -----------------------------------------------------------------------
+
+fn count_topic(env: &Env, name: &str) -> usize {
+    let wanted = Symbol::new(env, name);
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            topics
+                .get(0)
+                .is_some_and(|t| Symbol::from_val(env, &t) == wanted)
+        })
+        .count()
+}
+
+/// Issue #1068: an instance without a `SchemaVersion` marker (deployed before
+/// the marker existed) gets the current version persisted by `migrate`.
+#[test]
+fn migrate_persists_missing_schema_version_marker() {
+    let (env, client, admins, _recovery) = setup();
+    let read_version = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+        })
+    };
+
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&DataKey::SchemaVersion);
+    });
+    assert_eq!(read_version(), None);
+
+    client.migrate(&admins);
+    assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+}
+
+/// Issue #1069: `update_system_param` is pause-exempt, matching the Pause
+/// Model docs and ADR 001, so `bypass_gov_fees` can be set during an incident.
+#[test]
+fn update_system_param_allowed_while_paused() {
+    let (env, client, admins, _recovery) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let key = Symbol::new(&env, BYPASS_GOV_FEES_PARAM);
+    client.update_system_param(&admins, &key, &1);
+    assert_eq!(client.get_system_param(&key), Some(1));
+}
+
+/// Issue #1069: pause exemption does not relax auth.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn update_system_param_while_paused_still_requires_admin() {
+    let (env, client, admins, _recovery) = setup();
+    client.pause(&admins);
+    let non_admin = Address::generate(&env);
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&vec![&env, non_admin, admins.get(1).unwrap()], &key, &5);
+}
+
+/// Issue #1070: setting a parameter to the value it already holds emits no
+/// `sys_param_updated` event but still extends the entry's TTL.
+#[test]
+fn update_system_param_unchanged_value_skips_event_but_extends_ttl() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+
+    client.update_system_param(&admins, &key, &1440);
+    let emitted = count_topic(&env, events::SYS_PARAM_UPDATED_EVENT);
+    assert_eq!(emitted, 1);
+
+    // Let the param's TTL fall below the extension threshold, keeping the
+    // contract instance itself alive while the ledger advances.
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(SYSTEM_PARAM_TTL_BUMP * 2, SYSTEM_PARAM_TTL_BUMP * 2);
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    let advance = ttl_before - SYSTEM_PARAM_TTL_THRESHOLD + 1;
+    env.ledger().with_mut(|l| l.sequence_number += advance);
+    let ttl_aged = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    assert!(ttl_aged < SYSTEM_PARAM_TTL_THRESHOLD);
+
+    client.update_system_param(&admins, &key, &1440);
+    assert_eq!(
+        count_topic(&env, events::SYS_PARAM_UPDATED_EVENT),
+        emitted,
+        "unchanged value must not emit sys_param_updated"
+    );
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    assert_eq!(ttl_after, SYSTEM_PARAM_TTL_BUMP);
+    assert_eq!(client.get_system_param(&key), Some(1440));
+
+    // A real change still emits.
+    client.update_system_param(&admins, &key, &1500);
+    assert_eq!(
+        count_topic(&env, events::SYS_PARAM_UPDATED_EVENT),
+        emitted + 1
+    );
+}
+
+/// Issue #1071: admins can remove a stored parameter.
+#[test]
+fn remove_system_param_deletes_stored_value() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+
+    client.remove_system_param(&admins, &key);
+    assert_eq!(client.get_system_param(&key), None);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::SYS_PARAM_REMOVED_EVENT)
+    );
+    assert_eq!(Symbol::from_val(&env, &topics.get(1).unwrap()), key);
+    let (admin, previous): (Address, i128) = data.into_val(&env);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(previous, 1440);
+}
+
+/// Issue #1071: removing a missing parameter is a silent no-op.
+#[test]
+fn remove_system_param_missing_key_is_noop() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "never_set");
+
+    assert!(client.try_remove_system_param(&admins, &key).is_ok());
+    assert_eq!(client.get_system_param(&key), None);
+    assert_eq!(count_topic(&env, events::SYS_PARAM_REMOVED_EVENT), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn remove_system_param_blocked_while_paused() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+    client.pause(&admins);
+    client.remove_system_param(&admins, &key);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn remove_system_param_rejects_signatures_below_threshold() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+    client.remove_system_param(&vec![&env, admins.get(0).unwrap()], &key);
+}

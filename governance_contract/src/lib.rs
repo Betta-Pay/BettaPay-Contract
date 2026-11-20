@@ -63,8 +63,14 @@
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — repair a
 //!   lost or corrupted admin set
 //!
-//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes` and
-//! `pause_allows_admin_transfer_threshold_and_recovery`. See also
+//! `update_system_param` skips `assert_not_paused` on purpose (issue #1069):
+//! during an incident the admin may need to set `bypass_gov_fees` to decouple
+//! settlement from a broken fee config. `remove_system_param` deletes state
+//! rather than fixing it, so it stays blocked while paused.
+//!
+//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes`,
+//! `pause_allows_admin_transfer_threshold_and_recovery` and
+//! `update_system_param_allowed_while_paused`. See also
 //! [`adr/001-selective-pause-model.md`](https://github.com/Betta-Pay/BettaPay-Contract/blob/main/adr/001-selective-pause-model.md).
 //!
 //! ### Fee Configuration
@@ -105,7 +111,9 @@
 //! maximum settlement delay, minimum collateral ratio) to other contracts
 //! without upgrading the governance contract itself. Parameters are read via
 //! [`GovernanceContract::get_system_param`], which also refreshes the
-//! persistent-entry TTL.
+//! persistent-entry TTL. Writing the value that is already stored only
+//! refreshes the TTL and emits no event (issue #1070). Obsolete parameters
+//! are deleted with [`GovernanceContract::remove_system_param`] (issue #1071).
 //!
 //! One key is special-cased: `bypass_gov_fees` (issue #743) is the settlement
 //! fee circuit-breaker and only accepts `0` or `1`. Setting `1` makes
@@ -167,7 +175,8 @@
 //! | `paused` | Contract paused |
 //! | `unpaused` | Contract unpaused |
 //! | `recovery_initiated` / `recovery_cancelled` / `recovery_executed` | Admin-recovery lifecycle |
-//! | `sys_param_updated` | System parameter updated |
+//! | `sys_param_updated` | System parameter value changed |
+//! | `sys_param_removed` | System parameter removed |
 //! | `fee_config_updated` | Fee configuration changed |
 //! | `anchor_upserted` | Anchor created or replaced for an asset | Data: `(Option<Address> previous, Address current)` |
 //! | `anchor_removed` | Anchor removed for an asset |
@@ -701,8 +710,14 @@ impl GovernanceContract {
         );
     }
 
+    /// Stores `value` under the system parameter `key`.
+    ///
+    /// Not blocked while paused (issue #1069), so the admin can flip
+    /// emergency knobs such as `bypass_gov_fees` during an incident. Writing
+    /// the value that is already stored only extends the TTL and emits no
+    /// `sys_param_updated` event (issue #1070).
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
-        assert_admin_and_not_paused(&env, &signers);
+        verify_admin_auth(&env, &signers, read_threshold(&env));
 
         if value < 0 {
             panic_with_error!(&env, GovernanceError::InvalidParamValue);
@@ -719,17 +734,45 @@ impl GovernanceContract {
         let admin = signers.get(0).unwrap();
         let storage_key = DataKey::SystemParam(key.clone());
         let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+        let changed = previous_value != Some(value);
 
-        env.storage().persistent().set(&storage_key, &value);
+        if changed {
+            env.storage().persistent().set(&storage_key, &value);
+        }
         env.storage().persistent().extend_ttl(
             &storage_key,
             SYSTEM_PARAM_TTL_THRESHOLD,
             SYSTEM_PARAM_TTL_BUMP,
         );
 
+        if changed {
+            env.events().publish(
+                (Symbol::new(&env, events::SYS_PARAM_UPDATED_EVENT), key),
+                (admin, previous_value, value),
+            );
+        }
+    }
+
+    /// Deletes the system parameter stored under `key` (issue #1071).
+    ///
+    /// Admin-gated and blocked while paused. Emits `sys_param_removed` with
+    /// topic `(Symbol("sys_param_removed"), key)` and data
+    /// `(admin, previous_value)`. Removing a key that is not stored is a
+    /// no-op and emits nothing, so retries are safe.
+    pub fn remove_system_param(env: Env, signers: Vec<Address>, key: Symbol) {
+        assert_admin_and_not_paused(&env, &signers);
+
+        let storage_key = DataKey::SystemParam(key.clone());
+        let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+        let Some(previous_value) = previous_value else {
+            return;
+        };
+
+        env.storage().persistent().remove(&storage_key);
+        let admin = signers.get(0).unwrap();
         env.events().publish(
-            (Symbol::new(&env, events::SYS_PARAM_UPDATED_EVENT), key),
-            (admin, previous_value, value),
+            (Symbol::new(&env, events::SYS_PARAM_REMOVED_EVENT), key),
+            (admin, previous_value),
         );
     }
 
@@ -946,7 +989,16 @@ fn migrate_step(_env: &Env, from_version: u32) {
 
 /// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
 /// [`migrate_step`] for each version crossed. A no-op when already current.
+///
+/// Issue #1068: `read_schema_version` treats a missing marker as current, so
+/// the loop below would never write it. Persist the marker explicitly on
+/// instances that predate it, so later migrations have a stored baseline.
 fn run_migrations(env: &Env) {
+    if !env.storage().instance().has(&DataKey::SchemaVersion) {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+    }
     let mut version = read_schema_version(env);
     while version < CURRENT_SCHEMA_VERSION {
         migrate_step(env, version);

@@ -99,6 +99,9 @@ pub const MIGRATED_EVENT: &str = "migrated";
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";
 
+/// Topic emitted when a stored system parameter is removed.
+pub const SYS_PARAM_REMOVED_EVENT: &str = "sys_param_removed";
+
 /// Topic emitted when the protocol fee configuration changes.
 pub const FEE_CONFIG_UPDATED_EVENT: &str = "fee_config_updated";
 
@@ -195,6 +198,7 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     INITIALIZED_EVENT,
     MIGRATED_EVENT,
     SYS_PARAM_UPDATED_EVENT,
+    SYS_PARAM_REMOVED_EVENT,
     FEE_CONFIG_UPDATED_EVENT,
     ANCHOR_UPSERTED_EVENT,
     ANCHOR_REMOVED_EVENT,
