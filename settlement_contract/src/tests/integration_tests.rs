@@ -1295,6 +1295,26 @@ fn get_payments_accepts_max_batch_size() {
     );
 }
 
+/// A caller-supplied cursor near `u32::MAX` plus a full page must not trap on
+/// arithmetic overflow; `next_cursor` saturates at `u32::MAX` instead.
+#[test]
+fn get_payments_cursor_near_u32_max_does_not_overflow() {
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let mut refs = Vec::new(&env);
+    for i in 0..MAX_PAYMENTS_BATCH {
+        refs.push_back(BytesN::<32>::from_array(&env, &[i as u8; 32]));
+    }
+
+    let page = settle_client.get_payments(&merchant, &refs, &u32::MAX, &soroban_sdk::vec![&env]);
+    assert_eq!(
+        page.next_cursor,
+        Some(u32::MAX),
+        "a full page at the cursor boundary must saturate instead of overflowing"
+    );
+}
+
 /// A page shorter than `MAX_PAYMENTS_BATCH` must report `next_cursor: None`,
 /// signalling the caller's reference set has been fully consumed (issue #982).
 #[test]

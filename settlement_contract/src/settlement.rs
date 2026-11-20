@@ -15,7 +15,7 @@ use crate::storage::{
     validate_fee_against_governance, validate_nonzero_address,
 };
 use crate::types::{DataKey, EffectiveRule, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Field-level bounds shared by the rule setters: each fee within
 /// `[MIN_FEE_BPS, MAX_FEE_BPS]` (and never above `BPS_DENOMINATOR`), the fee
