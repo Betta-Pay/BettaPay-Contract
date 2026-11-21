@@ -742,6 +742,13 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// writes fail loud.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
+
+    // Issue #1112: if emergency bypass is active, skip governance fee ceiling checks.
+    // Local bounds are still enforced by validate_rule_bounds.
+    if governance_bypass_enabled(env, &governance) {
+        return;
+    }
+
     let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let fee_config = match try_read_governance_fee_config(env, raw_val) {

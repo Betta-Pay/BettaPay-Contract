@@ -14,7 +14,8 @@ use crate::errors::SettlementError;
 use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_CANCEL_ALL_BATCH,
     MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER, MAX_TIMELOCK_DELAY_SECONDS,
-    MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP,
+    MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS,
+    READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
     RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
     SUPPORTED_INTERFACE_VERSION,
 };
@@ -336,6 +337,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
         events::emit_recovery_cancelled(&env, &canceller);
     }
 
@@ -347,6 +351,9 @@ impl SettlementContract {
         // event, so reject an address equal to the stored one (typed error).
         if new_recovery == read_recovery_address(&env) {
             panic_with_error!(&env, SettlementError::InvalidRecoveryAddress);
+        }
+        if env.storage().instance().has(&CommonDataKey::PendingRecovery) {
+            panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
         env.storage()
             .instance()
@@ -401,6 +408,9 @@ impl SettlementContract {
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
         events::emit_recovery_executed(
             &env,
             &AdminTransferred {
