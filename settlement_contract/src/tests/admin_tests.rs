@@ -1305,6 +1305,29 @@ fn init_threshold_above_admin_count_rejects_with_invalid_threshold() {
     });
 }
 
+#[test]
+fn init_rejects_zero_deployer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = bettapay_common::storage::zero_address(&env);
+
+    let res = client.try_init(&deployer, &admins, &1, &governance, &recovery);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::ZeroAddress as u32)
+    );
+
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&DataKey::Deployer));
+    });
+}
+
 // Issue #904: transfer_admin with threshold greater than new_admins.len() returns
 // InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
 #[test]

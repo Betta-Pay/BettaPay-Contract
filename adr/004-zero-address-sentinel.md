@@ -41,9 +41,8 @@ The sentinel is returned **only** by `read_optional_primary_admin()` in two spec
    - When building `admin_transferred` events during `transfer_admin()`
    - When building `recovery_executed` events during `execute_recovery()`
 
-2. **Governance Contract** (`governance_contract/src/lib.rs`):
-   - When building `admin_transferred` events during `transfer_admin()`
-   - When building `recovery_executed` events during `execute_recovery()`
+The governance contract no longer uses the sentinel: its events carry the full
+admin set from `read_optional_admins()`.
 
 **Implementation:**
 
@@ -154,7 +153,6 @@ Callers should use this helper rather than hard-coding the sentinel string.
 
 - **Implementation:**
   - `settlement_contract/src/storage.rs` (`read_optional_primary_admin`)
-  - `governance_contract/src/lib.rs` (`read_optional_primary_admin`)
   - `bettapay_common/src/storage.rs` (`is_zero_address`)
 
 - **Event Usage:**

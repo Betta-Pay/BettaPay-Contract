@@ -1281,6 +1281,36 @@ fn get_admin_uses_50k_100k_instance_ttl_policy() {
     );
 }
 
+#[test]
+fn get_threshold_bumps_instance_ttl_like_get_admin() {
+    use soroban_sdk::testutils::storage::Instance;
+    let (env, client, _admins, _recovery) = setup();
+
+    let instance_ttl = || env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    // Pin the TTL to the read bump, then let it fall below the threshold
+    // without expiring.
+    let decay = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .extend_ttl(READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_BUMP);
+        });
+        env.ledger().set_sequence_number(
+            env.ledger().sequence() + READ_INSTANCE_TTL_BUMP - READ_INSTANCE_TTL_THRESHOLD / 5,
+        );
+        assert!(instance_ttl() < READ_INSTANCE_TTL_THRESHOLD);
+    };
+
+    decay();
+    client.get_admin();
+    let after_admin = instance_ttl();
+    assert_eq!(after_admin, READ_INSTANCE_TTL_BUMP);
+
+    decay();
+    client.get_threshold();
+    assert_eq!(instance_ttl(), after_admin);
+}
+
 // -----------------------------------------------------------------------
 // Issue #516: reconciled pause matrix
 // -----------------------------------------------------------------------
