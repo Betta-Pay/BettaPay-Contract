@@ -675,13 +675,19 @@ impl SettlementContract {
     /// Issue #983: the bounded batch form of `prune_payment`.
     /// References that are not stored (never existed, already pruned, or
     /// repeated within `refs`) are skipped as no-ops, so a cleanup can be
-    /// retried safely. One `payments_pruned` event is emitted per call with
-    /// topics `(Symbol("payments_pruned"), merchant)` and data
+    /// retried safely. When at least one record is actually deleted, one
+    /// `payments_pruned` event is emitted with topics
+    /// `(Symbol("payments_pruned"), merchant)` and data
     /// `(admin, removed_count)`, where `removed_count` is the number of
-    /// records actually deleted. There are no accounting or refund side effects.
+    /// records actually deleted. A no-op batch (empty `refs`, or none of them
+    /// stored) emits nothing, matching [`prune_payment`](Self::prune_payment)'s
+    /// silent missing-record path, so indexers never observe an empty prune.
+    /// There are no accounting or refund side effects.
     ///
     /// # Panics
     ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused. The
+    ///   check runs before signer authorization so `Paused` takes precedence.
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
     /// * Auth failure — if the signers do not satisfy the admin threshold.
@@ -691,6 +697,9 @@ impl SettlementContract {
         merchant: Address,
         refs: Vec<BytesN<32>>,
     ) -> u32 {
+        // Match `prune_payment`: the pause guard runs before the signer checks
+        // so no batch deletion can happen while the contract is paused.
+        assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(&env, SettlementError::BatchTooLarge);
@@ -790,8 +799,9 @@ impl SettlementContract {
     /// call, and the cap is enforced on `refs` itself, exactly as before.
     /// `PaymentsPage::next_cursor` is `Some(cursor + refs.len())` whenever
     /// this call's `refs` filled a full page (length == `MAX_PAYMENTS_BATCH`,
-    /// signalling the caller's own reference set may extend further), and
-    /// `None` once a shorter page confirms there is nothing left to resolve.
+    /// signalling the caller's own reference set may extend further), saturating
+    /// at `u32::MAX` if that sum would overflow, and `None` once a shorter page
+    /// confirms there is nothing left to resolve.
     /// Pass `cursor = 0` for a single, non-paginated call.
     ///
     /// # Panics
@@ -838,7 +848,11 @@ impl SettlementContract {
         }
 
         let next_cursor = if refs.len() == MAX_PAYMENTS_BATCH {
-            Some(cursor + refs.len())
+            // A caller-supplied cursor near `u32::MAX` plus a full page would
+            // trap on arithmetic overflow. Check the addition and saturate at
+            // `u32::MAX` so a page is always returned; normal cursors are
+            // unaffected.
+            Some(cursor.checked_add(refs.len()).unwrap_or(u32::MAX))
         } else {
             None
         };

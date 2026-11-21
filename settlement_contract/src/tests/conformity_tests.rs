@@ -624,6 +624,85 @@ fn prune_payments_rejects_oversized_batch() {
     ));
 }
 
+/// A no-op batch prune (empty `refs`, or refs that are all missing) must emit
+/// nothing, matching `prune_payment`'s silent missing-record path so indexers
+/// never observe an empty prune event.
+#[test]
+fn prune_payments_no_op_batch_emits_no_event() {
+    use soroban_sdk::testutils::Events;
+
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Empty batch.
+    let empty = soroban_sdk::vec![&env];
+    let before = env.events().all().len();
+    assert_eq!(client.prune_payments(&admins, &merchant, &empty), 0);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "an empty batch must not emit a payments_pruned event"
+    );
+
+    // Non-empty batch, none of which are stored.
+    let missing = soroban_sdk::vec![&env, payment_ref(&env, 98), payment_ref(&env, 99)];
+    let before = env.events().all().len();
+    assert_eq!(client.prune_payments(&admins, &merchant, &missing), 0);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "an all-missing batch must not emit a payments_pruned event"
+    );
+}
+
+/// `prune_payments` is a state-mutating admin action and must check the pause
+/// guard before signer authorization, just like `prune_payment`, so no batch
+/// deletion is possible while paused.
+#[test]
+fn prune_payments_is_blocked_while_paused() {
+    use soroban_sdk::testutils::Events;
+
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = payment_ref(&env, 77);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+    let refs = soroban_sdk::vec![&env, reference.clone()];
+    let no_signers = soroban_sdk::vec![&env];
+
+    client.pause(&admins, &0);
+    let events_before = env.events().all().len();
+
+    // Paused takes precedence over auth: an empty signer set would otherwise
+    // fail with Unauthorized, so Paused proves the guard runs first.
+    let no_auth = client.try_prune_payments(&no_signers, &merchant, &refs);
+    assert_eq!(
+        no_auth.err(),
+        Some(Ok(SettlementError::Paused.into())),
+        "the pause check must run before verify_admin_auth"
+    );
+
+    let paused = client.try_prune_payments(&admins, &merchant, &refs);
+    assert_eq!(paused.err(), Some(Ok(SettlementError::Paused.into())));
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "a rejected paused prune must not emit an event"
+    );
+    assert!(
+        client
+            .get_payment_reference(&merchant, &reference, &no_signers)
+            .is_some(),
+        "a blocked prune must not remove the payment record"
+    );
+
+    client.unpause(&admins);
+    assert_eq!(client.prune_payments(&admins, &merchant, &refs), 1);
+    assert!(client
+        .get_payment_reference(&merchant, &reference, &no_signers)
+        .is_none());
+}
+
 // ---------------------------------------------------------------------------
 // Singular payment pruning pause guard (issue #889)
 // ---------------------------------------------------------------------------

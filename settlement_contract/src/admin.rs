@@ -413,7 +413,13 @@ impl SettlementContract {
         if new_threshold == current_threshold {
             panic_with_error!(&env, SettlementError::SameAdmin);
         }
-        verify_admin_auth(&env, &signers, current_threshold + 1);
+        // Changing the threshold normally requires a majority above the
+        // current one (`current_threshold + 1`). When the threshold already
+        // equals the admin count (e.g. 2-of-2), no such signer set exists, so
+        // that requirement would permanently lock the threshold. Cap it at the
+        // admin count: the full admin set can then still change it.
+        let required_signers = current_threshold.saturating_add(1).min(admins.len());
+        verify_admin_auth(&env, &signers, required_signers);
 
         env.storage()
             .instance()
@@ -1320,7 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn change_threshold_allows_1_of_1_to_change_with_one() {
+    fn change_threshold_requires_full_admin_set_for_1_of_2() {
         let env = Env::default();
         env.mock_all_auths();
         let a1 = Address::generate(&env);
@@ -1334,9 +1340,11 @@ mod tests {
         client.init(&deployer, &admins, &1, &governance, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
+        // A 1-of-2 set still needs current_threshold + 1 = 2 signers.
         let one_signer = soroban_sdk::vec![&env, a1.clone()];
-        // 1-of-1 can change threshold to 2 with 1 signer
-        client.change_threshold(&one_signer, &2);
+        assert!(client.try_change_threshold(&one_signer, &2).is_err());
+
+        client.change_threshold(&admins, &2);
         assert_eq!(client.get_threshold(), 2);
     }
 
