@@ -41,10 +41,10 @@ pub enum SettlementError {
     InvalidThreshold = 14,
     /// A recovery is already pending; initiate_recovery cannot overwrite it.
     RecoveryAlreadyPending = 15,
-    /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 17,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
     // Code 301 is an unassigned historical gap (reservation removed, issue #881).

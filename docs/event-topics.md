@@ -43,6 +43,18 @@ is emitted by both contracts; other rows identify the only emitting contract.
 admin address as its data payload, so indexers can decode it identically for
 both contracts.
 
+### `paused` and `unpaused` payloads
+
+The pause lifecycle events intentionally have different data tuple arities:
+
+- `paused`: `(admin_address, true, reason)` — the third field is the bounded
+  numeric pause reason.
+- `unpaused`: `(admin_address, false)` — there is no reason field.
+
+Both events have only their event-name Symbol in `topic[0]`. Consumers must
+decode each payload using its own schema rather than assuming matching tuple
+shapes. Unit tests in `bettapay_common::events` pin both tuple arities.
+
 ### Governance-only topics
 
 | Registry constant | Topic value | Emitting contract |
