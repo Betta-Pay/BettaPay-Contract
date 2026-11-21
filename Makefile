@@ -68,7 +68,7 @@ print_msrv:
 
 msrv:
 	cargo +$(MSRV) check --workspace
-	cargo +$(MSRV) test -p governance_contract -p bettapay_common
+	cargo +$(MSRV) test --workspace
 
 doc:
 	RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
@@ -86,6 +86,7 @@ test_scripts:
 	bash scripts/tests/codeowners_check_test.sh
 	bash scripts/tests/storage_docs_test.sh
 	bash scripts/tests/readme_api_docs_test.sh
+	bash scripts/tests/security_docs_test.sh
 
 docs_check:
 	bash scripts/check_readme_api_docs.sh
