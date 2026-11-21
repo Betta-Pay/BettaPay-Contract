@@ -213,8 +213,8 @@ pub(crate) enum DataKey {
     Rule(Address),
     /// Persistent — tombstone written when a merchant is unregistered.
     ///
-    /// Survives re-registration so a merchant can never resurrect the payment
-    /// history of an earlier registration (issue #490).
+    /// Cleared on re-registration so the tombstone is removed when the
+    /// merchant is registered again (issue #1115).
     ArchivedMerchant(Address),
     /// Persistent — single value but may be updated.
     DefaultRule,
