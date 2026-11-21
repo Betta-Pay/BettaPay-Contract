@@ -43,7 +43,6 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "op_scheduled",
     "op_executed",
     "op_cancelled",
-    "fee_ceiling_rejected",
 ];
 
 /// Builds the registry as `Symbol`s once per `Env`.

@@ -51,15 +51,15 @@ load_config() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -r|--rpc-url)
-      SOROBAN_RPC_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#"; SOROBAN_RPC_URL="$2"; shift 2 ;;
     -p|--network-passphrase)
-      SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
+      require_arg "$1" "$#"; SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
     -s|--source)
-      SOROBAN_SOURCE="$2"; shift 2 ;;
+      require_arg "$1" "$#"; SOROBAN_SOURCE="$2"; shift 2 ;;
     -f|--friendbot-url)
-      FRIENDBOT_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#"; FRIENDBOT_URL="$2"; shift 2 ;;
     -c|--config)
-      load_config "$2"; shift 2 ;;
+      require_arg "$1" "$#"; load_config "$2"; shift 2 ;;
     -h|--help)
       usage ;;
     *)

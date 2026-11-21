@@ -222,23 +222,22 @@
 //! | Entry Point | Policy | Behavior on Governance Outage / Trap |
 //! |---|---|---|
 //! | `store_payment_reference` | fail-open to bootstrap | Degrades to `BOOTSTRAP_DEFAULT_RULE` and emits `bootstrap_fallback` |
-//! | `get_payment` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_payment_reference` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
+//! | `calculate_fee_split` | fail-open | Resolves the merchant rule through the fallback chain (merchant rule, default rule, cached governance rule, `BOOTSTRAP_DEFAULT_RULE`); never aborts with `GovernanceCallFailed` |
+//! | `get_effective_rule` / `get_rule_provenance` | fail-open | Same fallback chain as `calculate_fee_split`, TTL-neutral; always returns a rule |
+//! | `get_payment_reference` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_settlement_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
 //! | `is_merchant_registered` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_min_payment_amount` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_version` | fail-open | Storage read only; unaffected by governance availability |
+//! | `version` | fail-open | Constant read; unaffected by governance availability |
 //! | `set_settlement_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
 //! | `set_default_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
 //! | `update_governance` | fail-closed GovernanceCallFailed | Reverts if new governance contract fails interface checks |
 //! | `register_merchant` / `unregister_merchant` | fail-closed | Requires valid admin multisig authorization |
 //! | `clear_settlement_rule` | fail-closed | Requires valid admin multisig authorization |
-//! | `set_min_payment_amount` | fail-closed | Requires valid admin multisig authorization |
 //! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
 //! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
 //! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
 //! | `schedule` | fail-closed GovernanceCallFailed | Probes governance `get_fee_config` before writing; an unreachable governance reverts with `SettlementError::GovernanceCallFailed` and writes nothing (issue #994) |
-//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`); also rejected with `Paused` while the contract is paused |
+//! | `schedule` / `execute` / `cancel` / `cancel_all` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`/`cancel_all`); also rejected with `Paused` while the contract is paused |
 //!
 //! ## Event Convention
 //!
