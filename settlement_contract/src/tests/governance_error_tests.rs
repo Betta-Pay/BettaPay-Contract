@@ -1091,3 +1091,197 @@ fn governance_trap_without_cache_uses_bootstrap_rule() {
     assert_eq!(record.auto_settle, BOOTSTRAP_DEFAULT_RULE.auto_settle);
     assert!(cached_gov_rule(&env, &contract_id).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Issue #1103: governance fee bounds inside read_governance_fee_rule
+// ---------------------------------------------------------------------------
+
+/// An out-of-bounds governance fee config is ignored: the read path falls back
+/// to bootstrap when nothing is cached and never writes the invalid values to
+/// `CachedGovRule`. A valid config still takes effect, and a later invalid one
+/// falls back to the last good cached rule.
+#[test]
+fn out_of_bounds_governance_fees_fall_back_without_poisoning_cache() {
+    use super::mock_governance::MockGovernanceClient;
+    use bettapay_common::constants::MAX_FEE_BPS;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance_with_config(
+        &env,
+        crate::GovFeeConfig {
+            platform_fee_bps: MAX_FEE_BPS + 1,
+            network_fee_bps: 50,
+        },
+    );
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    // Nothing cached yet: out-of-bounds governance fees degrade to bootstrap.
+    assert!(cached_gov_rule(&env, &contract_id).is_none());
+    super::assert_rule_eq(
+        &client.get_effective_rule(&merchant),
+        &BOOTSTRAP_DEFAULT_RULE,
+        "out-of-bounds config must fall back to bootstrap",
+    );
+    assert!(
+        cached_gov_rule(&env, &contract_id).is_none(),
+        "an out-of-bounds config must not be cached"
+    );
+
+    // A valid config is still used and cached.
+    gov.set_fee_config(&crate::GovFeeConfig {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+    });
+    super::assert_rule_eq(
+        &client.get_effective_rule(&merchant),
+        &gov_rule(250, 50),
+        "valid governance config must be used",
+    );
+    assert_cached(&env, &contract_id, &gov_rule(250, 50));
+
+    // A new out-of-bounds config falls back to the last good cached rule and
+    // leaves the cache untouched.
+    gov.set_fee_config(&crate::GovFeeConfig {
+        platform_fee_bps: 50,
+        network_fee_bps: MAX_FEE_BPS + 1,
+    });
+    super::assert_rule_eq(
+        &client.get_effective_rule(&merchant),
+        &gov_rule(250, 50),
+        "out-of-bounds config must fall back to the cached rule",
+    );
+    assert_cached(&env, &contract_id, &gov_rule(250, 50));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1102: non-positive governance min_payment
+// ---------------------------------------------------------------------------
+
+/// Governance stub that can return any `min_payment` value, including the
+/// zero and negative values the real governance setter rejects.
+mod min_payment_gov {
+    use soroban_sdk::{contract, contractimpl, Env, Symbol};
+
+    #[contract]
+    pub struct MinPaymentGovernance;
+
+    #[contractimpl]
+    impl MinPaymentGovernance {
+        pub fn set_min_payment(env: Env, value: i128) {
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "min_payment"), &value);
+        }
+
+        pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
+            if key == Symbol::new(&env, "min_payment") {
+                env.storage()
+                    .instance()
+                    .get(&Symbol::new(&env, "min_payment"))
+            } else {
+                None
+            }
+        }
+
+        pub fn get_fee_config(_env: Env) -> Option<crate::GovFeeConfig> {
+            None
+        }
+    }
+}
+
+/// Builds a settlement contract wired to a governance stub returning
+/// `min_payment`, with one registered merchant.
+fn settlement_with_min_payment(
+    env: &Env,
+    min_payment: i128,
+) -> (SettlementContractClient<'_>, soroban_sdk::Vec<Address>, Address) {
+    use min_payment_gov::{MinPaymentGovernance, MinPaymentGovernanceClient};
+
+    let gov_id = env.register_contract(None, MinPaymentGovernance);
+    let gov = MinPaymentGovernanceClient::new(env, &gov_id);
+    gov.set_min_payment(&min_payment);
+
+    let admins = soroban_sdk::vec![env, Address::generate(env)];
+    let merchant = Address::generate(env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(env, &contract_id);
+    client.init(
+        &Address::generate(env),
+        &admins,
+        &1,
+        &gov_id,
+        &Address::generate(env),
+    );
+    client.register_merchant(&admins, &merchant);
+    (client, admins, merchant)
+}
+
+/// `min_payment` values of `0` and `-1` fall back to `MIN_PAYMENT_AMOUNT`, so
+/// zero and negative amounts (and amounts below the floor) are still rejected
+/// with `AmountTooSmall`.
+#[test]
+fn non_positive_governance_min_payment_falls_back_to_floor() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    for (index, min_payment) in [0i128, -1i128].into_iter().enumerate() {
+        let (client, _admins, merchant) = settlement_with_min_payment(&env, min_payment);
+        let base = (index as u8 + 1) * 10;
+
+        for (offset, amount) in [
+            (1u8, 0i128),
+            (2u8, -1i128),
+            (3u8, crate::MIN_PAYMENT_AMOUNT - 1),
+        ] {
+            let reference = soroban_sdk::BytesN::from_array(&env, &[base + offset; 32]);
+            assert_eq!(
+                client
+                    .try_store_payment_reference(&merchant, &reference, &amount)
+                    .unwrap_err()
+                    .unwrap(),
+                SettlementError::AmountTooSmall.into(),
+                "min_payment={min_payment}, amount={amount} must use the compiled-in floor"
+            );
+        }
+
+        // Exactly the compiled-in floor is still accepted.
+        let at_floor = soroban_sdk::BytesN::from_array(&env, &[base + 9; 32]);
+        client.store_payment_reference(&merchant, &at_floor, &crate::MIN_PAYMENT_AMOUNT);
+    }
+}
+
+/// A positive governance override still takes effect.
+#[test]
+fn positive_governance_min_payment_override_takes_effect() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admins, merchant) = settlement_with_min_payment(&env, 500);
+
+    let below = soroban_sdk::BytesN::from_array(&env, &[0x71; 32]);
+    assert_eq!(
+        client
+            .try_store_payment_reference(&merchant, &below, &499)
+            .unwrap_err()
+            .unwrap(),
+        SettlementError::AmountTooSmall.into()
+    );
+
+    let at_override = soroban_sdk::BytesN::from_array(&env, &[0x72; 32]);
+    let split = client.store_payment_reference(&merchant, &at_override, &500);
+    assert_eq!(split.gross_amount, 500);
+}
