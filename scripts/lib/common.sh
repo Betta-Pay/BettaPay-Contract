@@ -28,6 +28,18 @@ log_error() {
 }
 
 # ---- Assertion helpers --------------------------------------------------
+# Guard for option-parsing loops: call as `require_arg "$1" "$#" [exit_code]`
+# before reading "$2" / `shift 2`. Prints a clear error and exits non-zero
+# when the flag was given without a value (avoids an unbound-variable crash
+# under `set -u`).
+require_arg() {
+  local flag="$1" argc="$2" code="${3:-1}"
+  if [ "$argc" -lt 2 ]; then
+    log_error "Option '$flag' requires a value."
+    exit "$code"
+  fi
+}
+
 assert_command() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -75,12 +87,14 @@ assert_contract_id() {
 
 # Invoke a contract's multisig-aware init entry point. Keeping the shared flags
 # here prevents deployment scripts from drifting from the contract interface.
+# Usage: invoke_contract_init CONTRACT_ID SOURCE DEPLOYER ADMINS THRESHOLD [EXTRA_INIT_ARGS...]
 invoke_contract_init() {
   local contract_id="$1"
   local source_account="$2"
-  local admins="$3"
-  local threshold="$4"
-  shift 4
+  local deployer="$3"
+  local admins="$4"
+  local threshold="$5"
+  shift 5
 
   soroban contract invoke \
     --id "$contract_id" \
@@ -88,5 +102,5 @@ invoke_contract_init() {
     --rpc-url "$SOROBAN_RPC_URL" \
     --network-passphrase "$SOROBAN_NETWORK_PASSPHRASE" \
     -- \
-    init --admins "$admins" --threshold "$threshold" "$@"
+    init --deployer "$deployer" --admins "$admins" --threshold "$threshold" "$@"
 }

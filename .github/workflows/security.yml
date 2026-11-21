@@ -62,7 +62,22 @@ jobs:
           docker run --rm -v "$PWD:/src" -w /src \
             ghcr.io/google/osv-scanner:v2.7.0 \
             scan source --format json -L Cargo.lock \
-            > "${RUNNER_TEMP}/osv.json" || true
+            > "${RUNNER_TEMP}/osv.json" && rc=0 || rc=$?
+
+          # osv-scanner exits 0 when clean and 1 when it found known
+          # vulnerabilities (the expected baseline, tracked via deny.toml).
+          # Any other exit code is a scanner crash / network failure and
+          # must fail the job instead of being read as "MAL=0".
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "::error::osv-scanner failed with exit code ${rc} (scanner or network error)"
+            exit 1
+          fi
+
+          # Fail on empty or malformed output rather than treating it as clean.
+          if [ ! -s "${RUNNER_TEMP}/osv.json" ] || ! jq -e . "${RUNNER_TEMP}/osv.json" >/dev/null 2>&1; then
+            echo "::error::osv-scanner produced empty or invalid JSON output"
+            exit 1
+          fi
 
           ADV=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' "${RUNNER_TEMP}/osv.json")
           MAL=$(jq '[.results[]?.packages[]?.vulnerabilities[]? | select(.id | startswith("MAL"))] | length' "${RUNNER_TEMP}/osv.json")
