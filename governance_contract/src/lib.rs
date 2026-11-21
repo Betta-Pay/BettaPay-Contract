@@ -709,10 +709,9 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::Threshold, &new_threshold);
-        env.events().publish(
-            (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
-            (current_threshold, new_threshold),
-        );
+        // Shared canonical payload `(current_threshold, new_threshold)`;
+        // settlement_contract emits the identical shape for this topic.
+        events::emit_threshold_changed(&env, current_threshold, new_threshold);
     }
 
     pub fn pause(env: Env, signers: Vec<Address>) {

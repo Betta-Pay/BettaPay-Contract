@@ -1,3 +1,4 @@
+use crate::SettlementContractClient;
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Symbol, Vec};
 
@@ -5,7 +6,10 @@ use crate::SettlementContractClient;
 
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
-    constants::{MAX_PAUSE_REASON, RECOVERY_DELAY_SECONDS},
+    constants::{
+        BPS_DENOMINATOR, MAX_FEE_BPS, MAX_PAUSE_REASON, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
+        TTL_BUMP_LEDGERS,
+    },
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
 };
@@ -21,8 +25,8 @@ use crate::policy::{
 };
 use crate::settlement::validate_rule_bounds;
 use crate::storage::{
-    assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
-    decrement_pending_operation_count, increment_pending_operation_count,
+    assert_admin_and_not_paused, assert_governance_changed, assert_governance_reachable,
+    assert_not_paused, decrement_pending_operation_count, increment_pending_operation_count,
     is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admins,
     read_fallback_rule, read_governance, read_optional_admins, read_pending_operation_count,
     read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
@@ -264,9 +268,14 @@ impl SettlementContract {
     /// scheduled route instead of the direct one. Any change to governance
     /// validation must be made inside `validate_governance` — never inlined in
     /// just one path, or the two paths will drift apart again.
+    ///
+    /// Both paths also reject `new_governance` when it equals the currently
+    /// stored address ([`assert_governance_changed`](crate::storage::assert_governance_changed)),
+    /// so a no-op update cannot emit a redundant `governance_updated` event.
     pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
         assert_admin_and_not_paused(&env, &signers);
         validate_governance(&env, &new_governance);
+        assert_governance_changed(&env, &new_governance);
         let admin = signers.get(0).unwrap();
         env.storage()
             .instance()
@@ -314,6 +323,13 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::PendingRecovery, &pending);
+        // The ordinary read bump (`READ_INSTANCE_TTL_BUMP`, ~5.78 days) is
+        // shorter than the 7-day `RECOVERY_DELAY_SECONDS`. Extend the instance
+        // to the shared 30-day policy so the `PendingRecovery` veto marker
+        // cannot be evicted before `execute_recovery` becomes callable.
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_BUMP_LEDGERS, TTL_BUMP_LEDGERS);
         // `PendingRecovery` itself is the veto marker checked by `execute`.
         events::emit_recovery_initiated(&env, &recovery_address, &new_admin, pending.execute_after);
     }
@@ -499,11 +515,10 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::Threshold, &new_threshold);
-        let caller = signers.get(0).unwrap();
-        env.events().publish(
-            (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
-            (caller, current_threshold, new_threshold),
-        );
+        // Shared canonical payload `(current_threshold, new_threshold)` — the
+        // same shape governance_contract emits for this shared topic, so one
+        // indexer decoder works for events from either contract.
+        events::emit_threshold_changed(&env, current_threshold, new_threshold);
     }
 
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
@@ -882,8 +897,11 @@ impl SettlementContract {
     /// scheduled, or whose stored XDR does not match, is skipped as a no-op
     /// so a batch cancellation can be retried safely.
     ///
-    /// Exactly one `ops_cancelled` event is emitted per call, carrying the
-    /// executor and the number of operations actually cancelled.
+    /// When at least one operation was cancelled, exactly one `op_cancelled`
+    /// event is emitted per call, carrying the executor and the number of
+    /// operations actually cancelled. A batch that matched no pending
+    /// operation emits no event at all, so indexers never see a cancellation
+    /// that removed no state.
     ///
     /// # Panics
     ///
@@ -917,10 +935,12 @@ impl SettlementContract {
             }
         }
 
-        env.events().publish(
-            (Symbol::new(&env, events::OP_CANCELLED_EVENT),),
-            (caller, cancelled),
-        );
+        if cancelled > 0 {
+            env.events().publish(
+                (Symbol::new(&env, events::OP_CANCELLED_EVENT),),
+                (caller, cancelled),
+            );
+        }
         cancelled
     }
 
@@ -996,12 +1016,15 @@ impl SettlementContract {
     /// # Validation policy (issue #562)
     ///
     /// Mirrors the direct `update_governance` entry point exactly: the new
-    /// address must pass [`validate_governance`] before it is stored. Both
-    /// paths intentionally share this single function so the scheduled path
-    /// can never enforce a weaker (or different) check than the direct path.
+    /// address must pass [`validate_governance`] and must differ from the
+    /// stored address ([`assert_governance_changed`](crate::storage::assert_governance_changed))
+    /// before it is stored. Both paths intentionally share these helpers so
+    /// the scheduled path can never enforce a weaker (or different) check
+    /// than the direct path.
     fn _update_governance(env: &Env, executor: &Address, new_governance: Address) {
         assert_not_paused(env);
         validate_governance(env, &new_governance);
+        assert_governance_changed(env, &new_governance);
         env.storage()
             .instance()
             .set(&DataKey::Governance, &new_governance);

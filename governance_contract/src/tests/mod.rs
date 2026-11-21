@@ -753,6 +753,24 @@ fn changes_threshold_with_valid_signatures() {
     assert_eq!(client.get_threshold(), 2);
 }
 
+/// The shared `threshold_changed` topic must carry the same canonical
+/// `(current_threshold, new_threshold)` payload as settlement_contract, so a
+/// single indexer decoder works for events from either contract.
+#[test]
+fn threshold_changed_payload_matches_settlement_contract() {
+    let (env, client, admins, _recovery) = super::setup_with(2, 2);
+    client.change_threshold(&admins, &1);
+
+    let events = env.events().all();
+    let (_contract, topics, data) = events.get(events.len() - 1).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::THRESHOLD_CHANGED_EVENT)
+    );
+    let (current, new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((current, new), (2, 1));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn change_threshold_fails_with_insufficient_signatures() {

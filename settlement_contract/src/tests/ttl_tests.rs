@@ -15,6 +15,7 @@ use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Error, FromVal, Symbol, TryFromVal};
 
+use bettapay_common::constants::{LEDGERS_PER_DAY, RECOVERY_DELAY_SECONDS, TTL_BUMP_LEDGERS};
 use bettapay_common::events::{self, PendingRecovery};
 use bettapay_common::storage::CommonDataKey;
 
@@ -119,6 +120,48 @@ fn read_pending_recovery_bumps_instance_ttl() {
             "read_pending_recovery did not bump the instance TTL to the read-bump floor"
         );
     });
+}
+
+/// A pending recovery is the veto marker for the whole 7-day delay. The
+/// ordinary read bump (`READ_INSTANCE_TTL_BUMP`, ~5.78 days) is shorter than
+/// that window, so `initiate_recovery` must extend the instance to the shared
+/// 30-day policy. Start from a decayed instance TTL, then advance past the
+/// recovery delay in both timestamp (drives `execute_after`) and ledger
+/// sequence (drives TTL decay) and assert the record is still intact.
+#[test]
+fn initiate_recovery_keeps_pending_recovery_alive_past_recovery_delay() {
+    let (env, client, _admins, _merchant) = setup();
+    let new_admin = Address::generate(&env);
+
+    make_instance_ttl_stale(&env, &client.address);
+
+    client.initiate_recovery(&new_admin);
+
+    env.as_contract(&client.address, || {
+        let ttl = env.storage().instance().get_ttl();
+        assert_eq!(
+            ttl, TTL_BUMP_LEDGERS,
+            "initiate_recovery must bump the instance TTL to the 30-day policy"
+        );
+        assert!(
+            ttl > LEDGERS_PER_DAY * 7,
+            "instance TTL must exceed the 7-day recovery delay"
+        );
+    });
+
+    // Past the cooldown in wall-clock time and far enough in ledgers that a
+    // short (~5.78 day) bump would have expired.
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
+    env.ledger().set_sequence_number(seq + LEDGERS_PER_DAY * 8);
+
+    env.as_contract(&client.address, || {
+        let pending = read_pending_recovery(&env);
+        assert_eq!(pending.new_admin, new_admin);
+    });
+    client.execute_recovery();
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, new_admin]);
 }
 
 #[test]

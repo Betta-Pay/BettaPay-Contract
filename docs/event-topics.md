@@ -80,6 +80,20 @@ topics `(Symbol("payment_pruned"), merchant, reference)` and data
 `(merchant, reference)`. Pruning a missing record is a no-op and emits
 nothing, so an indexer never sees a prune that removed no state (issue #890).
 
+### `threshold_changed` payload
+
+`change_threshold` in **both** contracts publishes through the shared
+`bettapay_common::events::emit_threshold_changed` helper, so the topic has a
+single cross-contract shape:
+
+- topics: `(Symbol("threshold_changed"),)`
+- data: `(current_threshold, new_threshold)` — two `u32` values, no actor
+  field.
+
+Settlement previously prefixed the caller address, which made indexers decode
+the same topic differently depending on the emitting contract. Keep both call
+sites on the helper so the arity and types cannot drift apart again.
+
 ## Stability and changes
 
 `settlement_contract/src/tests/event_topic_registry_tests.rs` pins the complete
