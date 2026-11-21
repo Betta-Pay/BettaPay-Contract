@@ -28,6 +28,18 @@ log_error() {
 }
 
 # ---- Assertion helpers --------------------------------------------------
+# Guard for option-parsing loops: call as `require_arg "$1" "$#" [exit_code]`
+# before reading "$2" / `shift 2`. Prints a clear error and exits non-zero
+# when the flag was given without a value (avoids an unbound-variable crash
+# under `set -u`).
+require_arg() {
+  local flag="$1" argc="$2" code="${3:-1}"
+  if [ "$argc" -lt 2 ]; then
+    log_error "Option '$flag' requires a value."
+    exit "$code"
+  fi
+}
+
 assert_command() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then

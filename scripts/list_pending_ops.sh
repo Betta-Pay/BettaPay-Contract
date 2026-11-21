@@ -66,21 +66,21 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -c|--contract-id)
-      CONTRACT_ID="$2"; shift 2 ;;
+      require_arg "$1" "$#"; CONTRACT_ID="$2"; shift 2 ;;
     -s|--start-ledger)
-      START_LEDGER="$2"; shift 2 ;;
+      require_arg "$1" "$#"; START_LEDGER="$2"; shift 2 ;;
     -e|--end-ledger)
-      END_LEDGER="$2"; shift 2 ;;
+      require_arg "$1" "$#"; END_LEDGER="$2"; shift 2 ;;
     -f|--format)
-      FORMAT="$2"; shift 2 ;;
+      require_arg "$1" "$#"; FORMAT="$2"; shift 2 ;;
     -r|--rpc-url)
-      SOROBAN_RPC_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#"; SOROBAN_RPC_URL="$2"; shift 2 ;;
     -l|--limit)
-      PAGE_LIMIT="$2"; shift 2 ;;
+      require_arg "$1" "$#"; PAGE_LIMIT="$2"; shift 2 ;;
     -F|--from-file)
-      FROM_FILE="$2"; shift 2 ;;
+      require_arg "$1" "$#"; FROM_FILE="$2"; shift 2 ;;
     -n|--now)
-      NOW_EPOCH="$2"; shift 2 ;;
+      require_arg "$1" "$#"; NOW_EPOCH="$2"; shift 2 ;;
     -h|--help)
       usage ;;
     *)

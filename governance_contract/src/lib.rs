@@ -382,6 +382,14 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -564,6 +572,15 @@ impl GovernanceContract {
     /// [`cancel_recovery`](GovernanceContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`GovernanceError::RecoveryNotPending`].
+    ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets the threshold to `1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](GovernanceContract::transfer_admin) from the
+    /// recovered admin.
     ///
     /// # Panics
     ///

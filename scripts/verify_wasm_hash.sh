@@ -55,13 +55,13 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -c|--contract-id)
-      CONTRACT_ID="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; CONTRACT_ID="$2"; shift 2 ;;
     -w|--wasm)
-      WASM_PATH="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; WASM_PATH="$2"; shift 2 ;;
     -r|--rpc-url)
-      SOROBAN_RPC_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; SOROBAN_RPC_URL="$2"; shift 2 ;;
     -p|--network-passphrase)
-      SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
     -h|--help)
       usage ;;
     *)

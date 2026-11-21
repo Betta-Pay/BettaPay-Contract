@@ -77,6 +77,7 @@ Persistent storage entries require proactive TTL management:
 - **Enforcement**:
   - `Payment`: Extended on creation and authenticated reads.
   - `Merchant` / `ArchivedMerchant`: Extended on merchant state transitions.
+  - `PaymentCount`: Extended on every counter write (`store_payment_reference`, `prune_payment`, `prune_payments`) using the merchant TTL constants (same 14-day / 30-day values).
   - `Rule`: Extended on rule writes and authenticated reads; unauthenticated queries (`calculate_fee_split`, `get_effective_rule`) are strictly TTL-neutral.
   - `ScheduledOperation`: Extended on `schedule()`; removed on `execute()` or `cancel()`.
   - `Anchor` / `SystemParam`: Extended on reads and writes.
