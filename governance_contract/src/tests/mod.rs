@@ -1932,3 +1932,42 @@ fn test_issue_1122_set_system_param_boundary_and_negative_values() {
     assert_eq!(key, bypass_key);
     assert_eq!(value, 0i128);
 }
+
+#[test]
+fn update_recovery_address_authorization_and_event() {
+    let (env, client, admins, _old_recovery) = setup();
+    let new_recovery = Address::generate(&env);
+
+    // 1. Unauthorized signers fail
+    let non_admin = Address::generate(&env);
+    let unauthorized_signers = soroban_sdk::vec![&env, non_admin];
+    assert!(client
+        .try_update_recovery_address(&unauthorized_signers, &new_recovery)
+        .is_err());
+
+    // 2. Zero address fails with InvalidRecoveryAddress
+    let zero = bettapay_common::storage::zero_address(&env);
+    let res_zero = client.try_update_recovery_address(&admins, &zero);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    // 3. Valid admin signers update recovery address and emit event
+    let events_before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    assert_eq!(client.get_recovery_address(), new_recovery);
+
+    assert_eq!(env.events().all().len(), events_before + 1);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(
+        Address::from_val(&env, &topics.get(1).unwrap()),
+        new_recovery
+    );
+    let emitted_admin: Address = FromVal::from_val(&env, &data);
+    assert_eq!(emitted_admin, admins.get(0).unwrap());
+}
