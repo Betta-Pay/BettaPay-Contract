@@ -105,6 +105,8 @@ impl SettlementContract {
         assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
+        validate_nonzero_address(&env, &merchant, SettlementError::ZeroAddress);
+
         let key = DataKey::Rule(merchant.clone());
         let removed = env
             .storage()

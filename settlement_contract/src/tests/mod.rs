@@ -14,6 +14,7 @@ pub mod fee_config_ordering_tests;
 pub mod governance_error_tests;
 pub mod integration_tests;
 pub mod interface_tests;
+pub mod merchant_rule_deployer_tests;
 pub mod mock_governance;
 #[path = "../../../tests/test_invariant_issue_723.rs"]
 mod issue_invariant_tests;

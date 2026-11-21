@@ -81,15 +81,13 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
-/// Returns the instance-storage schema version, defaulting to the current
-/// version when the marker is absent. Per governance_contract's convention,
-/// an entry written before the marker existed is treated as version 1
-/// (issue #507, issue #704).
+/// Returns the instance-storage schema version, defaulting to 0
+/// when the marker is absent so future migrations are not skipped (issue #1107).
 pub(crate) fn read_schema_version(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::SchemaVersion)
-        .unwrap_or(CURRENT_SCHEMA_VERSION)
+        .unwrap_or(0)
 }
 
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {

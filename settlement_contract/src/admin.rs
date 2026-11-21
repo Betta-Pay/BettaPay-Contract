@@ -207,6 +207,18 @@ impl SettlementContract {
         env.storage().instance().has(&DataKey::Admin)
     }
 
+    /// Returns the deployer address recorded at `init`.
+    ///
+    /// # Panics
+    ///
+    /// * [`NotInitialized`](SettlementError::NotInitialized) — if `init` has not been called.
+    pub fn get_deployer(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Deployer)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::NotInitialized))
+    }
+
     pub fn get_admin(env: Env) -> Vec<Address> {
         read_admins(&env)
     }
