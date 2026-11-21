@@ -28,6 +28,7 @@ is emitted by both contracts; other rows identify the only emitting contract.
 
 | Registry constant | Topic value | Emitting contract(s) |
 | --- | --- | --- |
+| `INITIALIZED_EVENT` | `initialized` | `governance_contract`, `settlement_contract` |
 | `ADMIN_TRANSFERRED_EVENT` | `admin_transferred` | `governance_contract`, `settlement_contract` |
 | `PAUSED_EVENT` | `paused` | `governance_contract`, `settlement_contract` |
 | `UNPAUSED_EVENT` | `unpaused` | `governance_contract`, `settlement_contract` |
@@ -38,11 +39,14 @@ is emitted by both contracts; other rows identify the only emitting contract.
 | `THRESHOLD_CHANGED_EVENT` | `threshold_changed` | `governance_contract`, `settlement_contract` |
 | `RECOVERY_ADDRESS_UPDATED_EVENT` | `recovery_address_updated` | `governance_contract`, `settlement_contract` |
 
+`initialized` is emitted once by each contract's `init` with the primary
+admin address as its data payload, so indexers can decode it identically for
+both contracts.
+
 ### Governance-only topics
 
 | Registry constant | Topic value | Emitting contract |
 | --- | --- | --- |
-| `INITIALIZED_EVENT` | `initialized` | Governance |
 | `MIGRATED_EVENT` | `migrated` | Governance |
 | `SYS_PARAM_UPDATED_EVENT` | `sys_param_updated` | Governance |
 | `FEE_CONFIG_UPDATED_EVENT` | `fee_config_updated` | Governance |

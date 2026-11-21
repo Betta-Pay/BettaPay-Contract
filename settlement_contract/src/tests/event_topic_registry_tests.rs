@@ -14,6 +14,7 @@ use bettapay_common::events;
 use super::setup;
 
 const EXPECTED_EVENT_TOPICS: &[&str] = &[
+    "initialized",
     "admin_transferred",
     "paused",
     "unpaused",
@@ -23,7 +24,6 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "contract_upgraded",
     "threshold_changed",
     "recovery_address_updated",
-    "initialized",
     "migrated",
     "sys_param_updated",
     "fee_config_updated",
