@@ -1691,6 +1691,26 @@ fn governance_get_deployer_returns_deployer_address() {
 }
 
 #[test]
+fn init_rejects_zero_deployer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    let zero = bettapay_common::storage::zero_address(&env);
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+
+    assert_eq!(
+        client
+            .try_init(&zero, &admins, &1u32, &recovery)
+            .unwrap_err()
+            .unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
+}
+
+#[test]
 fn upgrade_rejects_invalid_wasm_interface_and_emits_no_event() {
     let (env, client, admins, _recovery) = setup();
     let invalid_wasm_hash = BytesN::from_array(&env, &[99u8; 32]);

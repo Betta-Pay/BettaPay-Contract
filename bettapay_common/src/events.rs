@@ -343,8 +343,11 @@ pub fn emit_settlement_rule_cleared(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Map, TryFromVal, TryIntoVal, Val};
+    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::{contract, FromVal, Map, TryFromVal, TryIntoVal, Val};
+
+    #[contract]
+    struct DummyContract;
 
     /// The canonical payload shapes must keep their field names stable: an
     /// indexer decodes these structs by field name, so renaming a field would
@@ -384,5 +387,155 @@ mod tests {
         assert!(fields.contains_key(Symbol::new(&env, "execute_after")));
         assert!(fields.contains_key(Symbol::new(&env, "initiated_by")));
         assert_eq!(fields.len(), 3);
+    }
+
+    #[test]
+    fn shared_event_helpers_emit_canonical_topics_and_data() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        let old_admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let old_admins = Vec::from_array(&env, [old_admin.clone()]);
+        let new_admins = Vec::from_array(&env, [new_admin.clone()]);
+        let recovery = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let removed = SettlementRule {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 12,
+            auto_settle: true,
+        };
+        let fallback = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 25,
+            settlement_delay_ledger: 0,
+            auto_settle: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            emit_threshold_changed(&env, 2, 3);
+            emit_paused(&env, &old_admin, 7);
+            emit_unpaused(&env, &old_admin);
+            emit_admin_transferred(
+                &env,
+                &AdminTransferred {
+                    old_admins: old_admins.clone(),
+                    new_admins: new_admins.clone(),
+                },
+            );
+            emit_recovery_initiated(&env, &recovery, &new_admin, 1234);
+            emit_recovery_cancelled(&env, &recovery);
+            emit_recovery_executed(
+                &env,
+                &AdminTransferred {
+                    old_admins: old_admins.clone(),
+                    new_admins: new_admins.clone(),
+                },
+            );
+            emit_settlement_rule_cleared(
+                &env,
+                &merchant,
+                &old_admin,
+                &removed,
+                &fallback,
+            );
+        });
+
+        let emitted = env.events().all();
+        assert_eq!(emitted.len(), 8);
+
+        let (_, topics, data) = emitted.get(0).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, THRESHOLD_CHANGED_EVENT)
+        );
+        let (current_threshold, new_threshold): (u32, u32) =
+            TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!((current_threshold, new_threshold), (2, 3));
+
+        let (_, topics, data) = emitted.get(1).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, PAUSED_EVENT)
+        );
+        let (paused_by, paused, reason): (Address, bool, u32) =
+            TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(paused_by, old_admin);
+        assert!(paused);
+        assert_eq!(reason, 7);
+
+        let (_, topics, data) = emitted.get(2).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, UNPAUSED_EVENT)
+        );
+        let (unpaused_by, unpaused): (Address, bool) =
+            TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(unpaused_by, old_admin);
+        assert!(!unpaused);
+
+        let (_, topics, data) = emitted.get(3).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, ADMIN_TRANSFERRED_EVENT)
+        );
+        let payload: AdminTransferred = TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(payload.old_admins, old_admins);
+        assert_eq!(payload.new_admins, new_admins);
+
+        let (_, topics, data) = emitted.get(4).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, RECOVERY_INITIATED_EVENT)
+        );
+        let (actual_recovery, actual_admin, execute_after): (Address, Address, u64) =
+            TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(actual_recovery, recovery);
+        assert_eq!(actual_admin, new_admin);
+        assert_eq!(execute_after, 1234);
+
+        let (_, topics, data) = emitted.get(5).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, RECOVERY_CANCELLED_EVENT)
+        );
+        let canceller: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(canceller, recovery);
+
+        let (_, topics, data) = emitted.get(6).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, RECOVERY_EXECUTED_EVENT)
+        );
+        let payload: AdminTransferred = TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(payload.old_admins, old_admins);
+        assert_eq!(payload.new_admins, new_admins);
+
+        let (_, topics, data) = emitted.get(7).unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(0).unwrap()),
+            Symbol::new(&env, SETTLEMENT_RULE_CLEARED_EVENT)
+        );
+        assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), merchant);
+        let (admin, actual_removed, actual_fallback): (Address, SettlementRule, SettlementRule) =
+            TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(admin, old_admin);
+        assert_eq!(actual_removed, removed);
+        assert_eq!(actual_fallback, fallback);
+    }
+
+    #[test]
+    fn all_event_topics_are_unique_non_empty_and_valid_symbols() {
+        for (index, topic) in ALL_EVENT_TOPICS.iter().enumerate() {
+            assert!(!topic.is_empty(), "event topic must not be empty");
+            assert!(
+                topic.len() <= 32,
+                "event topic {topic:?} exceeds the 32-byte Symbol limit"
+            );
+            assert!(
+                !ALL_EVENT_TOPICS[..index].contains(topic),
+                "event topic {topic:?} is duplicated"
+            );
+        }
     }
 }
