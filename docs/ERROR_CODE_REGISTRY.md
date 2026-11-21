@@ -59,7 +59,7 @@ Defined in `governance_contract/src/lib.rs` as `GovernanceError`.
 | 200 | `AnchorMissing` | Required anchor contract address not set |
 | 201 | `InvalidParamValue` | Configuration parameter value out of acceptable range |
 | 202 | `InvalidAnchor` | Anchor or asset address is invalid (zero or self) |
-| 203 | — | **Reserved** |
+| 203 | `ExecutionDelayTooLong` | Recovery delay overflows the ledger timestamp |
 | 204-299 | — | **Reserved for future governance errors** |
 
 ---
