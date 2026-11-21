@@ -34,7 +34,7 @@ use crate::{SettlementContract, SettlementContractClient};
 /// Checked-math policy (issue #989): the only arithmetic here is the fee sum,
 /// which uses `checked_add`; an overflow maps to
 /// [`SettlementError::InvalidFeeBps`], never to an arithmetic trap.
-fn validate_rule_bounds(env: &Env, rule: &SettlementRule) {
+pub(crate) fn validate_rule_bounds(env: &Env, rule: &SettlementRule) {
     if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
         panic_with_error!(env, SettlementError::InvalidFeeBps);
     }
@@ -131,26 +131,7 @@ impl SettlementContract {
         assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
-        if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
-        {
-            panic_with_error!(&env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps < MIN_FEE_BPS || new_rule.network_fee_bps < MIN_FEE_BPS {
-            panic_with_error!(&env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
-            panic_with_error!(&env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule
-            .platform_fee_bps
-            .checked_add(new_rule.network_fee_bps)
-            .is_none_or(|sum| sum > BPS_DENOMINATOR)
-        {
-            panic_with_error!(&env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-            panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
-        }
+        validate_rule_bounds(&env, &new_rule);
 
         // Local range checks run before the cross-contract governance ceiling
         // check (issue #803): they're free, so obviously invalid input is
