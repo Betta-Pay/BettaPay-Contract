@@ -421,6 +421,23 @@ fn scheduled_update_governance_rejects_zero_address() {
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
+/// The scheduled path must also reject the settlement contract itself as
+/// governance, mirroring `init` and direct `update_governance` (all route
+/// through the shared `validate_governance`).
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_contract_address() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::UpdateGovernance(client.address.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
 /// The scheduled path accepts a governance address that passes
 /// `validate_governance`, mirroring the direct path.
 #[test]

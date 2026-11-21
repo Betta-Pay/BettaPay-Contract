@@ -1,6 +1,8 @@
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Symbol, Vec};
 
+use crate::SettlementContractClient;
+
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
     constants::{
@@ -50,6 +52,26 @@ use crate::{SettlementContract, SettlementContractClient};
 /// work and `migrate` only advances the marker.
 fn migrate_step(_env: &Env, from_version: u32) {
     let _ = from_version;
+}
+
+/// Validates a recovery address against the separation-of-duties invariant
+/// shared by [`init`](SettlementContract::init) and
+/// [`update_recovery_address`](SettlementContract::update_recovery_address).
+///
+/// A recovery address must be non-zero, must not be one of the active `admins`,
+/// and must not be a registered merchant. Allowing an admin or merchant to act
+/// as the emergency recovery key would let a compromised key drive the recovery
+/// veto path, defeating the purpose of a separate recovery address.
+fn validate_recovery_address(env: &Env, recovery: &Address, admins: &Vec<Address>) {
+    validate_nonzero_address(env, recovery, SettlementError::InvalidRecoveryAddress);
+    for i in 0..admins.len() {
+        if recovery == &admins.get(i).unwrap() {
+            panic_with_error!(env, SettlementError::InvalidRecoveryAddress);
+        }
+    }
+    if is_merchant_registered_internal(env, recovery.clone()) {
+        panic_with_error!(env, SettlementError::InvalidRecoveryAddress);
+    }
 }
 
 /// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
@@ -165,11 +187,7 @@ impl SettlementContract {
         env.storage().instance().set(&DataKey::Initializing, &());
 
         validate_governance(&env, &governance);
-        validate_nonzero_address(
-            &env,
-            &recovery_address,
-            SettlementError::InvalidRecoveryAddress,
-        );
+        validate_recovery_address(&env, &recovery_address, &admins);
         // All admins must authorize at init (unanimous), not just threshold-many (issue #471).
         for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
@@ -280,9 +298,17 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
         }
 
+        // Use checked_add so a ledger timestamp near `u64::MAX` cannot wrap or
+        // produce an untyped arithmetic panic. Surface the same typed error the
+        // timelock path uses for an unrepresentable execution time (issue #886).
+        let execute_after = env
+            .ledger()
+            .timestamp()
+            .checked_add(RECOVERY_DELAY_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::ExecutionDelayTooLong));
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
-            execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            execute_after,
             initiated_by: recovery_address.clone(),
         };
         env.storage()
@@ -317,7 +343,12 @@ impl SettlementContract {
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
-        validate_nonzero_address(&env, &new_recovery, SettlementError::InvalidRecoveryAddress);
+        validate_recovery_address(&env, &new_recovery, &read_admins(&env));
+        // A no-op update would only emit a redundant `recovery_address_updated`
+        // event, so reject an address equal to the stored one (typed error).
+        if new_recovery == read_recovery_address(&env) {
+            panic_with_error!(&env, SettlementError::InvalidRecoveryAddress);
+        }
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
