@@ -310,7 +310,7 @@ mod compatibility_tests {
         let zero = zero_address(&env);
         assert!(is_zero_address(&env, &zero));
 
-        let non_zero = Address::generate(&env);
+        let non_zero = <Address as soroban_sdk::testutils::Address>::generate(&env);
         assert!(!is_zero_address(&env, &non_zero));
 
         assert_eq!(

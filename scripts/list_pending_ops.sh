@@ -51,39 +51,45 @@ PAGE_LIMIT="200"
 FROM_FILE=""
 NOW_EPOCH=""
 
+# usage [EXIT_CODE]: help text goes to stdout on success (exit 0, e.g. --help)
+# and to stderr on error paths (exit 2) so automation sees the failure.
 usage() {
-  sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-  exit 0
+  local code="${1:-0}"
+  if [ "$code" -eq 0 ]; then
+    sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  else
+    sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  fi
+  exit "$code"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -c|--contract-id)
-      CONTRACT_ID="$2"; shift 2 ;;
+      require_arg "$1" "$#"; CONTRACT_ID="$2"; shift 2 ;;
     -s|--start-ledger)
-      START_LEDGER="$2"; shift 2 ;;
+      require_arg "$1" "$#"; START_LEDGER="$2"; shift 2 ;;
     -e|--end-ledger)
-      END_LEDGER="$2"; shift 2 ;;
+      require_arg "$1" "$#"; END_LEDGER="$2"; shift 2 ;;
     -f|--format)
-      FORMAT="$2"; shift 2 ;;
+      require_arg "$1" "$#"; FORMAT="$2"; shift 2 ;;
     -r|--rpc-url)
-      SOROBAN_RPC_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#"; SOROBAN_RPC_URL="$2"; shift 2 ;;
     -l|--limit)
-      PAGE_LIMIT="$2"; shift 2 ;;
+      require_arg "$1" "$#"; PAGE_LIMIT="$2"; shift 2 ;;
     -F|--from-file)
-      FROM_FILE="$2"; shift 2 ;;
+      require_arg "$1" "$#"; FROM_FILE="$2"; shift 2 ;;
     -n|--now)
-      NOW_EPOCH="$2"; shift 2 ;;
+      require_arg "$1" "$#"; NOW_EPOCH="$2"; shift 2 ;;
     -h|--help)
       usage ;;
     *)
       log_error "Unknown option: $1"
-      usage
-      exit 1 ;;
+      usage 2 ;;
   esac
 done
 
-[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage; }
+[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage 2; }
 assert_contract_id "$CONTRACT_ID" "contract ID"
 
 case "$FORMAT" in
@@ -97,6 +103,11 @@ for value in "$START_LEDGER" "$END_LEDGER" "$NOW_EPOCH"; do
     exit 1
   fi
 done
+
+if [[ ! "$PAGE_LIMIT" =~ ^0*[1-9][0-9]*$ ]]; then
+  log_error "--limit must be a positive integer (got '$PAGE_LIMIT')."
+  exit 1
+fi
 
 assert_command "python3"
 

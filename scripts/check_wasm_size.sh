@@ -52,7 +52,8 @@ for FILE in "${WASM_FILES[@]}"; do
     FILESIZE=$(stat -c "%s" "$FILE")
   fi
   
-  SIZE_KB=$((FILESIZE / 1024))
+  # Fractional KB for display only; limit checks below stay byte-level.
+  SIZE_KB=$(awk -v b="$FILESIZE" 'BEGIN { printf "%.1f", b / 1024 }')
   
   if [ "$FILESIZE" -gt "$ERROR_LIMIT" ]; then
     log_error "$FILENAME is ${SIZE_KB}KB ($FILESIZE bytes). Exceeds error boundary of $((ERROR_LIMIT / 1024))KB!"

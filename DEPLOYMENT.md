@@ -42,6 +42,16 @@ each contract's initialization state before taking action. Resume only an
 initialization that is known not to have succeeded; do not redeploy or
 reinitialize contracts whose state is uncertain.
 
+## Production warning: keep `RECOVERY_ADDRESS` separate
+
 Both scripts default `RECOVERY_ADDRESS` to the deployment admin/source address
-when it is unset. Set `RECOVERY_ADDRESS` explicitly if a different recovery
-address is intended.
+when it is unset. **Never leave `RECOVERY_ADDRESS` unset in production.** That
+default collapses the admin and recovery roles into one key, so a compromised
+admin key also controls recovery and the 7-day recovery escape hatch provides
+no protection.
+
+In production, set `RECOVERY_ADDRESS` explicitly to a separate cold or
+multisig address that is not the admin key. `deploy_testnet.sh` logs a warning
+when `RECOVERY_ADDRESS` equals `ADMIN_ADDRESS`; treat that warning as a release
+blocker. The script default exists only for local and testnet convenience
+(`simulate.sh` keeps its local default).

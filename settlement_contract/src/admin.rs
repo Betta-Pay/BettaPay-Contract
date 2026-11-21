@@ -12,11 +12,10 @@ use bettapay_common::{
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
-    MAX_CANCEL_ALL_BATCH, MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER,
-    MAX_TIMELOCK_DELAY_SECONDS, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
-    MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
-    SCHEDULED_OP_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_CANCEL_ALL_BATCH,
+    MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER, MAX_TIMELOCK_DELAY_SECONDS,
+    MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP,
+    RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
     SUPPORTED_INTERFACE_VERSION,
 };
 use crate::storage::{
@@ -29,7 +28,7 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
 ///
@@ -135,6 +134,14 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`AlreadyInitialized`](SettlementError::AlreadyInitialized) — if the contract has already been initialized.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -323,6 +330,15 @@ impl SettlementContract {
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
     ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets `threshold = 1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](SettlementContract::transfer_admin) from the
+    /// recovered admin.
+    ///
     /// # Panics
     ///
     /// - [`SettlementError::RecoveryDelayActive`] if the delay window has not
@@ -420,6 +436,13 @@ impl SettlementContract {
         if new_threshold == current_threshold {
             panic_with_error!(&env, SettlementError::SameAdmin);
         }
+        // Changing the threshold normally requires a majority above the
+        // current one (`current_threshold + 1`). When the threshold already
+        // equals the admin count (e.g. 2-of-2), no such signer set exists, so
+        // that requirement would permanently lock the threshold. Cap it at the
+        // admin count: the full admin set can then still change it.
+        let required_signers = current_threshold.saturating_add(1).min(admins.len());
+        verify_admin_auth(&env, &signers, required_signers);
 
         env.storage()
             .instance()
@@ -497,9 +520,9 @@ impl SettlementContract {
     /// Read-only, callable by anyone, and TTL-neutral: it reads a maintained
     /// instance-storage counter and extends no TTL. A fresh contract with an
     /// empty queue returns zero. The counter is incremented by
-    /// [`schedule`](Self::schedule) and decremented by
-    /// [`execute`](Self::execute), [`cancel`](Self::cancel), and
-    /// [`cancel_all`](Self::cancel_all).
+    /// `schedule` and decremented by
+    /// `execute`, `cancel`, and
+    /// `cancel_all`.
     ///
     /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so this
     /// query is the canonical queue-depth metric for operators and indexers;
@@ -734,7 +757,7 @@ impl SettlementContract {
             .publish((Symbol::new(&env, events::OP_EXECUTED_EVENT), op_hash), ());
     }
 
-    /// Read-only simulation of [`execute`](Self::execute) for a scheduled
+    /// Read-only simulation of `execute` for a scheduled
     /// operation (issue #998).
     ///
     /// Runs the exact same validation as `execute` — pause check, scheduled
@@ -800,9 +823,9 @@ impl SettlementContract {
     /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so
     /// callers must supply the explicit `operations` list to cancel — the
     /// same [`Operation`] values originally passed to
-    /// [`schedule`](Self::schedule). Each entry is matched byte-for-byte
+    /// `schedule`. Each entry is matched byte-for-byte
     /// against the XDR stored under its hash, exactly like
-    /// [`cancel`](Self::cancel) (issue #570), so a hash collision cannot
+    /// `cancel` (issue #570), so a hash collision cannot
     /// remove an unrelated pending operation. An entry that is not currently
     /// scheduled, or whose stored XDR does not match, is skipped as a no-op
     /// so a batch cancellation can be retried safely.
@@ -851,17 +874,14 @@ impl SettlementContract {
 
     // --- Internal Admin Functions ---
 
-    /// Readiness checks shared by [`execute`](Self::execute) and
-    /// [`dry_run`](Self::dry_run) (issue #998): not paused, the exact
+    /// Readiness checks shared by `execute` and
+    /// `dry_run` (issue #998): not paused, the exact
     /// operation is scheduled (issue #570), its timelock has elapsed, and no
     /// recovery veto applies (issue #501). Read-only: it never touches the
     /// scheduled entry, so `execute` consumes the slot only after this returns.
     ///
     /// Returns the storage key and hash of the scheduled operation.
-    fn validate_scheduled_execution(
-        env: &Env,
-        operation: &Operation,
-    ) -> (DataKey, BytesN<32>) {
+    fn validate_scheduled_execution(env: &Env, operation: &Operation) -> (DataKey, BytesN<32>) {
         assert_not_paused(env);
         // executor is intentionally not required to authenticate here (permissionless execution after timelock)
 
@@ -907,8 +927,8 @@ impl SettlementContract {
 
     /// Consumes a pending `ScheduledOperation` slot.
     ///
-    /// Issue #888: this is the single removal point used by [`execute`],
-    /// [`cancel`], and [`cancel_all`]. Keeping removal in one helper makes the
+    /// Issue #888: this is the single removal point used by `execute`,
+    /// `cancel`, and `cancel_all`. Keeping removal in one helper makes the
     /// one-shot transition explicit: a scheduled operation is deleted before
     /// any operation arm can run, so a committed execution cannot leave the
     /// entry available for replay. Issue #887 also updates the queue-depth
@@ -919,7 +939,7 @@ impl SettlementContract {
     }
 
     /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
-    /// from [`execute`](Self::execute).
+    /// from `execute`.
     ///
     /// # Validation policy (issue #562)
     ///
@@ -1211,6 +1231,7 @@ impl SettlementContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::DEFAULT_TIMELOCK_DELAY_SECONDS;
     use crate::tests::setup;
     use crate::SettlementContractClient;
     use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
@@ -1328,7 +1349,7 @@ mod tests {
     }
 
     #[test]
-    fn change_threshold_allows_1_of_1_to_change_with_one() {
+    fn change_threshold_requires_full_admin_set_for_1_of_2() {
         let env = Env::default();
         env.mock_all_auths();
         let a1 = Address::generate(&env);
@@ -1342,9 +1363,11 @@ mod tests {
         client.init(&deployer, &admins, &1, &governance, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
+        // A 1-of-2 set still needs current_threshold + 1 = 2 signers.
         let one_signer = soroban_sdk::vec![&env, a1.clone()];
-        // 1-of-1 can change threshold to 2 with 1 signer
-        client.change_threshold(&one_signer, &2);
+        assert!(client.try_change_threshold(&one_signer, &2).is_err());
+
+        client.change_threshold(&admins, &2);
         assert_eq!(client.get_threshold(), 2);
     }
 

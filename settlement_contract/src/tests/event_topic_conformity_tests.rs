@@ -132,9 +132,9 @@ fn initialized_uses_canonical_topic() {
 
 #[test]
 fn threshold_changed_uses_canonical_topic() {
-    // change_threshold requires `current_threshold + 1` signers, so a
-    // single-admin setup() contract can never call it; register a
-    // two-admin contract directly instead.
+    // change_threshold requires `current_threshold + 1` signers (capped at
+    // the admin count); a single-admin setup() contract has no valid new
+    // threshold to set, so register a two-admin contract directly instead.
     let env = Env::default();
     env.mock_all_auths();
     let admin1 = Address::generate(&env);

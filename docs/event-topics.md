@@ -71,7 +71,6 @@ both contracts.
 | `OP_SCHEDULED_EVENT` | `op_scheduled` | Settlement |
 | `OP_EXECUTED_EVENT` | `op_executed` | Settlement |
 | `OP_CANCELLED_EVENT` | `op_cancelled` | Settlement |
-| `FEE_CEILING_REJECTED_EVENT` | `fee_ceiling_rejected` | Settlement |
 
 ### `payment_pruned` payload
 

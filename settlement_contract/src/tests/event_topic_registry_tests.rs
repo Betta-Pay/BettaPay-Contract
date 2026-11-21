@@ -43,7 +43,6 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "op_scheduled",
     "op_executed",
     "op_cancelled",
-    "fee_ceiling_rejected",
 ];
 
 /// Builds the registry as `Symbol`s once per `Env`.
@@ -131,8 +130,9 @@ fn lifecycle_events_use_only_registered_topics() {
     assert_all_topics_registered(&env);
 }
 
-/// `change_threshold` requires `current_threshold + 1` signers, so it needs
-/// its own multi-admin setup independent of `setup()`'s single admin.
+/// `change_threshold` requires `current_threshold + 1` signers (capped at the
+/// admin count), so it needs its own multi-admin setup independent of
+/// `setup()`'s single admin.
 #[test]
 fn threshold_changed_topic_is_registered() {
     let env = Env::default();
