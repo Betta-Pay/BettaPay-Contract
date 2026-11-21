@@ -1,7 +1,8 @@
 //! Protocol constants, TTL policies, and default configurations for the settlement contract.
 
 use crate::types::SettlementRule;
-use bettapay_common::constants::MIN_FEE_BPS;
+pub use bettapay_common::constants::LEDGERS_PER_DAY;
+use bettapay_common::constants::{MIN_FEE_BPS, TTL_BUMP_LEDGERS, TTL_THRESHOLD_LEDGERS};
 
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
@@ -54,18 +55,14 @@ pub const MAX_PAYMENT_REFERENCE_LEN: u32 = 32;
 /// pruning via `prune_payment` or `prune_payments` frees capacity again (issue #1104).
 pub const MAX_PAYMENTS_PER_MERCHANT: u32 = 10_000;
 
-/// Approximate ledgers per day on Stellar (~5s per ledger).
-pub const LEDGERS_PER_DAY: u32 = 17280;
-
-// TTL thresholds and bumps use LEDGERS_PER_DAY for readability.
-pub const PAYMENT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
-pub const PAYMENT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
-pub const RULE_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
-pub const RULE_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
-pub const MERCHANT_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14;
-pub const MERCHANT_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30;
-pub const SCHEDULED_OP_TTL_THRESHOLD: u32 = LEDGERS_PER_DAY * 14; // 14 days
-pub const SCHEDULED_OP_TTL_BUMP: u32 = LEDGERS_PER_DAY * 30; // 30 days
+pub const PAYMENT_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
+pub const PAYMENT_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
+pub const RULE_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
+pub const RULE_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
+pub const MERCHANT_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
+pub const MERCHANT_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
+pub const SCHEDULED_OP_TTL_THRESHOLD: u32 = TTL_THRESHOLD_LEDGERS;
+pub const SCHEDULED_OP_TTL_BUMP: u32 = TTL_BUMP_LEDGERS;
 
 /// Minimum delay for scheduled administrative operations.
 ///

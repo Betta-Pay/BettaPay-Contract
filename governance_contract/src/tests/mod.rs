@@ -935,6 +935,7 @@ fn execute_recovery_rejects_before_delay() {
 
 #[test]
 fn execute_recovery_clears_pending_record() {
+    use soroban_sdk::testutils::storage::Instance;
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -957,9 +958,22 @@ fn execute_recovery_clears_pending_record() {
         "pending recovery must exist after initiate"
     );
 
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_BUMP);
+    });
+    env.ledger().set_sequence_number(
+        env.ledger().sequence() + READ_INSTANCE_TTL_BUMP - READ_INSTANCE_TTL_THRESHOLD / 2,
+    );
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(ttl_before < READ_INSTANCE_TTL_THRESHOLD);
+
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
     client.execute_recovery();
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_after, READ_INSTANCE_TTL_BUMP);
 
     let after: Option<PendingRecovery> = env.as_contract(&client.address, || {
         env.storage()
@@ -1086,6 +1100,17 @@ fn initiate_recovery_rejects_overwrite_while_pending() {
 
     // Second initiation must be rejected — a recovery is already pending.
     client.initiate_recovery(&second_target);
+}
+
+#[test]
+fn initiate_recovery_rejects_recovery_address_as_new_admin() {
+    let (env, client, _admins, recovery_address) = setup();
+
+    let result = client.try_initiate_recovery(&recovery_address);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -1407,12 +1432,26 @@ fn pending_recovery_records_initiating_address() {
 // replacement.
 #[test]
 fn cancel_recovery_by_initiator_succeeds() {
+    use soroban_sdk::testutils::storage::Instance;
     let (env, client, _admins, recovery_address) = setup();
     let new_admin = Address::generate(&env);
     client.initiate_recovery(&new_admin);
 
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_BUMP);
+    });
+    env.ledger().set_sequence_number(
+        env.ledger().sequence() + READ_INSTANCE_TTL_BUMP - READ_INSTANCE_TTL_THRESHOLD / 2,
+    );
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(ttl_before < READ_INSTANCE_TTL_THRESHOLD);
+
     client.cancel_recovery(&vec![&env, recovery_address]);
 
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_after, READ_INSTANCE_TTL_BUMP);
     assert!(
         !env.as_contract(&client.address, || env
             .storage()
