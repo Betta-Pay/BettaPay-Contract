@@ -113,10 +113,28 @@ fn settlement_rule_cleared_data_is_identical_across_both_paths() {
 }
 
 #[test]
+fn initialized_uses_canonical_topic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    client.init(&soroban_sdk::vec![&env, admin], &1, &governance, &recovery);
+
+    assert_eq!(
+        last_topic(&env),
+        Symbol::new(&env, events::INITIALIZED_EVENT)
+    );
+}
+
+#[test]
 fn threshold_changed_uses_canonical_topic() {
-    // change_threshold requires `current_threshold + 1` signers, so a
-    // single-admin setup() contract can never call it; register a
-    // two-admin contract directly instead.
+    // change_threshold requires `current_threshold + 1` signers (capped at
+    // the admin count); a single-admin setup() contract has no valid new
+    // threshold to set, so register a two-admin contract directly instead.
     let env = Env::default();
     env.mock_all_auths();
     let admin1 = Address::generate(&env);

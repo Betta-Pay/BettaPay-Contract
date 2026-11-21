@@ -21,10 +21,11 @@ The following master table maps every key variant to its owning crate, storage k
 | **`settlement_contract::DataKey::SchemaVersion`** | `settlement_contract` | Instance | `u32` | Instance TTL | **Contract-Local**: Storage schema version tracking for settlement contract migrations. |
 | **`settlement_contract::DataKey::CachedGovRule`** | `settlement_contract` | Instance | `Option<SettlementRule>` | Instance TTL | **Contract-Local / Settlement-Only**: Cached governance fee rule to avoid redundant cross-contract calls. |
 | **`settlement_contract::DataKey::DefaultRule`** | `settlement_contract` | Instance | `SettlementRule` | Instance TTL | **Contract-Local / Settlement-Only**: Global default settlement rule set by settlement admin. |
-| **`settlement_contract::DataKey::Merchant(Address)`** | `settlement_contract` | Persistent | `bool` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Merchant registration record. Extended only on authenticated writes. |
+| **`settlement_contract::DataKey::Merchant(Address)`** | `settlement_contract` | Persistent | `()` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Merchant registration record. Extended only on authenticated writes. |
 | **`settlement_contract::DataKey::Rule(Address)`** | `settlement_contract` | Persistent | `SettlementRule` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Merchant-specific rule override. Extended on rule writes and authenticated reads. |
-| **`settlement_contract::DataKey::ArchivedMerchant(Address)`** | `settlement_contract` | Persistent | `bool` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister to orphan payment history. |
+| **`settlement_contract::DataKey::ArchivedMerchant(Address)`** | `settlement_contract` | Persistent | `()` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister to orphan payment history. |
 | **`settlement_contract::DataKey::Payment(Address, BytesN<32>)`** | `settlement_contract` | Persistent | `PaymentRecord` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Payment record scoped by merchant and 32-byte reference. |
+| **`settlement_contract::DataKey::PaymentCount(Address)`** | `settlement_contract` | Persistent | `u32` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Per-merchant count of stored `Payment` records. Incremented by `store_payment_reference`; decremented by `prune_payment` / `prune_payments`. Absence means zero. |
 | **`settlement_contract::DataKey::ScheduledOperation(BytesN<32>)`** | `settlement_contract` | Persistent | `ScheduledOp` | `14` days / `30` days (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Pending timelocked operation payload and `execute_at` timestamp. |
 | **`settlement_contract::DataKey::PendingOperationCount`** | `settlement_contract` | Instance | `u32` | Instance TTL | **Contract-Local / Settlement-Only**: Queue-depth metric for pending timelocked operations. Incremented by `schedule`; decremented by `execute`, `cancel`, and `cancel_all`. Absence means zero. |
 | **`governance_contract::DataKey::Admin`** | `governance_contract` | Instance | `Vec<Address>` | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Multisig admin set for governance contract only. |
@@ -56,6 +57,7 @@ The settlement contract possesses several keys unique to payment processing:
 - `CachedGovRule`: Minimizes cross-contract call overhead by caching valid fee configs.
 - `DefaultRule`: Singleton default rule stored in instance storage.
 - `Merchant`, `Rule`, `ArchivedMerchant`, `Payment`: High-volume merchant and payment tracking records.
+- `PaymentCount`: Persistent per-merchant counter of stored `Payment` records (issue #980).
 - `ScheduledOperation`: Fixed-size SHA-256 keyed queue for administrative timelocks.
 - `PendingOperationCount`: Instance-storage counter mirroring the number of `ScheduledOperation` entries, used as the queue-depth metric (issue #887).
 - `Initializing` & `Governance`: Ephemeral init guard and governance address reference.
@@ -75,6 +77,7 @@ Persistent storage entries require proactive TTL management:
 - **Enforcement**:
   - `Payment`: Extended on creation and authenticated reads.
   - `Merchant` / `ArchivedMerchant`: Extended on merchant state transitions.
+  - `PaymentCount`: Extended on every counter write (`store_payment_reference`, `prune_payment`, `prune_payments`) using the merchant TTL constants (same 14-day / 30-day values).
   - `Rule`: Extended on rule writes and authenticated reads; unauthenticated queries (`calculate_fee_split`, `get_effective_rule`) are strictly TTL-neutral.
   - `ScheduledOperation`: Extended on `schedule()`; removed on `execute()` or `cancel()`.
   - `Anchor` / `SystemParam`: Extended on reads and writes.
