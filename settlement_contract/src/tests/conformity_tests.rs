@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 
 use super::setup;
 
-fn governance_codes() -> [(&'static str, u32); 17] {
+fn governance_codes() -> [(&'static str, u32); 18] {
     [
         (
             "AlreadyInitialized",
@@ -60,6 +60,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
             "InvalidParamValue",
             GovernanceError::InvalidParamValue as u32,
         ),
+        ("InvalidAnchor", GovernanceError::InvalidAnchor as u32),
         ("SameAdmin", GovernanceError::SameAdmin as u32),
     ]
 }

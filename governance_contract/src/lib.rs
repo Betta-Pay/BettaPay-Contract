@@ -142,6 +142,7 @@
 //! | 18 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
+//! | 202 | `InvalidAnchor` | Asset or anchor address is zero-address, or asset equals anchor |
 //!
 //! ## Event Conventions
 //!
@@ -329,6 +330,8 @@ pub enum GovernanceError {
     /// The anchor for the specified asset was not found.
     AnchorMissing = 200,
     InvalidParamValue = 201,
+    /// Asset or anchor address is zero-address, or asset equals anchor.
+    InvalidAnchor = 202,
     /// `pause` was called while the contract was already paused.
     AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
@@ -359,6 +362,7 @@ const _: () = {
     assert!(GovernanceError::SameAdmin as u32 == error_codes::SAME_ADMIN);
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::InvalidAnchor as u32 >= error_codes::GOVERNANCE_RANGE_START);
 };
 
 #[contract]
@@ -836,14 +840,15 @@ impl GovernanceContract {
 
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
         let storage_key = DataKey::SystemParam(key);
-        if env.storage().persistent().has(&storage_key) {
+        let result = env.storage().persistent().get(&storage_key);
+        if result.is_some() {
             env.storage().persistent().extend_ttl(
                 &storage_key,
                 SYSTEM_PARAM_TTL_THRESHOLD,
                 SYSTEM_PARAM_TTL_BUMP,
             );
         }
-        env.storage().persistent().get(&storage_key)
+        result
     }
 
     /// Sets the global fee configuration.
@@ -868,7 +873,11 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
-        if config.platform_fee_bps + config.network_fee_bps > BPS_DENOMINATOR {
+        let total_fee_bps = config
+            .platform_fee_bps
+            .checked_add(config.network_fee_bps)
+            .unwrap_or_else(|| panic_with_error!(&env, GovernanceError::InvalidFeeBps));
+        if total_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
@@ -881,17 +890,23 @@ impl GovernanceContract {
         );
     }
 
+    /// Returns the global fee configuration and extends instance TTL when set,
+    /// so active settlement reads keep governance instance storage alive.
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         let key = DataKey::FeeConfig;
-        env.storage().instance().get(&key)
+        let result: Option<FeeConfig> = env.storage().instance().get(&key);
+        if result.is_some() {
+            storage::bump_instance_ttl(&env);
+        }
+        result
     }
 
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {
         assert_admin_and_not_paused(&env, &signers);
-        assert_not_zero(&env, &asset, GovernanceError::InvalidAdmin);
-        assert_not_zero(&env, &anchor, GovernanceError::InvalidAdmin);
+        assert_not_zero(&env, &asset, GovernanceError::InvalidAnchor);
+        assert_not_zero(&env, &anchor, GovernanceError::InvalidAnchor);
         if asset == anchor {
-            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+            panic_with_error!(&env, GovernanceError::InvalidAnchor);
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
