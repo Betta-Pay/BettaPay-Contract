@@ -287,6 +287,124 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
     );
 }
 
+/// A scheduled `TransferAdmin` that leaves both the admin set and the
+/// threshold unchanged must be rejected with `SameAdmin` at execution time,
+/// exactly like the direct `transfer_admin` path. Nothing is written and no
+/// misleading `admin_transferred` event is emitted for a state no-op.
+///
+/// The no-op check intentionally lives at execution time, not `schedule()`,
+/// so the operation is still accepted into the queue.
+#[test]
+fn timelocked_transfer_admin_identical_set_rejects_same_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let threshold = client.get_threshold();
+
+    // Reuse the exact current configuration — this is a no-op transfer.
+    let operation = Operation::TransferAdmin(admins.clone(), threshold);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &operation)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::SameAdmin as u32
+        ))
+    );
+
+    // Unchanged state: no write happened before the panic.
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), threshold);
+}
+
+/// Timelocked rule setters must reject locally-invalid input before paying for
+/// the cross-contract governance call. With governance trapping only at
+/// execution time, a missing merchant or out-of-bound fee still surfaces its
+/// local error instead of `GovernanceCallFailed`, matching the direct setters.
+#[test]
+fn timelocked_rule_setters_check_local_errors_before_governance() {
+    use super::mock_governance::{MockGovMode, MockGovernanceClient};
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance(&env);
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let missing_merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, crate::SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let invalid_fee_rule = SettlementRule {
+        platform_fee_bps: 0,
+        network_fee_bps: 0,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let valid_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    let bad_fee_op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
+    let missing_merchant_op =
+        Operation::SetSettlementRule(missing_merchant.clone(), valid_rule.clone());
+    let bad_default_op = Operation::SetDefaultRule(invalid_fee_rule.clone());
+
+    // `schedule()` probes governance, so queue everything while it is reachable.
+    client.schedule(&admins, &bad_fee_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &admins,
+        &missing_merchant_op,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+    client.schedule(&admins, &bad_default_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // Governance becomes unreachable only at execution time.
+    gov.set_mode(&MockGovMode::Trap);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &bad_fee_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::InvalidFeeBps as u32
+        ))
+    );
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &missing_merchant_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::MerchantMissing as u32
+        ))
+    );
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &bad_default_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::InvalidFeeBps as u32
+        ))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Timelock Pause-Gating Tests
 // ---------------------------------------------------------------------------
@@ -418,6 +536,23 @@ fn scheduled_update_governance_rejects_zero_address() {
         .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
 
     // The scheduled path must fail the same validation the direct path does.
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+/// The scheduled path must also reject the settlement contract itself as
+/// governance, mirroring `init` and direct `update_governance` (all route
+/// through the shared `validate_governance`).
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_contract_address() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::UpdateGovernance(client.address.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 

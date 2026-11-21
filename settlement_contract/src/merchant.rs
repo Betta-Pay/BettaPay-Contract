@@ -1,5 +1,7 @@
 use soroban_sdk::{contractimpl, panic_with_error, Address, Env, Symbol, Vec};
 
+use crate::SettlementContractClient;
+
 use bettapay_common::events;
 
 use crate::errors::SettlementError;
@@ -9,7 +11,7 @@ use crate::storage::{
     validate_nonzero_address,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 #[contractimpl]
 impl SettlementContract {
@@ -36,6 +38,13 @@ impl SettlementContract {
             }
         }
 
+        // Check for duplicate registration before requiring merchant auth and emitting
+        // merchant consent event, avoiding wasted auth and compute (issue #1109).
+        let key = DataKey::Merchant(merchant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, SettlementError::MerchantExists);
+        }
+
         // The merchant must consent to its own registration — admin auth alone
         // is not proof the merchant address is controlled by the party being
         // registered, and would otherwise let an admin register arbitrary or
@@ -51,11 +60,6 @@ impl SettlementContract {
             ),
             (),
         );
-
-        let key = DataKey::Merchant(merchant.clone());
-        if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SettlementError::MerchantExists);
-        }
 
         env.storage().persistent().set(&key, &());
         env.storage()

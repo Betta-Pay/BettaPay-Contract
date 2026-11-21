@@ -15,6 +15,9 @@ use governance_contract::GovernanceError;
 use crate::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use super::setup;
 
@@ -203,6 +206,91 @@ fn governance_and_settlement_error_codes_never_collide() {
             }
         }
     }
+}
+
+fn registry_section<'a>(markdown: &'a str, heading: &str) -> &'a str {
+    let section_marker = format!("## {heading}");
+    let start = markdown
+        .find(&section_marker)
+        .unwrap_or_else(|| panic!("ERROR_CODE_REGISTRY.md is missing `{heading}`"));
+    let tail = &markdown[start + section_marker.len()..];
+    tail.split("\n## ")
+        .next()
+        .expect("error code registry section must contain a table")
+}
+
+fn registry_entries(markdown: &str, heading: &str) -> Vec<(String, u32)> {
+    let section = registry_section(markdown, heading);
+    let mut entries = Vec::new();
+
+    for line in section.lines() {
+        let columns: Vec<&str> = line
+            .split('|')
+            .map(str::trim)
+            .filter(|column| !column.is_empty())
+            .collect();
+        if columns.len() < 2 || columns[0].starts_with("Code") {
+            continue;
+        }
+        if columns[0].contains('-') || columns[1] == "—" {
+            continue;
+        }
+
+        let code = columns[0]
+            .parse::<u32>()
+            .unwrap_or_else(|_| panic!("invalid registry code in {heading}: {}", columns[0]));
+        let name = columns[1].trim_matches('`').to_string();
+        entries.push((name, code));
+    }
+
+    entries
+}
+
+#[test]
+fn error_code_registry_matches_contract_error_enums() {
+    let markdown =
+        include_str!("../../../docs/ERROR_CODE_REGISTRY.md");
+
+    let mut shared = registry_entries(markdown, "Shared Error Codes (1-99)");
+    shared.sort_by_key(|(_, code)| *code);
+    let mut expected_shared = bettapay_common::error_codes::SHARED_CODES
+        .iter()
+        .map(|&(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_shared.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        shared,
+        expected_shared,
+        "docs/ERROR_CODE_REGISTRY.md shared entries drifted"
+    );
+
+    let mut governance = registry_entries(markdown, "Governance Contract Errors (200-299)");
+    governance.sort_by_key(|(_, code)| *code);
+    let mut expected_governance = governance_codes()
+        .into_iter()
+        .filter(|&(_, code)| code >= 200)
+        .map(|(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_governance.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        governance,
+        expected_governance,
+        "docs/ERROR_CODE_REGISTRY.md governance entries drifted"
+    );
+
+    let mut settlement = registry_entries(markdown, "Settlement Contract Errors (300-399)");
+    settlement.sort_by_key(|(_, code)| *code);
+    let mut expected_settlement = settlement_codes()
+        .into_iter()
+        .filter(|&(_, code)| code >= 300)
+        .map(|(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_settlement.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        settlement,
+        expected_settlement,
+        "docs/ERROR_CODE_REGISTRY.md settlement entries drifted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +622,85 @@ fn prune_payments_rejects_oversized_batch() {
             SettlementError::BatchTooLarge as u32
         )
     ));
+}
+
+/// A no-op batch prune (empty `refs`, or refs that are all missing) must emit
+/// nothing, matching `prune_payment`'s silent missing-record path so indexers
+/// never observe an empty prune event.
+#[test]
+fn prune_payments_no_op_batch_emits_no_event() {
+    use soroban_sdk::testutils::Events;
+
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Empty batch.
+    let empty = soroban_sdk::vec![&env];
+    let before = env.events().all().len();
+    assert_eq!(client.prune_payments(&admins, &merchant, &empty), 0);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "an empty batch must not emit a payments_pruned event"
+    );
+
+    // Non-empty batch, none of which are stored.
+    let missing = soroban_sdk::vec![&env, payment_ref(&env, 98), payment_ref(&env, 99)];
+    let before = env.events().all().len();
+    assert_eq!(client.prune_payments(&admins, &merchant, &missing), 0);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "an all-missing batch must not emit a payments_pruned event"
+    );
+}
+
+/// `prune_payments` is a state-mutating admin action and must check the pause
+/// guard before signer authorization, just like `prune_payment`, so no batch
+/// deletion is possible while paused.
+#[test]
+fn prune_payments_is_blocked_while_paused() {
+    use soroban_sdk::testutils::Events;
+
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = payment_ref(&env, 77);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+    let refs = soroban_sdk::vec![&env, reference.clone()];
+    let no_signers = soroban_sdk::vec![&env];
+
+    client.pause(&admins, &0);
+    let events_before = env.events().all().len();
+
+    // Paused takes precedence over auth: an empty signer set would otherwise
+    // fail with Unauthorized, so Paused proves the guard runs first.
+    let no_auth = client.try_prune_payments(&no_signers, &merchant, &refs);
+    assert_eq!(
+        no_auth.err(),
+        Some(Ok(SettlementError::Paused.into())),
+        "the pause check must run before verify_admin_auth"
+    );
+
+    let paused = client.try_prune_payments(&admins, &merchant, &refs);
+    assert_eq!(paused.err(), Some(Ok(SettlementError::Paused.into())));
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "a rejected paused prune must not emit an event"
+    );
+    assert!(
+        client
+            .get_payment_reference(&merchant, &reference, &no_signers)
+            .is_some(),
+        "a blocked prune must not remove the payment record"
+    );
+
+    client.unpause(&admins);
+    assert_eq!(client.prune_payments(&admins, &merchant, &refs), 1);
+    assert!(client
+        .get_payment_reference(&merchant, &reference, &no_signers)
+        .is_none());
 }
 
 // ---------------------------------------------------------------------------

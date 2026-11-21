@@ -81,15 +81,13 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
-/// Returns the instance-storage schema version, defaulting to the current
-/// version when the marker is absent. Per governance_contract's convention,
-/// an entry written before the marker existed is treated as version 1
-/// (issue #507, issue #704).
+/// Returns the instance-storage schema version, defaulting to 0
+/// when the marker is absent so future migrations are not skipped (issue #1107).
 pub(crate) fn read_schema_version(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::SchemaVersion)
-        .unwrap_or(CURRENT_SCHEMA_VERSION)
+        .unwrap_or(0)
 }
 
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {
@@ -185,6 +183,14 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
 /// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
+    // The settlement contract cannot be its own governance: cross-contract
+    // probes such as `get_fee_config` would call back into this contract and
+    // fail or misbehave. Reject the self-address here so every path that routes
+    // through this function (init, direct update, and the timelocked update)
+    // enforces the same rule.
+    if governance == &env.current_contract_address() {
+        panic_with_error!(env, SettlementError::InvalidGovernance);
+    }
 }
 
 /// Rejects the zero address with a caller-supplied `SettlementError`.
@@ -720,6 +726,11 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// Any call failure (contract trap or host error) is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 ///
+/// A rule that exceeds the configured ceiling panics with
+/// [`SettlementError::FeeExceedsGovernanceConfig`] and emits no event: Soroban
+/// discards all events from a failed invocation, so publishing a rejection
+/// event before the panic would only waste CPU and footprint (issue #1157).
+///
 /// # Hard-fail is intentional here (issue #742)
 ///
 /// This is the **write** path (`set_settlement_rule` / `set_default_rule` and
@@ -742,13 +753,8 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     if rule.platform_fee_bps > fee_config.platform_fee_bps
         || rule.network_fee_bps > fee_config.network_fee_bps
     {
-        env.events().publish(
-            (
-                Symbol::new(env, bettapay_common::events::FEE_CEILING_REJECTED_EVENT),
-                rule.platform_fee_bps,
-            ),
-            rule.network_fee_bps,
-        );
+        // No event here: Soroban rolls back events on panic, so an event
+        // published immediately before this error is unobservable (issue #1157).
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }

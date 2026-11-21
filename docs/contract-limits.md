@@ -1,11 +1,11 @@
 # Contract Limits
 
-This is the reference for payment, batch, settlement-delay, and fee bounds. The values below are sourced from the contract constants; `make check_docs` fails if a source value changes without a documentation update.
+This is the reference for payment, batch, settlement-delay, and fee bounds. The values below are sourced from the contract constants; `bash scripts/check_documented_constants.sh` fails if a source value changes without a documentation update.
 
 | Constant | Value | Rationale | Enforcement point |
 |---|---:|---|---|
 | `MIN_PAYMENT_AMOUNT` | `100` smallest asset units | Prevents fee-rounding distortion from turning a dust payment into an effectively 100% fee. | `store_payment_reference` and `calculate_fee_split`; both reject smaller amounts with `AmountTooSmall`. |
-| `MAX_SETTLEMENT_DELAY_LEDGER` | `100000` ledgers | Places a finite upper bound on how long a payment may be delayed before settlement. | `validate_rule_bounds`, called by `set_settlement_rule`; the equivalent checks in `set_default_rule` enforce the default rule. Both raise `InvalidSettlementDelay`. |
+| `MAX_SETTLEMENT_DELAY_LEDGER` | `100000` ledgers | Places a finite upper bound on how long a payment may be delayed before settlement. | `validate_rule_bounds`, called by `set_settlement_rule`; the equivalent inline checks in `set_default_rule` enforce the default rule. The timelocked paths enforce it too: `schedule` rejects an `Operation::SetSettlementRule` whose delay exceeds the cap at schedule time, and the executed `_set_settlement_rule` and `_set_default_rule` re-check it. All raise `InvalidSettlementDelay`. |
 | `MAX_PAYMENTS_BATCH` | `100` references | Bounds the work and returned data for one batch lookup. | `get_payments`; more than 100 references raises `BatchTooLarge`. |
 | `MAX_PAYMENTS_PER_MERCHANT` | `10000` payment records | Reserves a documented ceiling for per-merchant persistent state and rent exposure. | **Documented but not yet enforced.** No contract entry point currently rejects the 10001st payment on this basis. |
 | `MIN_FEE_BPS` | `5` bps (`0.05%`) | Prevents fee legs from being configured below the protocol minimum. | `validate_rule_bounds` for merchant rules, `set_default_rule` for the default rule, and governance fee configuration validation. |

@@ -1,24 +1,24 @@
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Symbol, Vec};
 
+use crate::SettlementContractClient;
+
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
-    constants::{
-        BPS_DENOMINATOR, MAX_FEE_BPS, MAX_PAUSE_REASON, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
-    },
+    constants::{MAX_PAUSE_REASON, RECOVERY_DELAY_SECONDS},
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
 };
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
-    MAX_CANCEL_ALL_BATCH, MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER,
-    MAX_TIMELOCK_DELAY_SECONDS, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
-    MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
-    SCHEDULED_OP_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_CANCEL_ALL_BATCH,
+    MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER, MAX_TIMELOCK_DELAY_SECONDS,
+    MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP,
+    RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
     SUPPORTED_INTERFACE_VERSION,
 };
+use crate::settlement::validate_rule_bounds;
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
     decrement_pending_operation_count, increment_pending_operation_count,
@@ -29,7 +29,7 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
 ///
@@ -51,6 +51,26 @@ use crate::SettlementContract;
 /// work and `migrate` only advances the marker.
 fn migrate_step(_env: &Env, from_version: u32) {
     let _ = from_version;
+}
+
+/// Validates a recovery address against the separation-of-duties invariant
+/// shared by [`init`](SettlementContract::init) and
+/// [`update_recovery_address`](SettlementContract::update_recovery_address).
+///
+/// A recovery address must be non-zero, must not be one of the active `admins`,
+/// and must not be a registered merchant. Allowing an admin or merchant to act
+/// as the emergency recovery key would let a compromised key drive the recovery
+/// veto path, defeating the purpose of a separate recovery address.
+fn validate_recovery_address(env: &Env, recovery: &Address, admins: &Vec<Address>) {
+    validate_nonzero_address(env, recovery, SettlementError::InvalidRecoveryAddress);
+    for i in 0..admins.len() {
+        if recovery == &admins.get(i).unwrap() {
+            panic_with_error!(env, SettlementError::InvalidRecoveryAddress);
+        }
+    }
+    if is_merchant_registered_internal(env, recovery.clone()) {
+        panic_with_error!(env, SettlementError::InvalidRecoveryAddress);
+    }
 }
 
 /// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
@@ -135,6 +155,14 @@ impl SettlementContract {
     /// # Panics
     ///
     /// * [`AlreadyInitialized`](SettlementError::AlreadyInitialized) — if the contract has already been initialized.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -158,11 +186,7 @@ impl SettlementContract {
         env.storage().instance().set(&DataKey::Initializing, &());
 
         validate_governance(&env, &governance);
-        validate_nonzero_address(
-            &env,
-            &recovery_address,
-            SettlementError::InvalidRecoveryAddress,
-        );
+        validate_recovery_address(&env, &recovery_address, &admins);
         // All admins must authorize at init (unanimous), not just threshold-many (issue #471).
         for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
@@ -175,16 +199,41 @@ impl SettlementContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        // Seed the pause flag explicitly so a freshly deployed instance always
+        // has the complete canonical key set instead of relying on
+        // `is_paused`'s `unwrap_or(false)` fallback.
+        storage::set_paused(&env, false);
 
         // Init is complete — remove the in-progress marker.
         env.storage().instance().remove(&DataKey::Initializing);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+
+        // Mirror governance_contract::init: publish a single `initialized`
+        // event carrying the primary admin so indexers see parity across both
+        // contracts.
+        let primary_admin = admins.get(0).unwrap();
+        env.events().publish(
+            (Symbol::new(&env, events::INITIALIZED_EVENT),),
+            primary_admin,
+        );
     }
 
     pub fn is_initialized(env: Env) -> bool {
         env.storage().instance().has(&DataKey::Admin)
+    }
+
+    /// Returns the deployer address recorded at `init`.
+    ///
+    /// # Panics
+    ///
+    /// * [`NotInitialized`](SettlementError::NotInitialized) — if `init` has not been called.
+    pub fn get_deployer(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Deployer)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::NotInitialized))
     }
 
     pub fn get_admin(env: Env) -> Vec<Address> {
@@ -248,9 +297,17 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::RecoveryAlreadyPending);
         }
 
+        // Use checked_add so a ledger timestamp near `u64::MAX` cannot wrap or
+        // produce an untyped arithmetic panic. Surface the same typed error the
+        // timelock path uses for an unrepresentable execution time (issue #886).
+        let execute_after = env
+            .ledger()
+            .timestamp()
+            .checked_add(RECOVERY_DELAY_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::ExecutionDelayTooLong));
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
-            execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            execute_after,
             initiated_by: recovery_address.clone(),
         };
         env.storage()
@@ -285,7 +342,12 @@ impl SettlementContract {
     pub fn update_recovery_address(env: Env, signers: Vec<Address>, new_recovery: Address) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
-        validate_nonzero_address(&env, &new_recovery, SettlementError::InvalidRecoveryAddress);
+        validate_recovery_address(&env, &new_recovery, &read_admins(&env));
+        // A no-op update would only emit a redundant `recovery_address_updated`
+        // event, so reject an address equal to the stored one (typed error).
+        if new_recovery == read_recovery_address(&env) {
+            panic_with_error!(&env, SettlementError::InvalidRecoveryAddress);
+        }
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
@@ -309,6 +371,15 @@ impl SettlementContract {
     /// [`cancel_recovery`](SettlementContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
+    ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets `threshold = 1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](SettlementContract::transfer_admin) from the
+    /// recovered admin.
     ///
     /// # Panics
     ///
@@ -389,15 +460,31 @@ impl SettlementContract {
 
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
         let admins = read_admins(&env);
+        let current_threshold = read_threshold(&env);
+        // Require one more signer than the current threshold to broaden
+        // consensus where possible, but cap it at the admin count so an N-of-N
+        // multisig (e.g. 2-of-2) can still lower its threshold. Authenticate
+        // before validating `new_threshold` so unauthenticated callers cannot
+        // probe the admin set or current threshold via validation errors.
+        let required_signers = current_threshold.saturating_add(1).min(admins.len());
+        verify_admin_auth(&env, &signers, required_signers);
+
+        // Both bounds and no-op checks run only after authentication, so an
+        // unauthorized caller always sees `Unauthorized` and cannot probe the
+        // admin set or current threshold via validation errors.
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, SettlementError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
         if new_threshold == current_threshold {
             panic_with_error!(&env, SettlementError::SameAdmin);
         }
-        verify_admin_auth(&env, &signers, current_threshold + 1);
+        // Changing the threshold normally requires a majority above the
+        // current one (`current_threshold + 1`). When the threshold already
+        // equals the admin count (e.g. 2-of-2), no such signer set exists, so
+        // that requirement would permanently lock the threshold. Cap it at the
+        // admin count: the full admin set can then still change it.
+        let required_signers = current_threshold.saturating_add(1).min(admins.len());
+        verify_admin_auth(&env, &signers, required_signers);
 
         env.storage()
             .instance()
@@ -475,9 +562,9 @@ impl SettlementContract {
     /// Read-only, callable by anyone, and TTL-neutral: it reads a maintained
     /// instance-storage counter and extends no TTL. A fresh contract with an
     /// empty queue returns zero. The counter is incremented by
-    /// [`schedule`](Self::schedule) and decremented by
-    /// [`execute`](Self::execute), [`cancel`](Self::cancel), and
-    /// [`cancel_all`](Self::cancel_all).
+    /// `schedule` and decremented by
+    /// `execute`, `cancel`, and
+    /// `cancel_all`.
     ///
     /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so this
     /// query is the canonical queue-depth metric for operators and indexers;
@@ -712,7 +799,7 @@ impl SettlementContract {
             .publish((Symbol::new(&env, events::OP_EXECUTED_EVENT), op_hash), ());
     }
 
-    /// Read-only simulation of [`execute`](Self::execute) for a scheduled
+    /// Read-only simulation of `execute` for a scheduled
     /// operation (issue #998).
     ///
     /// Runs the exact same validation as `execute` — pause check, scheduled
@@ -778,9 +865,9 @@ impl SettlementContract {
     /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so
     /// callers must supply the explicit `operations` list to cancel — the
     /// same [`Operation`] values originally passed to
-    /// [`schedule`](Self::schedule). Each entry is matched byte-for-byte
+    /// `schedule`. Each entry is matched byte-for-byte
     /// against the XDR stored under its hash, exactly like
-    /// [`cancel`](Self::cancel) (issue #570), so a hash collision cannot
+    /// `cancel` (issue #570), so a hash collision cannot
     /// remove an unrelated pending operation. An entry that is not currently
     /// scheduled, or whose stored XDR does not match, is skipped as a no-op
     /// so a batch cancellation can be retried safely.
@@ -829,17 +916,14 @@ impl SettlementContract {
 
     // --- Internal Admin Functions ---
 
-    /// Readiness checks shared by [`execute`](Self::execute) and
-    /// [`dry_run`](Self::dry_run) (issue #998): not paused, the exact
+    /// Readiness checks shared by `execute` and
+    /// `dry_run` (issue #998): not paused, the exact
     /// operation is scheduled (issue #570), its timelock has elapsed, and no
     /// recovery veto applies (issue #501). Read-only: it never touches the
     /// scheduled entry, so `execute` consumes the slot only after this returns.
     ///
     /// Returns the storage key and hash of the scheduled operation.
-    fn validate_scheduled_execution(
-        env: &Env,
-        operation: &Operation,
-    ) -> (DataKey, BytesN<32>) {
+    fn validate_scheduled_execution(env: &Env, operation: &Operation) -> (DataKey, BytesN<32>) {
         assert_not_paused(env);
         // executor is intentionally not required to authenticate here (permissionless execution after timelock)
 
@@ -885,8 +969,8 @@ impl SettlementContract {
 
     /// Consumes a pending `ScheduledOperation` slot.
     ///
-    /// Issue #888: this is the single removal point used by [`execute`],
-    /// [`cancel`], and [`cancel_all`]. Keeping removal in one helper makes the
+    /// Issue #888: this is the single removal point used by `execute`,
+    /// `cancel`, and `cancel_all`. Keeping removal in one helper makes the
     /// one-shot transition explicit: a scheduled operation is deleted before
     /// any operation arm can run, so a committed execution cannot leave the
     /// entry available for replay. Issue #887 also updates the queue-depth
@@ -897,7 +981,7 @@ impl SettlementContract {
     }
 
     /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
-    /// from [`execute`](Self::execute).
+    /// from `execute`.
     ///
     /// # Validation policy (issue #562)
     ///
@@ -931,14 +1015,26 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
+    /// Timelocked counterpart of [`transfer_admin`](Self::transfer_admin).
+    ///
+    /// Shares the direct path's validation policy, including the no-op guard:
+    /// an identical admin set and threshold is rejected with
+    /// [`SameAdmin`](SettlementError::SameAdmin) instead of writing unchanged
+    /// state and emitting a misleading `admin_transferred` event.
     fn _transfer_admin(
         env: &Env,
         _executor: &Address,
         new_admins: Vec<Address>,
         new_threshold: u32,
     ) {
-        let old_admins = read_admins(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
+
+        let old_admins = read_admins(env);
+        let old_threshold = read_threshold(env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(env, SettlementError::SameAdmin);
+        }
+
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
             if is_merchant_registered_internal(env, new_admins.get(i).unwrap()) {
@@ -1082,26 +1178,15 @@ impl SettlementContract {
     ) {
         assert_not_paused(env);
 
-        validate_fee_against_governance(env, &rule);
-
+        // Local checks are free, so run them before the cross-contract
+        // governance ceiling check: invalid input is rejected without paying
+        // for the round-trip (issue #799). This matches the direct
+        // `set_settlement_rule` ordering.
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
-        if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps < MIN_FEE_BPS || rule.network_fee_bps < MIN_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps > MAX_FEE_BPS || rule.network_fee_bps > MAX_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-            panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-        }
+        validate_rule_bounds(env, &rule);
+        validate_fee_against_governance(env, &rule);
 
         let prev = env
             .storage()
@@ -1136,38 +1221,20 @@ impl SettlementContract {
 
         env.storage().persistent().remove(&key);
 
-        let fallback = read_rule_or_default(env, merchant.clone());
-
-        env.events().publish(
-            (
-                Symbol::new(env, events::SETTLEMENT_RULE_CLEARED_EVENT),
-                merchant,
-            ),
-            (executor, removed, fallback),
-        );
+        // Match `clear_settlement_rule` and `unregister_merchant`: resolve the
+        // fallback without bumping the removed rule's TTL and emit through the
+        // shared helper so indexers see an identical payload (issue #689/#491).
+        let fallback = read_fallback_rule(env);
+        events::emit_settlement_rule_cleared(env, &merchant, executor, &removed, &fallback);
     }
 
     fn _set_default_rule(env: &Env, executor: &Address, new_rule: SettlementRule) {
         assert_not_paused(env);
 
+        // Local range checks run before the cross-contract governance ceiling
+        // check (issue #803), mirroring the direct `set_default_rule` path.
+        validate_rule_bounds(env, &new_rule);
         validate_fee_against_governance(env, &new_rule);
-
-        if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
-        {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps < MIN_FEE_BPS || new_rule.network_fee_bps < MIN_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-            panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-        }
 
         let prev = env
             .storage()
@@ -1189,6 +1256,7 @@ impl SettlementContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::DEFAULT_TIMELOCK_DELAY_SECONDS;
     use crate::tests::setup;
     use crate::SettlementContractClient;
     use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
@@ -1306,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn change_threshold_allows_1_of_1_to_change_with_one() {
+    fn change_threshold_requires_full_admin_set_for_1_of_2() {
         let env = Env::default();
         env.mock_all_auths();
         let a1 = Address::generate(&env);
@@ -1320,9 +1388,11 @@ mod tests {
         client.init(&deployer, &admins, &1, &governance, &recovery);
 
         assert_eq!(client.get_threshold(), 1);
+        // A 1-of-2 set still needs current_threshold + 1 = 2 signers.
         let one_signer = soroban_sdk::vec![&env, a1.clone()];
-        // 1-of-1 can change threshold to 2 with 1 signer
-        client.change_threshold(&one_signer, &2);
+        assert!(client.try_change_threshold(&one_signer, &2).is_err());
+
+        client.change_threshold(&admins, &2);
         assert_eq!(client.get_threshold(), 2);
     }
 

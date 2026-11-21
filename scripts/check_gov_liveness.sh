@@ -21,13 +21,38 @@ else
   log_error() { echo "[ERROR] $1" >&2; }
 fi
 
+# Print $1 as a quoted, JSON-escaped string (quotes, backslashes, newlines,
+# control characters). Prefers python3, then jq, then a sed/awk fallback.
+json_string() {
+  local out
+  if command -v python3 >/dev/null 2>&1; then
+    if out="$(printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read()))' 2>/dev/null)"; then
+      printf '%s' "$out"
+      return 0
+    fi
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    if out="$(printf '%s' "$1" | jq -Rs . 2>/dev/null)"; then
+      printf '%s' "$out"
+      return 0
+    fi
+  fi
+  out="$(printf '%s' "$1" \
+    | tr -d '\000-\010\013\014\016-\037' \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' \
+    | awk 'NR>1{printf "\\n"} {printf "%s", $0}')"
+  printf '"%s"' "$out"
+}
+
 alert() {
   local message="$1"
   log_error "LIVENESS ALERT: ${message}"
   if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
     if command -v curl >/dev/null 2>&1; then
+      local payload
+      payload="{\"alert\":\"governance_liveness_failure\",\"message\":$(json_string "${message}")}"
       curl -s -X POST -H "Content-Type: application/json" \
-        -d "{\"alert\":\"governance_liveness_failure\",\"message\":\"${message}\"}" \
+        -d "${payload}" \
         "${ALERT_WEBHOOK_URL}" >/dev/null 2>&1 || true
     fi
   fi

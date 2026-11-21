@@ -391,6 +391,14 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -433,6 +441,18 @@ impl GovernanceContract {
         // TTL — going through `storage::read_admin` would do an extend_ttl on
         // every check and could panic if the contract has no instance entries.
         env.storage().instance().has(&DataKey::Admin)
+    }
+
+    /// Returns the deployer address recorded at `init`.
+    ///
+    /// # Panics
+    ///
+    /// * [`NotInitialized`](GovernanceError::NotInitialized) — if `init` has not been called.
+    pub fn get_deployer(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Deployer)
+            .unwrap_or_else(|| panic_with_error!(&env, GovernanceError::NotInitialized))
     }
 
     pub fn get_admin(env: Env) -> Vec<Address> {
@@ -574,6 +594,15 @@ impl GovernanceContract {
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`GovernanceError::RecoveryNotPending`].
     ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets the threshold to `1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](GovernanceContract::transfer_admin) from the
+    /// recovered admin.
+    ///
     /// # Panics
     ///
     /// - [`GovernanceError::RecoveryDelayActive`] if the delay window has not
@@ -644,14 +673,33 @@ impl GovernanceContract {
         );
     }
 
+    /// Updates the multisig threshold required for admin operations.
+    ///
+    /// # Authorization
+    ///
+    /// Requires `current_threshold` distinct authorized admin signers (matching
+    /// the standard admin multisig quorum). Admin authorization is verified
+    /// before validating `new_threshold` bounds so unauthenticated callers
+    /// cannot probe the size of the admin set.
+    ///
+    /// # Errors
+    ///
+    /// - [`GovernanceError::Unauthorized`] if fewer than `current_threshold`
+    ///   valid, distinct admin signers authorize the call.
+    /// - [`GovernanceError::InvalidThreshold`] if `new_threshold == 0` or
+    ///   `new_threshold > admins.len()`.
+    /// - [`GovernanceError::SameAdmin`] if `new_threshold == current_threshold`.
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold);
+        if new_threshold == current_threshold {
+            panic_with_error!(&env, GovernanceError::SameAdmin);
+        }
 
         env.storage()
             .instance()
@@ -703,11 +751,12 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        run_migrations(&env);
-        env.events().publish(
-            (Symbol::new(&env, events::MIGRATED_EVENT),),
-            (admin, CURRENT_SCHEMA_VERSION),
-        );
+        if run_migrations(&env) {
+            env.events().publish(
+                (Symbol::new(&env, events::MIGRATED_EVENT),),
+                (admin, CURRENT_SCHEMA_VERSION),
+            );
+        }
     }
 
     /// Stores `value` under the system parameter `key`.
@@ -1000,6 +1049,11 @@ fn run_migrations(env: &Env) {
             .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
     }
     let mut version = read_schema_version(env);
+/// [`migrate_step`] for each version crossed. Returns `true` if the stored
+/// version advanced, or `false` when already at `CURRENT_SCHEMA_VERSION`.
+fn run_migrations(env: &Env) -> bool {
+    let start_version = read_schema_version(env);
+    let mut version = start_version;
     while version < CURRENT_SCHEMA_VERSION {
         migrate_step(env, version);
         version += 1;
@@ -1007,6 +1061,7 @@ fn run_migrations(env: &Env) {
             .instance()
             .set(&DataKey::SchemaVersion, &version);
     }
+    version > start_version
 }
 
 /// Returns the instance-storage schema version, defaulting to the current

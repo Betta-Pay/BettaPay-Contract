@@ -23,8 +23,16 @@ leg and prevents the two fee legs from exceeding the gross. The merchant
 amount is then computed as the remaining gross and clamped to a minimum of
 zero, so it can never be negative.
 
-Fee rates are individually limited to 5,000 bps (50%), so the platform leg
-cannot by itself exceed a valid positive gross amount. If the clamp activates,
+Fee rates are individually capped at `MAX_FEE_BPS` (5,000 bps, 50%), so the
+platform leg cannot by itself exceed a valid positive gross amount. That cap is
+enforced where fee rates are written, not on the read path: governance's
+`set_fee_config` rejects any leg outside `[MIN_FEE_BPS, MAX_FEE_BPS]`, and
+settlement's `validate_rule_bounds` applies the same bound to merchant and
+default rules. Settlement's `read_governance_fee_rule` does **not** re-check
+`MAX_FEE_BPS` on the cross-contract `get_fee_config` read, so an out-of-bounds
+governance value could in principle reach the split. `clamp_fee_legs` protects
+against any such overshoot: it keeps each leg within the gross and the merchant
+payout non-negative regardless of the configured rates. If the clamp activates,
 the network leg may therefore be lower than its independently ceiling-rounded
 value, including zero. Fee legs plus the merchant amount still sum to the
 gross.
@@ -51,7 +59,8 @@ settlement's payment entry points.
 
 Implementation references: `bettapay_common/src/types.rs`
 (`Bps::calculate_fee_ceil`), `settlement_contract/src/payments.rs`
-(`calculate_split`), and `settlement_contract/src/policy.rs`
+(`calculate_split` / `clamp_fee_legs`), `settlement_contract/src/settlement.rs`
+(`validate_rule_bounds`), and `settlement_contract/src/policy.rs`
 (`MIN_PAYMENT_AMOUNT`).
 
 ## Checked-math policy

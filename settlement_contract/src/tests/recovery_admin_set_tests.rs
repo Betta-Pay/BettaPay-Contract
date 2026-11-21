@@ -464,6 +464,36 @@ fn recovery_veto_blocks_scheduled_upgrade() {
 }
 
 // ---------------------------------------------------------------------------
+// execute_after arithmetic (checked_add near u64::MAX)
+// ---------------------------------------------------------------------------
+
+/// A ledger timestamp close to `u64::MAX` must not wrap or surface an untyped
+/// arithmetic panic. `initiate_recovery` uses `checked_add` for
+/// `RECOVERY_DELAY_SECONDS` and reports a typed contract error instead.
+#[test]
+fn initiate_recovery_rejects_timestamp_overflow_with_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = u64::MAX - 1);
+
+    assert_eq!(
+        client.try_initiate_recovery(&Address::generate(&env)),
+        Err(Ok(contract_error(SettlementError::ExecutionDelayTooLong)))
+    );
+    assert!(
+        !env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)),
+        "an overflowing recovery must not leave a pending record"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Issue #884: read_admin returns SettlementError::AdminSetEmpty on empty admin set
 // ---------------------------------------------------------------------------
 
