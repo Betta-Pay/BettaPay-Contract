@@ -1,8 +1,5 @@
-use crate::SettlementContractClient;
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Symbol, Vec};
-
-use crate::SettlementContractClient;
 
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{

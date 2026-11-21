@@ -8,6 +8,7 @@ use crate::errors::SettlementError;
 use crate::policy::CAPABILITY_FLAGS;
 use crate::CURRENT_SCHEMA_VERSION;
 use bettapay_common::events::MIGRATED_EVENT;
+use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol};
 
 #[test]

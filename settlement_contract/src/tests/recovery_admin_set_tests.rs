@@ -505,7 +505,7 @@ fn read_admin_panics_with_admin_set_empty_when_admin_set_is_empty() {
     let (env, client, _admins, _merchant) = setup();
     let empty: Vec<Address> = Vec::new(&env);
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::Admin, &empty);
+        env.storage().instance().set(&bettapay_common::storage::CommonDataKey::Admin, &empty);
         crate::storage::read_admin(&env);
     });
 }

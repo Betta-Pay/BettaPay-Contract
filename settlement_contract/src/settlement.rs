@@ -1,7 +1,4 @@
-use crate::SettlementContractClient;
 use soroban_sdk::{contractimpl, panic_with_error, Address, Env, Symbol, Vec};
-
-use crate::SettlementContractClient;
 
 use bettapay_common::{
     constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS},
@@ -232,6 +229,7 @@ mod rule_validation_tests {
     use bettapay_common::constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS};
     use bettapay_common::storage::zero_address;
     use proptest::prelude::*;
+    use soroban_sdk::testutils::Ledger as _;
 
     fn rule(platform_fee_bps: u32, network_fee_bps: u32, delay: u32) -> SettlementRule {
         SettlementRule {

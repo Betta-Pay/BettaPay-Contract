@@ -7,10 +7,12 @@ use super::setup;
 use crate::errors::SettlementError;
 use crate::policy::{READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD};
 use crate::types::SettlementRule;
-use bettapay_common::constants::{BYPASS_GOV_FEES_PARAM, RECOVERY_DELAY_SECONDS};
+use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use soroban_sdk::testutils::storage::Instance as _;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Symbol};
+
+const BYPASS_GOV_FEES_PARAM: &str = "bypass_gov_fees";
 
 #[test]
 fn update_recovery_address_rejects_same_address_and_active_recovery() {
@@ -80,7 +82,7 @@ fn set_settlement_rule_honors_governance_bypass_fees() {
 
     // With bypass enabled: ceiling check is skipped, local rule is accepted
     client.set_settlement_rule(&admins, &merchant, &rule);
-    assert_eq!(client.get_settlement_rule(&merchant), rule);
+    assert_eq!(client.get_settlement_rule(&merchant), Some(rule));
 
     // Invalid local rule bounds (> MAX_FEE_BPS) are still rejected
     let invalid_rule = SettlementRule {

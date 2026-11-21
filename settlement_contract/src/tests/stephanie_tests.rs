@@ -6,10 +6,10 @@
 use super::setup;
 use crate::errors::SettlementError;
 use crate::policy::{
-    MAX_CANCEL_ALL_BATCH, MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_TIMELOCK_DELAY_SECONDS,
+    DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_CANCEL_ALL_BATCH, MAX_SCHEDULED_OPERATION_PAYLOAD_LEN,
+    MAX_TIMELOCK_DELAY_SECONDS,
 };
 use crate::types::Operation;
-use bettapay_common::constants::DEFAULT_TIMELOCK_DELAY_SECONDS;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Vec};
 

@@ -1155,7 +1155,7 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
     assert_eq!(payload.new_admins, new_admins);
 
     assert!(
-        client.try_pause(&admins).is_err(),
+        client.try_pause(&admins, &0u32).is_err(),
         "the old signer set must no longer satisfy an admin-gated call"
     );
 
@@ -1177,7 +1177,7 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
     assert_eq!(payload.new_admins, next_admins);
 
     assert!(
-        client.try_pause(&new_admins).is_err(),
+        client.try_pause(&new_admins, &0u32).is_err(),
         "the superseded signer set must no longer satisfy an admin-gated call"
     );
 }

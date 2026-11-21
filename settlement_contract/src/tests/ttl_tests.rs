@@ -559,7 +559,7 @@ fn test_issue_1124_get_settlement_rule_no_bump_ttl_neutrality() {
 
     // Call get_settlement_rule_no_bump and assert get_ttl is unchanged
     let rule_no_bump = client.get_settlement_rule_no_bump(&merchant);
-    assert_eq!(rule_no_bump.platform_fee_bps, 100);
+    assert_eq!(rule_no_bump.as_ref().unwrap().platform_fee_bps, 100);
 
     let ttl_after_no_bump = env.as_contract(&contract_address, || {
         env.storage()

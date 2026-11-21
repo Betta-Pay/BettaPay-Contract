@@ -8,7 +8,7 @@ use soroban_sdk::contracterror;
 // `300..=399` range reserved for this contract. `settlement_error_codes_match_registry`
 // below fails the build if these literals ever drift from the registry.
 #[contracterror]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum SettlementError {
     /// `init()` has already been called. Only one initialization is permitted.
