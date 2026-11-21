@@ -317,15 +317,14 @@ fn update_system_param_emits_no_event_when_unauthorized() {
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn change_threshold_emits_no_event_when_insufficient_signatures() {
-    // Setup: 3 admins, threshold 2. change_threshold requires 3 signers
-    // (current_threshold + 1), but we only provide 1 → Unauthorized (#3).
-    // The new_threshold (2) is within bounds so the bound check passes first.
+    // Setup: 3 admins, threshold 2. change_threshold requires current_threshold
+    // (2) signers, so providing only 1 signer panics with Unauthorized (#3).
     let (env, client, admins, _recovery) = setup_with(3, 2);
     let a1 = admins.get(0).unwrap();
 
     let single_signer = vec![&env, a1.clone()];
     let prev = env.events().all().len();
-    client.change_threshold(&single_signer, &2);
+    client.change_threshold(&single_signer, &3);
     assert_eq!(
         env.events().all().len(),
         prev,
