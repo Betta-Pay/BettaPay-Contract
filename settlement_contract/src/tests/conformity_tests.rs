@@ -64,7 +64,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 37] {
+fn settlement_codes() -> [(&'static str, u32); 38] {
     [
         (
             "AlreadyInitialized",
@@ -162,6 +162,10 @@ fn settlement_codes() -> [(&'static str, u32); 37] {
         (
             "InvalidPauseReason",
             SettlementError::InvalidPauseReason as u32,
+        ),
+        (
+            "MaxPaymentsReached",
+            SettlementError::MaxPaymentsReached as u32,
         ),
     ]
 }

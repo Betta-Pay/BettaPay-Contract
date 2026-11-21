@@ -216,7 +216,8 @@ pub(crate) enum DataKey {
     /// Cleared on re-registration so the tombstone is removed when the
     /// merchant is registered again (issue #1115).
     ArchivedMerchant(Address),
-    /// Persistent — single value but may be updated.
+    /// Instance — singleton global default rule, read on fallback paths and
+    /// updated by `set_default_rule`.
     DefaultRule,
     /// Persistent — one per (merchant, reference), high volume.
     ///

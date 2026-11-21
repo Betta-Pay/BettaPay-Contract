@@ -664,3 +664,43 @@ fn bootstrap_fallback_emitted_only_when_resolution_reaches_bootstrap() {
     client.calculate_fee_split(&merchant, &10_000);
     assert_emitted(0, "calculate_fee_split, default rule");
 }
+
+/// Issue #1105: an explicitly configured default rule carrying the bootstrap
+/// values is a `Default` rule, so the payment path must not report a fallback.
+#[test]
+fn bootstrap_fallback_not_emitted_for_default_rule_with_bootstrap_values() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.set_default_rule(&admins, &crate::policy::BOOTSTRAP_DEFAULT_RULE);
+
+    let before = bootstrap_fallback_count(&env);
+    client.store_payment_reference(&merchant, &BytesN::from_array(&env, &[11; 32]), &10_000);
+
+    assert_eq!(bootstrap_fallback_count(&env), before);
+}
+
+/// Issue #1105: the same applies to a governance config with the bootstrap
+/// fee values. Value equality must never masquerade as `RuleProvenance::Bootstrap`.
+#[test]
+fn bootstrap_fallback_not_emitted_for_governance_rule_with_bootstrap_values() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let bootstrap = crate::policy::BOOTSTRAP_DEFAULT_RULE;
+    let governance = super::register_governance_with_config(
+        &env,
+        GovFeeConfig {
+            platform_fee_bps: bootstrap.platform_fee_bps,
+            network_fee_bps: bootstrap.network_fee_bps,
+        },
+    );
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&crate::types::DataKey::Governance, &governance);
+    });
+
+    let before = bootstrap_fallback_count(&env);
+    client.store_payment_reference(&merchant, &BytesN::from_array(&env, &[12; 32]), &10_000);
+
+    assert_eq!(bootstrap_fallback_count(&env), before);
+}

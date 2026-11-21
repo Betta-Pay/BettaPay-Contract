@@ -48,9 +48,10 @@ pub const MAX_PAYMENT_REFERENCE_LEN: u32 = 32;
 /// and each entry accrues rent via TTL extension, so an unbounded per-merchant
 /// history would let a single merchant bloat ledger state without bound.
 /// A single named cap gives tests and docs one canonical value to assert
-/// against. Enforcement (rejecting `store_payment_reference` past this cap)
-/// is intentionally left to a separate standalone change (issue #775 scope:
-/// constant plus docs only, no enforcement logic here).
+/// against. [`SettlementContract::store_payment_reference`](crate::SettlementContract::store_payment_reference)
+/// rejects a new payment once the counter reaches this cap, with
+/// [`MaxPaymentsReached`](crate::errors::SettlementError::MaxPaymentsReached);
+/// pruning via `prune_payment` or `prune_payments` frees capacity again (issue #1104).
 pub const MAX_PAYMENTS_PER_MERCHANT: u32 = 10_000;
 
 /// Approximate ledgers per day on Stellar (~5s per ledger).

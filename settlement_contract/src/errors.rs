@@ -102,6 +102,10 @@ pub enum SettlementError {
     /// `pause()` was called with a reason code above
     /// `bettapay_common::constants::MAX_PAUSE_REASON` (issue #991).
     InvalidPauseReason = 320,
+    /// The merchant already has [`MAX_PAYMENTS_PER_MERCHANT`](crate::policy::MAX_PAYMENTS_PER_MERCHANT)
+    /// stored payment records. Raised by `store_payment_reference` until a
+    /// prune frees capacity (issue #1104).
+    MaxPaymentsReached = 321,
 }
 
 const _: () = {
@@ -153,4 +157,5 @@ const _: () = {
     assert!(SettlementError::PayloadTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::ExecutionDelayTooLong as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidPauseReason as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::MaxPaymentsReached as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };
