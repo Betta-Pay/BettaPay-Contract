@@ -1876,3 +1876,59 @@ fn remove_system_param_rejects_signatures_below_threshold() {
     client.update_system_param(&admins, &key, &1440);
     client.remove_system_param(&vec![&env, admins.get(0).unwrap()], &key);
 }
+
+#[test]
+fn test_issue_1122_set_system_param_boundary_and_negative_values() {
+    let (env, client, admins, _recovery) = setup();
+
+    let min_payment_key = Symbol::new(&env, "min_payment");
+    let bypass_key = Symbol::new(&env, "bypass_gov_fees");
+
+    // 1. Negative values fail with InvalidParamValue
+    let res_neg = client.try_set_system_param(&admins, &min_payment_key, &-1i128);
+    assert_eq!(
+        res_neg.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    let res_min = client.try_set_system_param(&admins, &min_payment_key, &i128::MIN);
+    assert_eq!(
+        res_min.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    // 2. bypass_gov_fees > 1 fails with InvalidParamValue
+    let res_bypass_too_large = client.try_set_system_param(&admins, &bypass_key, &2i128);
+    assert_eq!(
+        res_bypass_too_large.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    // 3. Valid values: 0, 1, i128::MAX for min_payment
+    client.set_system_param(&admins, &min_payment_key, &0i128);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(0i128));
+
+    client.set_system_param(&admins, &min_payment_key, &1i128);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(1i128));
+
+    client.set_system_param(&admins, &min_payment_key, &i128::MAX);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(i128::MAX));
+
+    // 4. Valid values for bypass_gov_fees: 0 and 1
+    client.set_system_param(&admins, &bypass_key, &1i128);
+    assert_eq!(client.get_system_param(&bypass_key), Some(1i128));
+
+    client.set_system_param(&admins, &bypass_key, &0i128);
+    assert_eq!(client.get_system_param(&bypass_key), Some(0i128));
+
+    // Verify SYS_PARAM_UPDATED_EVENT was emitted on valid updates
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::SYS_PARAM_UPDATED_EVENT)
+    );
+    let (admin, key, value): (Address, Symbol, i128) = FromVal::from_val(&env, &data);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(key, bypass_key);
+    assert_eq!(value, 0i128);
+}

@@ -16,6 +16,7 @@ pub mod integration_tests;
 pub mod interface_tests;
 pub mod merchant_rule_deployer_tests;
 pub mod mock_governance;
+pub mod stephanie_tests;
 #[path = "../../../tests/test_invariant_issue_723.rs"]
 mod issue_invariant_tests;
 pub mod operation_roundtrip_tests;

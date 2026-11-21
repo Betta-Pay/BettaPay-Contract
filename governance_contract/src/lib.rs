@@ -764,6 +764,11 @@ impl GovernanceContract {
         }
     }
 
+    /// Alias for update_system_param to maintain interface parity (issue #1122).
+    pub fn set_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
+        Self::update_system_param(env, signers, key, value);
+    }
+
     /// Stores `value` under the system parameter `key`.
     ///
     /// Not blocked while paused (issue #1069), so the admin can flip
