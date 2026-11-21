@@ -973,6 +973,45 @@ fn execute_recovery_clears_pending_record() {
 }
 
 #[test]
+fn initiate_recovery_keeps_pending_record_alive_past_recovery_delay() {
+    use soroban_sdk::testutils::storage::Instance;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &vec![&env, admin], &1, &recovery);
+
+    client.initiate_recovery(&new_admin);
+
+    let pending = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, PendingRecovery>(&CommonDataKey::PendingRecovery)
+        })
+    };
+    assert!(pending().is_some());
+    assert!(
+        env.as_contract(&client.address, || env.storage().instance().get_ttl()) >= TTL_BUMP_LEDGERS
+    );
+
+    let ledgers_for_delay = (RECOVERY_DELAY_SECONDS / 5) as u32 + 1;
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + ledgers_for_delay);
+    assert!(pending().is_some());
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + RECOVERY_DELAY_SECONDS);
+    client.execute_recovery();
+    assert_eq!(client.get_admin(), vec![&env, new_admin]);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #8)")]
 fn execute_recovery_after_cancel_panics() {
     let env = Env::default();
@@ -1088,6 +1127,31 @@ fn initiate_recovery_rejects_overwrite_while_pending() {
     client.initiate_recovery(&second_target);
 }
 
+#[test]
+fn initiate_recovery_rejects_timestamp_overflow_with_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &vec![&env, admin], &1, &recovery);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = u64::MAX - 1);
+
+    assert_eq!(
+        client.try_initiate_recovery(&Address::generate(&env)),
+        Err(Ok(GovernanceError::ExecutionDelayTooLong.into()))
+    );
+    assert!(
+        !env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery))
+    );
+}
+
 // -----------------------------------------------------------------------
 // InvalidWasmInterface: upgrade flow enforces supports_interface(1)
 // -----------------------------------------------------------------------
@@ -1103,6 +1167,17 @@ fn upgrade_rejects_wasm_missing_supports_interface() {
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::from_slice(&env, &[]));
     client.upgrade(&admins, &bad_hash);
+}
+
+#[test]
+fn upgrade_rejects_zero_wasm_hash_with_typed_error() {
+    let (env, client, admins, _recovery) = setup();
+    let zero_hash = BytesN::from_array(&env, &[0; 32]);
+
+    assert_eq!(
+        client.try_upgrade(&admins, &zero_hash),
+        Err(Ok(GovernanceError::InvalidWasmInterface.into()))
+    );
 }
 
 /// Upgrading with a non-admin caller must still be rejected with
