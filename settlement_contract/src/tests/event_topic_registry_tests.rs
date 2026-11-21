@@ -26,6 +26,7 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "recovery_address_updated",
     "migrated",
     "sys_param_updated",
+    "sys_param_removed",
     "fee_config_updated",
     "anchor_upserted",
     "anchor_removed",

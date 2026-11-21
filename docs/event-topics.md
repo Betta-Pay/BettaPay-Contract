@@ -49,6 +49,7 @@ both contracts.
 | --- | --- | --- |
 | `MIGRATED_EVENT` | `migrated` | Governance |
 | `SYS_PARAM_UPDATED_EVENT` | `sys_param_updated` | Governance |
+| `SYS_PARAM_REMOVED_EVENT` | `sys_param_removed` | Governance |
 | `FEE_CONFIG_UPDATED_EVENT` | `fee_config_updated` | Governance |
 | `ANCHOR_UPSERTED_EVENT` | `anchor_upserted` | Governance |
 | `ANCHOR_REMOVED_EVENT` | `anchor_removed` | Governance |

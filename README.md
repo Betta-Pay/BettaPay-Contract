@@ -578,7 +578,8 @@ pub struct AdminTransferred {
 | `unpause` | `signers: Vec<Address>` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `AlreadyUnpaused` | Resumes governance operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the governance modifications are halted. |
 | `migrate` | `signers: Vec<Address>` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Unauthorized`, `Paused` | Advances the stored schema version and emits `migrated`. |
-| `update_system_param` | `signers: Vec<Address>`, `key: Symbol`, `value: i128` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidParamValue` | Stores or overrides a numeric parameter `value` (must be $\ge 0$) under `key`. |
+| `update_system_param` | `signers: Vec<Address>`, `key: Symbol`, `value: i128` | `()` | Stored Admin multisig (allowed while paused) | `NotInitialized`, `Unauthorized`, `InvalidParamValue` | Stores or overrides a numeric parameter `value` (must be $\ge 0$) under `key`. Writing the value already stored emits no event. |
+| `remove_system_param` | `signers: Vec<Address>`, `key: Symbol` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized` | Deletes the parameter stored under `key` and emits `sys_param_removed`. A missing key is a no-op. |
 | `get_system_param` | `key: Symbol` | `Option<i128>` | None | None | Fetches the system parameter value. Refreshes storage TTL on reads. |
 | `set_fee_config` | `signers: Vec<Address>`, `config: FeeConfig` | `()` | Stored Admin multisig, not paused | `NotInitialized`, `Paused`, `Unauthorized`, `InvalidFeeBps` | Updates the global default fee configuration. Limits: $5 \text{ bps} \le \text{bps} \le 5000 \text{ bps}$. |
 | `get_fee_config` | None | `Option<FeeConfig>` | None | None | Fetches the active system fee config. |
