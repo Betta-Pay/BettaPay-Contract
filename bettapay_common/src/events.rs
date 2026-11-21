@@ -60,6 +60,9 @@ pub struct PendingRecovery {
 
 // --- Shared: emitted by both governance_contract and settlement_contract ---
 
+/// Topic emitted once, when either contract's `init` completes.
+pub const INITIALIZED_EVENT: &str = "initialized";
+
 /// Topic emitted when the admin role is transferred (also reused by
 /// `execute_recovery`).
 pub const ADMIN_TRANSFERRED_EVENT: &str = "admin_transferred";
@@ -89,9 +92,6 @@ pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 pub const RECOVERY_ADDRESS_UPDATED_EVENT: &str = "recovery_address_updated";
 
 // --- governance_contract only ---
-
-/// Topic emitted once, when `GovernanceContract::init` completes.
-pub const INITIALIZED_EVENT: &str = "initialized";
 
 /// Topic emitted when `migrate` completes (schema version management).
 pub const MIGRATED_EVENT: &str = "migrated";
@@ -170,10 +170,6 @@ pub const OP_EXECUTED_EVENT: &str = "op_executed";
 /// Topic emitted when a scheduled administrative operation is cancelled.
 pub const OP_CANCELLED_EVENT: &str = "op_cancelled";
 
-/// Topic emitted when `validate_fee_against_governance` rejects a fee rule
-/// that exceeds governance's configured ceiling.
-pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
-
 /// Every topic name defined in this registry, across all groups (shared,
 /// governance-only, settlement-only).
 ///
@@ -182,6 +178,7 @@ pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
 /// sites cannot silently drift from the registry.
 pub const ALL_EVENT_TOPICS: &[&str] = &[
     // Shared
+    INITIALIZED_EVENT,
     ADMIN_TRANSFERRED_EVENT,
     PAUSED_EVENT,
     UNPAUSED_EVENT,
@@ -192,7 +189,6 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     THRESHOLD_CHANGED_EVENT,
     RECOVERY_ADDRESS_UPDATED_EVENT,
     // governance_contract only
-    INITIALIZED_EVENT,
     MIGRATED_EVENT,
     SYS_PARAM_UPDATED_EVENT,
     FEE_CONFIG_UPDATED_EVENT,
@@ -213,7 +209,6 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     OP_SCHEDULED_EVENT,
     OP_EXECUTED_EVENT,
     OP_CANCELLED_EVENT,
-    FEE_CEILING_REJECTED_EVENT,
 ];
 
 /// Emits the `admin_transferred` event with the structured
