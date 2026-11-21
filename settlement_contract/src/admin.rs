@@ -3,9 +3,7 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Sym
 
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
-    constants::{
-        BPS_DENOMINATOR, MAX_FEE_BPS, MAX_PAUSE_REASON, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
-    },
+    constants::{MAX_PAUSE_REASON, RECOVERY_DELAY_SECONDS},
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
 };
@@ -19,6 +17,7 @@ use crate::policy::{
     SCHEDULED_OP_TTL_THRESHOLD,
     SUPPORTED_INTERFACE_VERSION,
 };
+use crate::settlement::validate_rule_bounds;
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
     decrement_pending_operation_count, increment_pending_operation_count,
@@ -29,7 +28,7 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::SettlementContract;
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
 ///
@@ -931,14 +930,26 @@ impl SettlementContract {
         events::emit_recovery_cancelled(env, executor);
     }
 
+    /// Timelocked counterpart of [`transfer_admin`](Self::transfer_admin).
+    ///
+    /// Shares the direct path's validation policy, including the no-op guard:
+    /// an identical admin set and threshold is rejected with
+    /// [`SameAdmin`](SettlementError::SameAdmin) instead of writing unchanged
+    /// state and emitting a misleading `admin_transferred` event.
     fn _transfer_admin(
         env: &Env,
         _executor: &Address,
         new_admins: Vec<Address>,
         new_threshold: u32,
     ) {
-        let old_admins = read_admins(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
+
+        let old_admins = read_admins(env);
+        let old_threshold = read_threshold(env);
+        if old_admins == new_admins && old_threshold == new_threshold {
+            panic_with_error!(env, SettlementError::SameAdmin);
+        }
+
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
             if is_merchant_registered_internal(env, new_admins.get(i).unwrap()) {
@@ -1082,26 +1093,15 @@ impl SettlementContract {
     ) {
         assert_not_paused(env);
 
-        validate_fee_against_governance(env, &rule);
-
+        // Local checks are free, so run them before the cross-contract
+        // governance ceiling check: invalid input is rejected without paying
+        // for the round-trip (issue #799). This matches the direct
+        // `set_settlement_rule` ordering.
         if !is_merchant_registered_and_bump_ttl(env, merchant.clone()) {
             panic_with_error!(env, SettlementError::MerchantMissing);
         }
-        if rule.platform_fee_bps > BPS_DENOMINATOR || rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps < MIN_FEE_BPS || rule.network_fee_bps < MIN_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps > MAX_FEE_BPS || rule.network_fee_bps > MAX_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.platform_fee_bps + rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-            panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-        }
+        validate_rule_bounds(env, &rule);
+        validate_fee_against_governance(env, &rule);
 
         let prev = env
             .storage()
@@ -1136,38 +1136,20 @@ impl SettlementContract {
 
         env.storage().persistent().remove(&key);
 
-        let fallback = read_rule_or_default(env, merchant.clone());
-
-        env.events().publish(
-            (
-                Symbol::new(env, events::SETTLEMENT_RULE_CLEARED_EVENT),
-                merchant,
-            ),
-            (executor, removed, fallback),
-        );
+        // Match `clear_settlement_rule` and `unregister_merchant`: resolve the
+        // fallback without bumping the removed rule's TTL and emit through the
+        // shared helper so indexers see an identical payload (issue #689/#491).
+        let fallback = read_fallback_rule(env);
+        events::emit_settlement_rule_cleared(env, &merchant, executor, &removed, &fallback);
     }
 
     fn _set_default_rule(env: &Env, executor: &Address, new_rule: SettlementRule) {
         assert_not_paused(env);
 
+        // Local range checks run before the cross-contract governance ceiling
+        // check (issue #803), mirroring the direct `set_default_rule` path.
+        validate_rule_bounds(env, &new_rule);
         validate_fee_against_governance(env, &new_rule);
-
-        if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR
-        {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps < MIN_FEE_BPS || new_rule.network_fee_bps < MIN_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps > MAX_FEE_BPS || new_rule.network_fee_bps > MAX_FEE_BPS {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.platform_fee_bps + new_rule.network_fee_bps > BPS_DENOMINATOR {
-            panic_with_error!(env, SettlementError::InvalidFeeBps);
-        }
-        if new_rule.settlement_delay_ledger > MAX_SETTLEMENT_DELAY_LEDGER {
-            panic_with_error!(env, SettlementError::InvalidSettlementDelay);
-        }
 
         let prev = env
             .storage()
