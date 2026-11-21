@@ -54,3 +54,41 @@ pub fn probe_supports_interface(env: &Env, new_wasm_hash: &BytesN<32>, version: 
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::Bytes;
+
+    fn settlement_wasm(env: &Env) -> Bytes {
+        Bytes::from_slice(
+            env,
+            include_bytes!("../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"),
+        )
+    }
+
+    #[test]
+    fn probe_supports_interface_returns_true_for_supported_version() {
+        let env = Env::default();
+        let wasm_hash = env.deployer().upload_contract_wasm(settlement_wasm(&env));
+
+        assert!(probe_supports_interface(&env, &wasm_hash, 1));
+    }
+
+    #[test]
+    fn probe_supports_interface_returns_false_for_unsupported_version() {
+        let env = Env::default();
+        let wasm_hash = env.deployer().upload_contract_wasm(settlement_wasm(&env));
+
+        assert!(!probe_supports_interface(&env, &wasm_hash, 2));
+    }
+
+    #[test]
+    fn probe_supports_interface_returns_false_when_export_is_missing() {
+        let env = Env::default();
+        let empty_wasm = Bytes::from_slice(&env, &[]);
+        let wasm_hash = env.deployer().upload_contract_wasm(empty_wasm);
+
+        assert!(!probe_supports_interface(&env, &wasm_hash, 1));
+    }
+}
