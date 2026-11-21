@@ -45,9 +45,6 @@ curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_A
 log_info "Building and optimizing settlement and governance contracts..."
 make optimize
 log_success "Optimized build completed successfully."
-log_info "Building settlement and governance contracts..."
-make optimize
-log_success "Build completed successfully."
 
 SETTLEMENT_WASM="${ROOT_DIR}/target/optimized/settlement_contract_opt.wasm"
 GOVERNANCE_WASM="${ROOT_DIR}/target/optimized/governance_contract_opt.wasm"
@@ -85,13 +82,13 @@ log_success "Governance contract deployed: $GOVERNANCE_ID"
 # Initialize settlement contract
 log_info "Initializing Settlement contract with admin set..."
 ADMINS="[\"${ADMIN_ADDRESS}\"]"
-invoke_contract_init "$SETTLEMENT_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+invoke_contract_init "$SETTLEMENT_ID" "$BETTAPAY_IDENTITY" "$ADMIN_ADDRESS" "$ADMINS" 1 \
   --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
 log_info "Initializing Governance contract with admin set..."
-invoke_contract_init "$GOVERNANCE_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+invoke_contract_init "$GOVERNANCE_ID" "$BETTAPAY_IDENTITY" "$ADMIN_ADDRESS" "$ADMINS" 1 \
   --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 

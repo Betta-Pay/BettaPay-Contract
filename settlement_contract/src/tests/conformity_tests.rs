@@ -15,6 +15,9 @@ use governance_contract::GovernanceError;
 use crate::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use super::setup;
 
@@ -203,6 +206,91 @@ fn governance_and_settlement_error_codes_never_collide() {
             }
         }
     }
+}
+
+fn registry_section<'a>(markdown: &'a str, heading: &str) -> &'a str {
+    let section_marker = format!("## {heading}");
+    let start = markdown
+        .find(&section_marker)
+        .unwrap_or_else(|| panic!("ERROR_CODE_REGISTRY.md is missing `{heading}`"));
+    let tail = &markdown[start + section_marker.len()..];
+    tail.split("\n## ")
+        .next()
+        .expect("error code registry section must contain a table")
+}
+
+fn registry_entries(markdown: &str, heading: &str) -> Vec<(String, u32)> {
+    let section = registry_section(markdown, heading);
+    let mut entries = Vec::new();
+
+    for line in section.lines() {
+        let columns: Vec<&str> = line
+            .split('|')
+            .map(str::trim)
+            .filter(|column| !column.is_empty())
+            .collect();
+        if columns.len() < 2 || columns[0].starts_with("Code") {
+            continue;
+        }
+        if columns[0].contains('-') || columns[1] == "—" {
+            continue;
+        }
+
+        let code = columns[0]
+            .parse::<u32>()
+            .unwrap_or_else(|_| panic!("invalid registry code in {heading}: {}", columns[0]));
+        let name = columns[1].trim_matches('`').to_string();
+        entries.push((name, code));
+    }
+
+    entries
+}
+
+#[test]
+fn error_code_registry_matches_contract_error_enums() {
+    let markdown =
+        include_str!("../../../docs/ERROR_CODE_REGISTRY.md");
+
+    let mut shared = registry_entries(markdown, "Shared Error Codes (1-99)");
+    shared.sort_by_key(|(_, code)| *code);
+    let mut expected_shared = bettapay_common::error_codes::SHARED_CODES
+        .iter()
+        .map(|&(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_shared.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        shared,
+        expected_shared,
+        "docs/ERROR_CODE_REGISTRY.md shared entries drifted"
+    );
+
+    let mut governance = registry_entries(markdown, "Governance Contract Errors (200-299)");
+    governance.sort_by_key(|(_, code)| *code);
+    let mut expected_governance = governance_codes()
+        .into_iter()
+        .filter(|&(_, code)| code >= 200)
+        .map(|(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_governance.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        governance,
+        expected_governance,
+        "docs/ERROR_CODE_REGISTRY.md governance entries drifted"
+    );
+
+    let mut settlement = registry_entries(markdown, "Settlement Contract Errors (300-399)");
+    settlement.sort_by_key(|(_, code)| *code);
+    let mut expected_settlement = settlement_codes()
+        .into_iter()
+        .filter(|&(_, code)| code >= 300)
+        .map(|(name, code)| (name.to_string(), code))
+        .collect::<Vec<_>>();
+    expected_settlement.sort_by_key(|(_, code)| *code);
+    assert_eq!(
+        settlement,
+        expected_settlement,
+        "docs/ERROR_CODE_REGISTRY.md settlement entries drifted"
+    );
 }
 
 // ---------------------------------------------------------------------------

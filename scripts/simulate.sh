@@ -15,7 +15,10 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 # ---- Argument parsing -----------------------------------------------------
 usage() {
-  cat <<EOF
+  local code="${1:-0}"
+  local out=1
+  [ "$code" -eq 0 ] || out=2
+  cat >&"$out" <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
 Run a local simulation bootstrap for BettaPay contracts on Stellar.
@@ -31,7 +34,7 @@ Options:
 Environment variables SOROBAN_RPC_URL, SOROBAN_NETWORK_PASSPHRASE,
 SOROBAN_SOURCE, and FRIENDBOT_URL can also be used to override defaults.
 EOF
-  exit 0
+  exit "$code"
 }
 
 load_config() {
@@ -61,8 +64,7 @@ while [[ $# -gt 0 ]]; do
       usage ;;
     *)
       log_error "Unknown option: $1"
-      usage
-      exit 1 ;;
+      usage 2 ;;
   esac
 done
 
@@ -141,13 +143,13 @@ log_success "Governance contract deployed: $GOVERNANCE_ID"
 # Initialize settlement contract
 log_info "Initializing Settlement contract with admin set..."
 ADMINS="[\"${SOROBAN_SOURCE_ADDRESS}\"]"
-invoke_contract_init "$SETTLEMENT_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+invoke_contract_init "$SETTLEMENT_ID" "$SOROBAN_SOURCE" "$SOROBAN_SOURCE_ADDRESS" "$ADMINS" 1 \
   --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
 log_info "Initializing Governance contract with admin set..."
-invoke_contract_init "$GOVERNANCE_ID" "$SOROBAN_SOURCE" "$ADMINS" 1 \
+invoke_contract_init "$GOVERNANCE_ID" "$SOROBAN_SOURCE" "$SOROBAN_SOURCE_ADDRESS" "$ADMINS" 1 \
   --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 
