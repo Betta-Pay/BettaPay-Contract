@@ -361,6 +361,11 @@ impl GovernanceContract {
         version == SUPPORTED_INTERFACE_VERSION
     }
 
+    /// Returns the schema version expected by this build (issue #1126).
+    pub fn version(_env: Env) -> u32 {
+        CURRENT_SCHEMA_VERSION
+    }
+
     /// Initialises the governance contract and sets the initial administrator.
     ///
     /// Must be called exactly once after deployment. The caller is recorded as the

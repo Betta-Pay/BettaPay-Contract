@@ -501,6 +501,49 @@ fn get_settlement_rule_no_bump_returns_same_rule_without_extending_ttl() {
 }
 
 #[test]
+fn test_issue_1124_get_settlement_rule_no_bump_ttl_neutrality() {
+    let (env, client, admins, merchant) = setup();
+    let contract_address = client.address.clone();
+
+    client.set_settlement_rule(&admins, &merchant, &make_rule(100, 200, 10));
+
+    // Advance ledgers below RULE_TTL_THRESHOLD
+    let ttl_before = make_rule_ttl_stale(&env, &contract_address, &merchant);
+    assert!(
+        ttl_before < RULE_TTL_THRESHOLD,
+        "Rule TTL must decay below RULE_TTL_THRESHOLD before test"
+    );
+
+    // Call get_settlement_rule_no_bump and assert get_ttl is unchanged
+    let rule_no_bump = client.get_settlement_rule_no_bump(&merchant);
+    assert_eq!(rule_no_bump.platform_fee_bps, 100);
+
+    let ttl_after_no_bump = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after_no_bump, ttl_before,
+        "get_settlement_rule_no_bump must leave persistent Rule TTL unchanged"
+    );
+
+    // Call get_settlement_rule and assert get_ttl increases to RULE_TTL_BUMP
+    let rule_bump = client.get_settlement_rule(&merchant);
+    assert_eq!(rule_bump, rule_no_bump);
+
+    let ttl_after_bump = env.as_contract(&contract_address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Rule(merchant.clone()))
+    });
+    assert_eq!(
+        ttl_after_bump, RULE_TTL_BUMP,
+        "get_settlement_rule must extend persistent Rule TTL to RULE_TTL_BUMP"
+    );
+}
+
+#[test]
 fn get_settlement_rule_no_bump_does_not_extend_rule_ttl() {
     let (env, client, admins, merchant) = setup();
     let contract_address = client.address.clone();

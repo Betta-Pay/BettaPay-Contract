@@ -1641,3 +1641,72 @@ fn governance_get_deployer_returns_deployer_address() {
 
     assert_eq!(client.get_deployer(), deployer);
 }
+
+#[test]
+fn upgrade_rejects_invalid_wasm_interface_and_emits_no_event() {
+    let (env, client, admins, _recovery) = setup();
+    let invalid_wasm_hash = BytesN::from_array(&env, &[99u8; 32]);
+
+    let events_before = env.events().all().len();
+    let res = client.try_upgrade(&admins, &invalid_wasm_hash);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidWasmInterface.into()
+    );
+
+    // Verify no contract_upgraded event was emitted
+    let events_after = env.events().all().len();
+    assert_eq!(events_after, events_before);
+}
+
+#[test]
+fn contract_version_returns_schema_version_before_and_after_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Test GovernanceContract::version before init
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    assert_eq!(gov_client.version(), CURRENT_SCHEMA_VERSION);
+    assert_eq!(gov_client.version(), 1);
+
+    // Initialize governance contract
+    let deployer = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    gov_client.init(&deployer, &admins, &1u32, &recovery);
+    assert_eq!(gov_client.version(), CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn governance_migrate_idempotency_and_paused_rejection() {
+    let (env, client, admins, _recovery) = setup();
+
+    // 1. Paused migrate returns GovernanceError::Paused
+    client.pause(&admins);
+    assert_eq!(
+        client.try_migrate(&admins).unwrap_err().unwrap(),
+        GovernanceError::Paused.into()
+    );
+    client.unpause(&admins);
+
+    // 2. First call to migrate succeeds and emits migrated event
+    let events_before_first = env.events().all().len();
+    client.migrate(&admins);
+    assert_eq!(env.events().all().len(), events_before_first + 1);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
+    );
+    let (admin, schema_ver): (Address, u32) = FromVal::from_val(&env, &data);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(schema_ver, CURRENT_SCHEMA_VERSION);
+
+    // 3. Second call to migrate is idempotent and succeeds
+    let events_before_second = env.events().all().len();
+    client.migrate(&admins);
+    assert_eq!(env.events().all().len(), events_before_second + 1);
+}
