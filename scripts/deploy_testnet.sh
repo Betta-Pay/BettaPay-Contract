@@ -37,6 +37,12 @@ log_info "Admin address: $ADMIN_ADDRESS"
 assert_stellar_address "$RECOVERY_ADDRESS" "Recovery Address"
 log_info "Recovery address: $RECOVERY_ADDRESS"
 
+if [ "$RECOVERY_ADDRESS" = "$ADMIN_ADDRESS" ]; then
+  log_warn "RECOVERY_ADDRESS equals ADMIN_ADDRESS. Do not use this configuration in production:"
+  log_warn "the 7-day recovery escape hatch is only useful when the recovery key is held separately."
+  log_warn "Set RECOVERY_ADDRESS to a separate cold or multisig address before a production deploy."
+fi
+
 # Fund account via Friendbot
 log_info "Checking friendbot funding status..."
 curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_ADDRESS}" >/dev/null || log_warn "Friendbot funding request skipped or failed (account may already be funded)."
@@ -45,9 +51,6 @@ curl --silent --fail --show-error "https://friendbot.stellar.org/?addr=${ADMIN_A
 log_info "Building and optimizing settlement and governance contracts..."
 make optimize
 log_success "Optimized build completed successfully."
-log_info "Building settlement and governance contracts..."
-make optimize
-log_success "Build completed successfully."
 
 SETTLEMENT_WASM="${ROOT_DIR}/target/optimized/settlement_contract_opt.wasm"
 GOVERNANCE_WASM="${ROOT_DIR}/target/optimized/governance_contract_opt.wasm"
@@ -85,13 +88,13 @@ log_success "Governance contract deployed: $GOVERNANCE_ID"
 # Initialize settlement contract
 log_info "Initializing Settlement contract with admin set..."
 ADMINS="[\"${ADMIN_ADDRESS}\"]"
-invoke_contract_init "$SETTLEMENT_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+invoke_contract_init "$SETTLEMENT_ID" "$BETTAPAY_IDENTITY" "$ADMIN_ADDRESS" "$ADMINS" 1 \
   --governance "$GOVERNANCE_ID" --recovery-address "$RECOVERY_ADDRESS"
 log_success "Settlement contract initialized."
 
 # Initialize governance contract
 log_info "Initializing Governance contract with admin set..."
-invoke_contract_init "$GOVERNANCE_ID" "$BETTAPAY_IDENTITY" "$ADMINS" 1 \
+invoke_contract_init "$GOVERNANCE_ID" "$BETTAPAY_IDENTITY" "$ADMIN_ADDRESS" "$ADMINS" 1 \
   --recovery-address "$RECOVERY_ADDRESS"
 log_success "Governance contract initialized."
 

@@ -771,7 +771,77 @@ fn settlement_rule_exceeding_governance_ceiling_is_rejected() {
         settlement_delay_ledger: 0,
         auto_settle: false,
     };
-    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &over_ceiling_rule);
+    client.set_settlement_rule(
+        &soroban_sdk::vec![&env, admin],
+        &merchant,
+        &over_ceiling_rule,
+    );
+}
+
+/// Issues #1156/#1157: a rule above the governance ceiling is rejected with
+/// `FeeExceedsGovernanceConfig`, and the failed invocation emits no
+/// `fee_ceiling_rejected` event because Soroban rolls back events on panic.
+#[test]
+fn fee_ceiling_rejection_emits_no_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let gov_admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    gov_client.init(
+        &Address::generate(&env),
+        &gov_admins,
+        &1,
+        &Address::generate(&env),
+    );
+    gov_client.set_fee_config(
+        &gov_admins,
+        &GovFeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        },
+    );
+
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &gov_id,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let over_ceiling_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let result = client.try_set_settlement_rule(&admins, &merchant, &over_ceiling_rule);
+    assert_eq!(
+        result.map(|_| ()).map_err(|e| e.map_err(|_| ())),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::FeeExceedsGovernanceConfig as u32
+        )))
+    );
+
+    let events = env.events().all();
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() {
+            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+            assert_ne!(
+                sym,
+                Symbol::new(&env, "fee_ceiling_rejected"),
+                "a reverted ceiling rejection must not emit an event"
+            );
+        }
+    }
 }
 
 /// When governance has no fee config set, the settlement read path falls back
@@ -857,8 +927,13 @@ fn schedule_rejects_unreachable_governance_without_writing_storage() {
     inject_governance(&env, &contract_id, &panicking_gov);
 
     assert_eq!(
-        client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS),
-        Err(Ok(SettlementError::GovernanceCallFailed))
+        client
+            .try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+            .map(|_| ())
+            .map_err(|e| e.map_err(|_| ())),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::GovernanceCallFailed as u32
+        )))
     );
     assert!(!env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
 }

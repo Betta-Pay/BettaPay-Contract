@@ -8,10 +8,10 @@ use crate::policy::{
     PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_admin_and_not_paused, assert_not_paused, assert_payments_readable,
-    decrement_payment_count, increment_payment_count, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_payment_count,
-    read_rule_or_default, read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
+    assert_not_paused, assert_payments_readable, decrement_payment_count, increment_payment_count,
+    is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_min_payment_amount,
+    read_payment_count, read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
+    verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -139,6 +139,7 @@ fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Bps;
     use proptest::prelude::*;
     use proptest::{prop_assert, prop_assert_eq, prop_assume, proptest};
 
@@ -671,7 +672,7 @@ impl SettlementContract {
     /// Remove several of one merchant's payment references in a single call
     /// after the configured admin threshold has authorized the operation.
     ///
-    /// Issue #983: the bounded batch form of [`prune_payment`](Self::prune_payment).
+    /// Issue #983: the bounded batch form of `prune_payment`.
     /// References that are not stored (never existed, already pruned, or
     /// repeated within `refs`) are skipped as no-ops, so a cleanup can be
     /// retried safely. When at least one record is actually deleted, one
@@ -715,15 +716,11 @@ impl SettlementContract {
 
         decrement_payment_count(&env, &merchant, removed);
 
-        // Keep the no-op path silent, matching `prune_payment`: indexers must
-        // never observe a prune event that removed nothing.
-        if removed > 0 {
-            let admin = signers.get(0).unwrap();
-            env.events().publish(
-                (Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT), merchant),
-                (admin, removed),
-            );
-        }
+        let admin = signers.get(0).unwrap();
+        env.events().publish(
+            (Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT), merchant),
+            (admin, removed),
+        );
         removed
     }
 
@@ -870,7 +867,7 @@ impl SettlementContract {
     /// matching [`MAX_PAYMENTS_PER_MERCHANT`](crate::policy::MAX_PAYMENTS_PER_MERCHANT)
     /// usage (issue #980).
     ///
-    /// Enforces the same read authorization as [`Self::get_payments`]: pass an
+    /// Enforces the same read authorization as `get_payments`: pass an
     /// empty `signers` vector to authorize as the merchant, or a non-empty
     /// vector of admin signers to authorize through the configured admin
     /// threshold. A registered merchant that has never stored a payment
