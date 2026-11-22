@@ -176,7 +176,11 @@ pub fn bump_instance_ttl(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, testutils::Address as _, vec};
+    use soroban_sdk::{
+        contract,
+        testutils::{storage::Instance, Address as _, Ledger},
+        vec,
+    };
 
     /// No-op contract used only to obtain a real, registered contract
     /// address for [`Env::as_contract`] — instance storage helpers like
@@ -224,6 +228,28 @@ mod tests {
         env.as_contract(&governance_like, || {
             assert!(is_paused(&env));
         });
+    }
+
+    #[test]
+    fn bump_instance_ttl_extends_ttl_below_threshold() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+
+        let instance_ttl = || env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .extend_ttl(TTL_BUMP_LEDGERS, TTL_BUMP_LEDGERS);
+        });
+        env.ledger().set_sequence_number(
+            env.ledger().sequence() + TTL_BUMP_LEDGERS - TTL_THRESHOLD_LEDGERS / 2,
+        );
+        let ttl_before = instance_ttl();
+        assert!(ttl_before < TTL_THRESHOLD_LEDGERS);
+
+        env.as_contract(&contract_id, || bump_instance_ttl(&env));
+
+        assert!(instance_ttl() >= TTL_BUMP_LEDGERS);
     }
 
     #[test]

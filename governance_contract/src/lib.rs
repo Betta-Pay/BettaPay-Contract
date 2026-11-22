@@ -143,6 +143,7 @@
 //! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
 //! | 202 | `InvalidAnchor` | Asset or anchor address is zero-address, or asset equals anchor |
+//! | 203 | `ExecutionDelayTooLong` | Recovery delay overflows the ledger timestamp |
 //!
 //! ## Event Conventions
 //!
@@ -363,6 +364,7 @@ const _: () = {
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidAnchor as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::ExecutionDelayTooLong as u32 >= error_codes::GOVERNANCE_RANGE_START);
 };
 
 #[contract]
@@ -520,6 +522,10 @@ impl GovernanceContract {
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
+        if new_wasm_hash == BytesN::from_array(&env, &[0; 32]) {
+            panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
+        }
+
         // Verify the new Wasm supports the required BettaPay interface
         // (version 1) before overwriting the running code. See
         // `bettapay_common::upgrade::probe_supports_interface`.
@@ -558,14 +564,20 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::RecoveryAlreadyPending);
         }
 
+        let execute_after = env
+            .ledger()
+            .timestamp()
+            .checked_add(RECOVERY_DELAY_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, GovernanceError::ExecutionDelayTooLong));
         let pending = PendingRecovery {
             new_admin: new_admin.clone(),
-            execute_after: env.ledger().timestamp() + RECOVERY_DELAY_SECONDS,
+            execute_after,
             initiated_by: recovery_address.clone(),
         };
         env.storage()
             .instance()
             .set(&CommonDataKey::PendingRecovery, &pending);
+        storage::bump_instance_ttl(&env);
         events::emit_recovery_initiated(&env, &recovery_address, &new_admin, pending.execute_after);
     }
 
