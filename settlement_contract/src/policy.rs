@@ -6,7 +6,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 /// Minimum gross payment amount, in the asset's smallest unit.
 ///
 /// Derived as `BPS_DENOMINATOR / 100`. Each fee leg rounds up
-/// ([`Bps::calculate_fee_ceil`]) and so over-collects by strictly less than one
+/// (`Bps::calculate_fee_ceil`) and so over-collects by strictly less than one
 /// unit; at 100 units that unit is 1 % of the gross, capping the inflation of a
 /// leg's effective rate below 100 bps over its configured bps. Below the floor the
 /// distortion is unbounded — 1 unit charged the minimum legal fee (`MIN_FEE_BPS`,
@@ -15,7 +15,7 @@ use bettapay_common::constants::MIN_FEE_BPS;
 /// exact. Nothing but dust is excluded: on a 7-decimal Soroban asset, 100 base
 /// units is 10^-5 of one token.
 ///
-/// Enforced by [`SettlementContract::store_payment_reference`], which panics with
+/// Enforced by `SettlementContract::store_payment_reference`, which panics with
 /// [`AmountTooSmall`](crate::errors::SettlementError::AmountTooSmall). It does **not** guarantee a
 /// non-negative merchant payout — extreme fee rules can still make the two
 /// rounded-up legs exceed the gross; see `calculate_split` for that edge case.
@@ -29,6 +29,14 @@ pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
 /// pruned (`prune_payments`) in a single batch call
 pub const MAX_PAYMENTS_BATCH: u32 = 100;
 
+/// Maximum number of scheduled operations that `cancel_all` may cancel in a
+/// single call (issue #975). Soroban cannot enumerate persistent
+/// `ScheduledOperation` keys, so callers supply the explicit list to cancel;
+/// this cap keeps a single incident-response call's gas and transaction
+/// footprint bounded and predictable, matching `MAX_PAYMENTS_BATCH`'s role
+/// for payment batches.
+pub const MAX_CANCEL_ALL_BATCH: u32 = 50;
+
 /// Fixed byte length of a payment reference (`BytesN<32>`), named so callers
 /// and docs have a canonical value instead of a bare `32`. Enforced
 /// structurally by the `BytesN<32>` type, not by a runtime check.
@@ -40,9 +48,10 @@ pub const MAX_PAYMENT_REFERENCE_LEN: u32 = 32;
 /// and each entry accrues rent via TTL extension, so an unbounded per-merchant
 /// history would let a single merchant bloat ledger state without bound.
 /// A single named cap gives tests and docs one canonical value to assert
-/// against. Enforcement (rejecting `store_payment_reference` past this cap)
-/// is intentionally left to a separate standalone change (issue #775 scope:
-/// constant plus docs only, no enforcement logic here).
+/// against. [`SettlementContract::store_payment_reference`](crate::SettlementContract::store_payment_reference)
+/// rejects a new payment once the counter reaches this cap, with
+/// [`MaxPaymentsReached`](crate::errors::SettlementError::MaxPaymentsReached);
+/// pruning via `prune_payment` or `prune_payments` frees capacity again (issue #1104).
 pub const MAX_PAYMENTS_PER_MERCHANT: u32 = 10_000;
 
 /// Approximate ledgers per day on Stellar (~5s per ledger).

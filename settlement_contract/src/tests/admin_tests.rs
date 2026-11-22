@@ -5,12 +5,12 @@ use crate::types::DataKey;
 use crate::*;
 use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke};
-use soroban_sdk::{Address, Env, FromVal, IntoVal, Symbol, TryFromVal};
+use soroban_sdk::{Address, Env, FromVal, IntoVal, Symbol, TryFromVal, Vec};
 
 use bettapay_common::constants::{
     BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
 };
-use bettapay_common::events::{AdminTransferred, PendingRecovery};
+use bettapay_common::events::{AdminTransferred, PendingRecovery, INITIALIZED_EVENT};
 use bettapay_common::storage::CommonDataKey;
 
 use super::reentrant_governance::{stash_target, ReentrantGovernance};
@@ -40,9 +40,35 @@ fn emits_event_on_initialization() {
         &recovery,
     );
 
-    // init stores admin/governance/recovery; event emission may vary by version.
-    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, admin]);
+    assert_eq!(client.get_admin(), soroban_sdk::vec![&env, admin.clone()]);
     assert_eq!(client.get_governance(), governance);
+    assert!(!client.is_paused());
+
+    // init publishes exactly one `initialized` event with the primary admin
+    // as its data, matching governance_contract::init.
+    let events = env.events().all();
+    assert_eq!(events.len(), 1, "exactly one event emitted on init");
+    let (_contract_id, topics, data) = events.get(0).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, INITIALIZED_EVENT)
+    );
+    assert_eq!(Address::from_val(&env, &data), admin);
+}
+
+#[test]
+fn init_seeds_paused_key_to_false() {
+    let (env, client, _admins, _merchant) = setup();
+    assert!(!client.is_paused());
+    env.as_contract(&client.address, || {
+        assert!(env.storage().instance().has(&CommonDataKey::Paused));
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, bool>(&CommonDataKey::Paused),
+            Some(false)
+        );
+    });
 }
 
 #[test]
@@ -230,6 +256,93 @@ fn get_admin_panics_before_init() {
 }
 
 // ---------------------------------------------------------------------------
+// change_threshold
+// ---------------------------------------------------------------------------
+
+fn contract_error(error: SettlementError) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(error as u32)
+}
+
+/// Registers a 2-of-2 settlement contract (both admins must sign admin calls).
+fn setup_two_of_two() -> (Env, SettlementContractClient<'static>, Vec<Address>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin1, admin2];
+    let governance = register_governance(&env);
+    let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+    (env, client, admins)
+}
+
+#[test]
+fn change_threshold_allows_2_of_2_to_lower_to_1() {
+    let (env, client, admins) = setup_two_of_two();
+
+    client.change_threshold(&admins, &1);
+    assert_eq!(client.get_threshold(), 1);
+    assert_eq!(
+        Symbol::from_val(&env, &env.events().all().last().unwrap().1.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::THRESHOLD_CHANGED_EVENT)
+    );
+}
+
+#[test]
+fn change_threshold_keeps_1_of_2_requirement_at_two_signers() {
+    let (env, client, admins) = setup_two_of_two();
+    client.change_threshold(&admins, &1);
+
+    // The cap only relaxes the N-of-N case; with two admins and threshold 1
+    // the old "+1" rule still requires both signatures.
+    let single_signer = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert_eq!(
+        client.try_change_threshold(&single_signer, &2),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+}
+
+#[test]
+fn change_threshold_rejects_sub_threshold_signers() {
+    let (env, client, admins) = setup_two_of_two();
+    let single_signer = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    assert_eq!(
+        client.try_change_threshold(&single_signer, &1),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+}
+
+#[test]
+fn change_threshold_authenticates_before_validating_new_threshold() {
+    let (env, client, admins) = setup_two_of_two();
+    let unauthorized = soroban_sdk::vec![&env, Address::generate(&env)];
+
+    // An unauthenticated caller must always see Unauthorized, never a
+    // validation error revealing the admin count or current threshold.
+    assert_eq!(
+        client.try_change_threshold(&unauthorized, &0),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+    assert_eq!(
+        client.try_change_threshold(&unauthorized, &2),
+        Err(Ok(contract_error(SettlementError::Unauthorized)))
+    );
+
+    // Authorized callers still get the ordinary validation error.
+    assert_eq!(
+        client.try_change_threshold(&admins, &0),
+        Err(Ok(contract_error(SettlementError::InvalidThreshold)))
+    );
+    assert_eq!(
+        client.try_change_threshold(&admins, &3),
+        Err(Ok(contract_error(SettlementError::InvalidThreshold)))
+    );
+}
+
+// ---------------------------------------------------------------------------
 // transfer_admin
 // ---------------------------------------------------------------------------
 
@@ -275,10 +388,7 @@ fn every_admin_writer_preserves_the_vector_shape() {
 #[test]
 fn failed_recovery_keeps_pending_target() {
     let (env, client, _admins, _) = setup();
-    let zero_admin = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_admin = bettapay_common::storage::zero_address(&env);
     let pending = PendingRecovery {
         new_admin: zero_admin.clone(),
         execute_after: env.ledger().timestamp(),
@@ -304,10 +414,7 @@ fn failed_recovery_keeps_pending_target() {
 #[should_panic(expected = "Error(Contract, #306)")]
 fn rejects_zero_address_admin_transfer() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     client.transfer_admin(&admins, &soroban_sdk::vec![&env, zero_address], &1);
 }
 
@@ -337,7 +444,6 @@ fn rejects_same_admin_transfer() {
 #[test]
 fn emits_event_on_admin_transfer() {
     let (env, client, admins, _merchant) = setup();
-    let old_admin = admins.get(0).unwrap();
     let new_admin = Address::generate(&env);
 
     let before = env.events().all().len();
@@ -361,8 +467,33 @@ fn emits_event_on_admin_transfer() {
     );
 
     let payload: AdminTransferred = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, old_admin);
-    assert_eq!(payload.new_admin, new_admin);
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, soroban_sdk::vec![&env, new_admin]);
+}
+
+// Issue #883: verify transfer_admin emits the exact old_admins in AdminTransferred
+// and preserves the exclusivity check between admins and merchants.
+#[test]
+fn transfer_admin_emits_expected_old_admins_and_enforces_exclusivity() {
+    let (env, client, admins, merchant) = setup();
+
+    // Enforce exclusivity: attempting to transfer to a registered merchant must fail with InvalidAdmin.
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, merchant.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidAdmin as u32)
+    );
+
+    // Valid transfer emits AdminTransferred with the exact old_admins
+    let new_admin = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, new_admin.clone()];
+    client.transfer_admin(&admins, &new_admins, &1);
+
+    let events = env.events().all();
+    let (_contract_id, _topics, data) = events.last().unwrap();
+    let payload: AdminTransferred = AdminTransferred::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, new_admins);
 }
 
 // ---------------------------------------------------------------------------
@@ -899,10 +1030,7 @@ fn set_default_rule_accepts_re_setting_an_unchanged_valid_rule() {
     client.set_default_rule(&admins, &rule);
 
     let stored = client.get_default_rule().unwrap();
-    assert_eq!(stored.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(stored.settlement_delay_ledger, rule.settlement_delay_ledger);
-    assert_eq!(stored.auto_settle, rule.auto_settle);
+    assert_eq!(stored, rule);
 }
 
 #[test]
@@ -1177,6 +1305,29 @@ fn init_threshold_above_admin_count_rejects_with_invalid_threshold() {
     });
 }
 
+#[test]
+fn init_rejects_zero_deployer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = bettapay_common::storage::zero_address(&env);
+
+    let res = client.try_init(&deployer, &admins, &1, &governance, &recovery);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::ZeroAddress as u32)
+    );
+
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&DataKey::Deployer));
+    });
+}
+
 // Issue #904: transfer_admin with threshold greater than new_admins.len() returns
 // InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
 #[test]
@@ -1321,6 +1472,125 @@ fn single_signer_cannot_change_two_of_two_threshold() {
 
     client.change_threshold(&admins, &1);
     assert_eq!(client.get_threshold(), 1);
+}
+
+#[test]
+fn update_recovery_address_rotates_address_and_gates_access() {
+    let (env, client, admins, _merchant) = setup();
+    let old_recovery = client.get_recovery_address();
+    let new_recovery = Address::generate(&env);
+
+    let before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    let events = env.events().all();
+    assert_eq!(events.len(), before + 1);
+
+    assert_eq!(client.get_recovery_address(), new_recovery);
+
+    let last = events.last().unwrap();
+    let (contract_id, topics, data) = last;
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics.len(), 2);
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(topics.get(1).unwrap(), new_recovery.clone().into_val(&env));
+
+    let non_admin = Address::generate(&env);
+    let res_non_admin = client.try_update_recovery_address(
+        &soroban_sdk::vec![&env, non_admin],
+        &Address::generate(&env),
+    );
+    assert_eq!(
+        res_non_admin.unwrap_err().unwrap(),
+        SettlementError::Unauthorized.into()
+    );
+
+    let zero_addr = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let res_zero = client.try_update_recovery_address(&admins, &zero_addr);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+
+    let target = Address::generate(&env);
+    let res_old = client.try_initiate_recovery(&target);
+    assert!(res_old.is_err());
+
+    client.initiate_recovery(&Address::generate(&env));
+    let _ = old_recovery;
+}
+
+// ---------------------------------------------------------------------------
+// recovery address separation of duties (admin/merchant exclusion, no-op)
+// ---------------------------------------------------------------------------
+
+/// `init` must reject a recovery address that is one of the initial admins.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn init_rejects_admin_as_recovery_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin.clone()];
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    client.init(&deployer, &admins, &1, &governance, &admin);
+}
+
+/// `update_recovery_address` must reject an active admin.
+#[test]
+fn update_recovery_address_rejects_active_admin() {
+    let (_env, client, admins, _merchant) = setup();
+    let admin = admins.get(0).unwrap();
+
+    let res = client.try_update_recovery_address(&admins, &admin);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+}
+
+/// `update_recovery_address` must reject a registered merchant.
+#[test]
+fn update_recovery_address_rejects_registered_merchant() {
+    let (_env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let res = client.try_update_recovery_address(&admins, &merchant);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+}
+
+/// A no-op update (`new_recovery == current`) must be rejected with a typed
+/// error, leave storage untouched and emit no `recovery_address_updated` event.
+#[test]
+fn update_recovery_address_rejects_identical_address_without_event() {
+    let (env, client, admins, _merchant) = setup();
+    let current = client.get_recovery_address();
+    let before = env.events().all().len();
+
+    let res = client.try_update_recovery_address(&admins, &current);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidRecoveryAddress.into()
+    );
+
+    assert_eq!(client.get_recovery_address(), current);
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "a no-op recovery address update must not emit an event"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1768,12 +2038,58 @@ fn update_governance_stores_validated_address() {
 #[should_panic(expected = "Error(Contract, #309)")]
 fn update_governance_rejects_zero_address() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.update_governance(&admins, &zero_address);
+}
+
+/// `init` must reject the settlement contract itself as governance: setting
+/// governance to `env.current_contract_address()` breaks cross-contract calls
+/// such as `get_fee_config`.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn init_rejects_contract_address_as_governance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_address = Address::generate(&env);
+    let contract_id = env.register_contract(Some(&contract_address), SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
+
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin],
+        &1,
+        &contract_address,
+        &recovery,
+    );
+}
+
+/// The direct `update_governance` path must reject the contract's own address.
+#[test]
+fn update_governance_rejects_contract_address() {
+    let (_env, client, admins, _merchant) = setup();
+    let self_address = client.address.clone();
+
+    let res = client.try_update_governance(&admins, &self_address);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::InvalidGovernance.into()
+    );
+}
+
+/// Updating governance to the address already stored is a no-op that used to
+/// succeed and emit a redundant `governance_updated` event. Both update paths
+/// must reject it with `InvalidGovernance` (#309).
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn update_governance_rejects_current_governance() {
+    let (_env, client, admins, _merchant) = setup();
+    let current_governance = client.get_governance();
+
+    client.update_governance(&admins, &current_governance);
 }
 
 #[test]
@@ -2175,10 +2491,7 @@ fn paused_with_bad_auth_yields_paused_over_unauthorized() {
 #[should_panic(expected = "Error(Contract, #306)")]
 fn register_merchant_rejects_zero_address() {
     let (env, client, admins, _merchant) = setup();
-    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     client.register_merchant(&admins, &zero_address);
 }
 
@@ -2188,4 +2501,88 @@ fn register_merchant_accepts_valid_address() {
     assert!(!client.is_merchant_registered(&merchant));
     client.register_merchant(&admins, &merchant);
     assert!(client.is_merchant_registered(&merchant));
+}
+
+#[test]
+fn duplicate_merchant_registration_preserves_marker_and_ttl() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.sequence_number += 100);
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+
+    assert_eq!(
+        client
+            .try_register_merchant(&admins, &merchant)
+            .unwrap_err()
+            .unwrap(),
+        SettlementError::MerchantExists.into()
+    );
+
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+    assert_eq!(ttl_after, ttl_before);
+    assert!(client.is_merchant_registered(&merchant));
+}
+
+#[test]
+fn re_registering_merchant_clears_archived_tombstone() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.unregister_merchant(&admins, &merchant);
+
+    let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+    assert!(env.as_contract(&client.address, || {
+        env.storage().persistent().has(&archived_key)
+    }));
+
+    client.register_merchant(&admins, &merchant);
+
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(!env.as_contract(&client.address, || {
+        env.storage().persistent().has(&archived_key)
+    }));
+}
+
+#[test]
+fn zero_address_and_empty_string_validation_tests() {
+    let (env, client, admins, _merchant) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+
+    // Registering merchant with zero address must fail with ZeroAddress (306)
+    let res = client.try_register_merchant(&admins, &zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Transferring admin with zero address must fail with ZeroAddress (306)
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, zero.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Initiating recovery with zero address target must fail with ZeroAddress (306)
+    let res = client.try_initiate_recovery(&zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    // Empty-string address input is rejected during parsing
+    let empty_str = soroban_sdk::String::from_str(&env, "");
+    let empty_res = Address::try_from_string(&empty_str);
+    assert!(
+        empty_res.is_err(),
+        "empty string must fail Address conversion before contract invocation"
+    );
 }

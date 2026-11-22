@@ -14,6 +14,7 @@ use bettapay_common::events;
 use super::setup;
 
 const EXPECTED_EVENT_TOPICS: &[&str] = &[
+    "initialized",
     "admin_transferred",
     "paused",
     "unpaused",
@@ -23,9 +24,9 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "contract_upgraded",
     "threshold_changed",
     "recovery_address_updated",
-    "initialized",
     "migrated",
     "sys_param_updated",
+    "sys_param_removed",
     "fee_config_updated",
     "anchor_upserted",
     "anchor_removed",
@@ -39,10 +40,10 @@ const EXPECTED_EVENT_TOPICS: &[&str] = &[
     "bootstrap_fallback",
     "payment_stored",
     "payments_pruned",
+    "payment_pruned",
     "op_scheduled",
     "op_executed",
     "op_cancelled",
-    "fee_ceiling_rejected",
 ];
 
 /// Builds the registry as `Symbol`s once per `Env`.
@@ -95,6 +96,10 @@ fn lifecycle_events_use_only_registered_topics() {
     client.store_payment_reference(&merchant, &reference, &1_000);
     client.prune_payments(&admins, &merchant, &soroban_sdk::vec![&env, reference]);
 
+    let single_reference = BytesN::from_array(&env, &[4; 32]);
+    client.store_payment_reference(&merchant, &single_reference, &1_000);
+    client.prune_payment(&admins, &merchant, &single_reference);
+
     client.clear_settlement_rule(&admins, &merchant);
     client.unregister_merchant(&admins, &merchant);
 
@@ -126,8 +131,9 @@ fn lifecycle_events_use_only_registered_topics() {
     assert_all_topics_registered(&env);
 }
 
-/// `change_threshold` requires `current_threshold + 1` signers, so it needs
-/// its own multi-admin setup independent of `setup()`'s single admin.
+/// `change_threshold` requires `current_threshold + 1` signers (capped at the
+/// admin count), so it needs its own multi-admin setup independent of
+/// `setup()`'s single admin.
 #[test]
 fn threshold_changed_topic_is_registered() {
     let env = Env::default();
@@ -168,6 +174,7 @@ fn conformity_tested_topics_are_all_registered() {
         events::SETTLEMENT_RULE_CLEARED_EVENT,
         events::DEFAULT_RULE_UPDATED_EVENT,
         events::PAYMENT_STORED_EVENT,
+        events::PAYMENT_PRUNED_EVENT,
         events::OP_SCHEDULED_EVENT,
         events::OP_EXECUTED_EVENT,
         events::OP_CANCELLED_EVENT,

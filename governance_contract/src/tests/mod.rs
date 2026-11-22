@@ -210,10 +210,7 @@ fn governance_rejects_zero_threshold_init() {
 #[should_panic(expected = "Error(Contract, #6)")]
 fn governance_rejects_zero_address_admin_transfer() {
     let (env, client, admins, _recovery) = setup();
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.transfer_admin(&admins, &vec![&env, zero_address], &1);
 }
@@ -335,31 +332,27 @@ fn fee_config_event_emitted_with_correct_fields() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_fee_config_rejects_fees_exceeding_ceiling() {
+fn set_fee_config_rejects_individual_fee_exceeding_max_without_overwriting_config() {
     let (_env, client, admins, _recovery) = setup();
-
-    // Sum exceeds BPS_DENOMINATOR
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_001,
+    let previous = FeeConfig {
+        platform_fee_bps: 120,
+        network_fee_bps: 35,
     };
+    client.set_fee_config(&admins, &previous);
 
-    client.set_fee_config(&admins, &cfg);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn set_fee_config_rejects_individual_fee_exceeding_max() {
-    let (_env, client, admins, _recovery) = setup();
-
-    // Individual fee exceeds MAX_FEE_BPS (governance trust root)
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_001,
-        network_fee_bps: 0,
+    let invalid = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS + 1,
+        network_fee_bps: MIN_FEE_BPS,
     };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
+    );
 
-    client.set_fee_config(&admins, &cfg);
+    let stored = client.get_fee_config().expect("previous config remains");
+    assert_eq!(stored.platform_fee_bps, previous.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, previous.network_fee_bps);
 }
 
 // -----------------------------------------------------------------------
@@ -368,49 +361,45 @@ fn set_fee_config_rejects_individual_fee_exceeding_max() {
 
 /// Verifies the critical sum-boundary invariant: a config whose
 /// platform + network fee sum equals exactly `BPS_DENOMINATOR` (10 000)
-/// must be accepted, while a sum of 10 001 must be rejected.
-///
-/// Both legs are individually within `[MIN_FEE_BPS, MAX_FEE_BPS]`, so
-/// only the sum check distinguishes the two cases.
+/// must be accepted and readable, while a sum of 10 001 must be rejected
+/// with `InvalidFeeBps` without overwriting the accepted configuration.
 #[test]
-fn fee_config_sum_at_boundary_10000_is_accepted() {
+fn fee_config_sum_boundary_and_overflow_are_enforced() {
     let (_env, client, admins, _recovery) = setup();
 
-    // 5_000 + 5_000 = 10_000 == BPS_DENOMINATOR — must succeed.
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_000,
+    // MAX_FEE_BPS + MAX_FEE_BPS == BPS_DENOMINATOR — must succeed.
+    let at_boundary = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS,
+        network_fee_bps: MAX_FEE_BPS,
     };
     assert!(
-        client.try_set_fee_config(&admins, &cfg).is_ok(),
+        client.try_set_fee_config(&admins, &at_boundary).is_ok(),
         "FeeConfig {{5000, 5000}} with sum == BPS_DENOMINATOR must be accepted"
     );
-}
+    let stored = client
+        .get_fee_config()
+        .expect("accepted boundary config must be readable");
+    assert_eq!(stored.platform_fee_bps, at_boundary.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, at_boundary.network_fee_bps);
 
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn fee_config_sum_above_boundary_10001_is_rejected() {
-    let (_env, client, admins, _recovery) = setup();
-
-    // 5_000 + 5_001 would be 10_001 > BPS_DENOMINATOR, but 5_001
-    // already exceeds MAX_FEE_BPS. Use 5_000 + 5_000 + 1 split as
-    // 4_999 + 5_002 — but 5_002 > MAX_FEE_BPS too.  The only way to
-    // reach sum == 10_001 with both legs <= MAX_FEE_BPS (5_000) is
-    // impossible, so we exercise the sum guard with a config that has
-    // one leg at MAX_FEE_BPS and the other one above it, which triggers
-    // the individual-leg check first.  To isolate the *sum* guard
-    // specifically, we need both legs <= MAX_FEE_BPS but sum > 10_000.
-    // That is impossible given MAX_FEE_BPS = 5_000:
-    // max(platform) + max(network) = 5_000 + 5_000 = 10_000 exactly.
-    // The sum guard is therefore only reachable when at least one leg
-    // exceeds MAX_FEE_BPS; since the individual check fires first, we
-    // confirm the rejection with a straightforwardly invalid pair.
-    let cfg = FeeConfig {
-        platform_fee_bps: 5_000,
-        network_fee_bps: 5_001,
+    // With MAX_FEE_BPS at half the denominator, an over-sum config necessarily
+    // also violates an individual bound. It must still fail with the typed
+    // InvalidFeeBps error and preserve the last accepted value.
+    let invalid = FeeConfig {
+        platform_fee_bps: MAX_FEE_BPS,
+        network_fee_bps: MAX_FEE_BPS + 1,
     };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
+    );
 
-    client.set_fee_config(&admins, &cfg);
+    let stored = client
+        .get_fee_config()
+        .expect("accepted boundary config remains");
+    assert_eq!(stored.platform_fee_bps, at_boundary.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, at_boundary.network_fee_bps);
 }
 
 #[test]
@@ -431,33 +420,27 @@ fn upserts_and_removes_anchor() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_with_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
     let anchor = Address::generate(&env);
 
     client.upsert_anchor(&admins, &zero_address, &anchor);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_with_zero_address_anchor() {
     let (env, client, admins, _recovery) = setup();
     let asset = Address::generate(&env);
-    let zero_address = Address::from_string(&String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero_address = bettapay_common::storage::zero_address(&env);
 
     client.upsert_anchor(&admins, &asset, &zero_address);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn rejects_upsert_anchor_where_asset_equals_anchor() {
     let (env, client, admins, _recovery) = setup();
     let asset = Address::generate(&env);
@@ -770,6 +753,24 @@ fn changes_threshold_with_valid_signatures() {
     assert_eq!(client.get_threshold(), 2);
 }
 
+/// The shared `threshold_changed` topic must carry the same canonical
+/// `(current_threshold, new_threshold)` payload as settlement_contract, so a
+/// single indexer decoder works for events from either contract.
+#[test]
+fn threshold_changed_payload_matches_settlement_contract() {
+    let (env, client, admins, _recovery) = super::setup_with(2, 2);
+    client.change_threshold(&admins, &1);
+
+    let events = env.events().all();
+    let (_contract, topics, data) = events.get(events.len() - 1).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::THRESHOLD_CHANGED_EVENT)
+    );
+    let (current, new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((current, new), (2, 1));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn change_threshold_fails_with_insufficient_signatures() {
@@ -820,8 +821,8 @@ fn gov_two_of_two_can_lower_threshold() {
     );
 }
 
-// Issue #565: setting a threshold above the admin count must surface
-// `InvalidThreshold` (#14), not `Unauthorized` (#3) from the auth gate.
+// Authorized caller setting a threshold above the admin count must surface
+// `InvalidThreshold` (#14).
 #[test]
 #[should_panic(expected = "Error(Contract, #14)")]
 fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
@@ -838,11 +839,11 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &recovery);
 
-    // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
+    // Threshold 3 > admins.len() 2 — authorized caller receives InvalidThreshold.
     client.change_threshold(&admins, &3);
 }
 
-// Issue #565: threshold == 0 must also be rejected before the auth gate.
+// Authorized caller setting threshold == 0 must surface `InvalidThreshold` (#14).
 #[test]
 #[should_panic(expected = "Error(Contract, #14)")]
 fn change_threshold_zero_rejects_with_invalid_threshold() {
@@ -860,6 +861,54 @@ fn change_threshold_zero_rejects_with_invalid_threshold() {
     client.init(&deployer, &admins, &2, &recovery);
 
     client.change_threshold(&admins, &0);
+}
+
+#[test]
+fn change_threshold_unauthorized_caller_gets_unauthorized_even_when_out_of_bounds() {
+    let (env, client, _admins, _recovery) = setup_with(2, 1);
+    let non_admin = Address::generate(&env);
+    let caller = vec![&env, non_admin];
+
+    let zero_res = client.try_change_threshold(&caller, &0);
+    assert_eq!(
+        zero_res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+
+    let above_res = client.try_change_threshold(&caller, &99);
+    assert_eq!(
+        above_res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+}
+
+#[test]
+fn change_threshold_noop_rejects_with_same_admin_and_emits_no_event() {
+    let (env, client, admins, _recovery) = setup_with(3, 2);
+    let two_signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    let events_before = env.events().all().len();
+
+    let res = client.try_change_threshold(&two_signers, &2);
+    assert_eq!(res.unwrap_err().unwrap(), GovernanceError::SameAdmin.into());
+    assert_eq!(env.events().all().len(), events_before);
+}
+
+#[test]
+fn change_threshold_exact_quorum_boundary() {
+    let (env, client, admins, _recovery) = setup_with(3, 2);
+    let one_signer = vec![&env, admins.get(0).unwrap()];
+    let two_signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+
+    // current_threshold - 1 signers is rejected with Unauthorized.
+    let res = client.try_change_threshold(&one_signer, &3);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::Unauthorized.into()
+    );
+
+    // Exactly current_threshold (2) signers succeeds without requiring current_threshold + 1.
+    client.change_threshold(&two_signers, &3);
+    assert_eq!(client.get_threshold(), 3);
 }
 
 // -----------------------------------------------------------------------
@@ -1120,6 +1169,7 @@ fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
     });
     assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
 
+    let events_before = env.events().all().len();
     client.migrate(&admins);
     client.migrate(&admins);
 
@@ -1129,17 +1179,17 @@ fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
             .get::<_, u32>(&DataKey::SchemaVersion)
     });
     assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
-
-    let (_, topics, _) = env.events().all().last().unwrap();
     assert_eq!(
-        Symbol::from_val(&env, &topics.get(0).unwrap()),
-        Symbol::new(&env, events::MIGRATED_EVENT)
+        env.events().all().len(),
+        events_before,
+        "no-op migrate must not emit MIGRATED_EVENT"
     );
 }
 
 /// Issue #984: version-bump simulation. A stored `SchemaVersion` below
 /// `CURRENT_SCHEMA_VERSION` (as after an upgrade that bumped the constant) is
-/// advanced by `migrate`, and a second call is then a no-op.
+/// advanced by `migrate` and emits `MIGRATED_EVENT`, while a second call is
+/// a no-op that emits no event.
 #[test]
 fn migrate_advances_schema_version_below_current() {
     let (env, client, admins, _recovery) = setup();
@@ -1158,11 +1208,24 @@ fn migrate_advances_schema_version_below_current() {
     });
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION - 1));
 
+    let events_before = env.events().all().len();
     client.migrate(&admins);
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(env.events().all().len(), events_before + 1);
+    let (_, topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::MIGRATED_EVENT)
+    );
 
+    let events_after_first = env.events().all().len();
     client.migrate(&admins);
     assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(
+        env.events().all().len(),
+        events_after_first,
+        "second migrate call is a no-op and must not emit MIGRATED_EVENT"
+    );
 }
 
 #[test]
@@ -1216,6 +1279,36 @@ fn get_admin_uses_50k_100k_instance_ttl_policy() {
         ttl >= READ_INSTANCE_TTL_BUMP,
         "expected get_admin to bump instance TTL to at least {READ_INSTANCE_TTL_BUMP}, got {ttl}"
     );
+}
+
+#[test]
+fn get_threshold_bumps_instance_ttl_like_get_admin() {
+    use soroban_sdk::testutils::storage::Instance;
+    let (env, client, _admins, _recovery) = setup();
+
+    let instance_ttl = || env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    // Pin the TTL to the read bump, then let it fall below the threshold
+    // without expiring.
+    let decay = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .extend_ttl(READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_BUMP);
+        });
+        env.ledger().set_sequence_number(
+            env.ledger().sequence() + READ_INSTANCE_TTL_BUMP - READ_INSTANCE_TTL_THRESHOLD / 5,
+        );
+        assert!(instance_ttl() < READ_INSTANCE_TTL_THRESHOLD);
+    };
+
+    decay();
+    client.get_admin();
+    let after_admin = instance_ttl();
+    assert_eq!(after_admin, READ_INSTANCE_TTL_BUMP);
+
+    decay();
+    client.get_threshold();
+    assert_eq!(instance_ttl(), after_admin);
 }
 
 // -----------------------------------------------------------------------
@@ -1374,20 +1467,31 @@ fn cancel_recovery_by_admin_still_succeeds() {
 }
 
 // -----------------------------------------------------------------------
-// Zero-value fee config rejection
+// Below-minimum fee config rejection
 // -----------------------------------------------------------------------
 
 #[test]
-fn zero_fee_config_rejected() {
+fn below_min_fee_config_rejected_without_overwriting_config() {
     let (_env, client, admins, _recovery) = setup();
-    let cfg = FeeConfig {
-        platform_fee_bps: 0,
-        network_fee_bps: 100,
+    let previous = FeeConfig {
+        platform_fee_bps: MIN_FEE_BPS,
+        network_fee_bps: MIN_FEE_BPS,
     };
-    assert!(
-        client.try_set_fee_config(&admins, &cfg).is_err(),
-        "FeeConfig with platform_fee_bps=0 must be rejected with InvalidFeeBps"
+    client.set_fee_config(&admins, &previous);
+
+    let invalid = FeeConfig {
+        platform_fee_bps: MIN_FEE_BPS - 1,
+        network_fee_bps: MIN_FEE_BPS,
+    };
+    let result = client.try_set_fee_config(&admins, &invalid);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidFeeBps.into()
     );
+
+    let stored = client.get_fee_config().expect("previous config remains");
+    assert_eq!(stored.platform_fee_bps, previous.platform_fee_bps);
+    assert_eq!(stored.network_fee_bps, previous.network_fee_bps);
 }
 
 #[test]
@@ -1510,13 +1614,10 @@ fn paused_with_bad_auth_yields_paused_over_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_rejects_zero_address_asset() {
     let (env, client, admins, _recovery) = setup();
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
     let anchor = Address::generate(&env);
     client.upsert_anchor(&admins, &zero, &anchor);
 }
@@ -1528,4 +1629,445 @@ fn upsert_anchor_accepts_valid_address() {
     let anchor = Address::generate(&env);
     client.upsert_anchor(&admins, &asset, &anchor);
     assert_eq!(client.get_anchor(&asset), Some(anchor));
+}
+
+#[test]
+fn zero_address_and_empty_string_governance_validation() {
+    let (env, client, admins, _recovery) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+
+    // Transferring admin to zero address must fail with InvalidAdmin (6)
+    let res = client.try_transfer_admin(&admins, &soroban_sdk::vec![&env, zero.clone()], &1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
+
+    // Updating recovery address to zero address must fail with InvalidRecoveryAddress (7)
+    let res = client.try_update_recovery_address(&admins, &zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    // Initiating recovery with zero address target must fail with InvalidAdmin (6)
+    let res = client.try_initiate_recovery(&zero);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidAdmin.into()
+    );
+
+    // Empty-string address input fails conversion before invocation
+    let empty_str = soroban_sdk::String::from_str(&env, "");
+    extern crate std;
+    let empty_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Address::from_string(&empty_str)
+    }));
+    assert!(
+        empty_res.is_err(),
+        "empty string must fail Address conversion before contract invocation"
+    );
+}
+
+#[test]
+fn governance_get_deployer_returns_deployer_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.try_get_deployer().unwrap_err().unwrap(),
+        GovernanceError::NotInitialized.into()
+    );
+
+    let deployer = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    client.init(&deployer, &admins, &1u32, &recovery);
+
+    assert_eq!(client.get_deployer(), deployer);
+}
+
+#[test]
+fn upgrade_rejects_invalid_wasm_interface_and_emits_no_event() {
+    let (env, client, admins, _recovery) = setup();
+    let invalid_wasm_hash = BytesN::from_array(&env, &[99u8; 32]);
+
+    let events_before = env.events().all().len();
+    let res = client.try_upgrade(&admins, &invalid_wasm_hash);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        GovernanceError::InvalidWasmInterface.into()
+    );
+
+    // Verify no contract_upgraded event was emitted
+    let events_after = env.events().all().len();
+    assert_eq!(events_after, events_before);
+}
+
+#[test]
+fn contract_version_returns_schema_version_before_and_after_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Test GovernanceContract::version before init
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    assert_eq!(gov_client.version(), CURRENT_SCHEMA_VERSION);
+    assert_eq!(gov_client.version(), 1);
+
+    // Initialize governance contract
+    let deployer = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    gov_client.init(&deployer, &admins, &1u32, &recovery);
+    assert_eq!(gov_client.version(), CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn governance_migrate_idempotency_and_paused_rejection() {
+    let (env, client, admins, _recovery) = setup();
+
+    // 1. Paused migrate returns GovernanceError::Paused
+    client.pause(&admins);
+    assert_eq!(
+        client.try_migrate(&admins).unwrap_err().unwrap(),
+        GovernanceError::Paused.into()
+    );
+    client.unpause(&admins);
+
+    // 2. First call to migrate succeeds and emits migrated event
+    let events_before_first = env.events().all().len();
+    client.migrate(&admins);
+    assert_eq!(env.events().all().len(), events_before_first + 1);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
+    );
+    let (admin, schema_ver): (Address, u32) = FromVal::from_val(&env, &data);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(schema_ver, CURRENT_SCHEMA_VERSION);
+
+    // 3. Second call to migrate is idempotent and succeeds
+    let events_before_second = env.events().all().len();
+    client.migrate(&admins);
+    assert_eq!(env.events().all().len(), events_before_second + 1);
+}
+
+// -----------------------------------------------------------------------
+// Issues #1068-#1071: schema marker persistence and system parameters
+// -----------------------------------------------------------------------
+
+fn count_topic(env: &Env, name: &str) -> usize {
+    let wanted = Symbol::new(env, name);
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            topics
+                .get(0)
+                .is_some_and(|t| Symbol::from_val(env, &t) == wanted)
+        })
+        .count()
+}
+
+/// Issue #1068: an instance without a `SchemaVersion` marker (deployed before
+/// the marker existed) gets the current version persisted by `migrate`.
+#[test]
+fn migrate_persists_missing_schema_version_marker() {
+    let (env, client, admins, _recovery) = setup();
+    let read_version = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+        })
+    };
+
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&DataKey::SchemaVersion);
+    });
+    assert_eq!(read_version(), None);
+
+    client.migrate(&admins);
+    assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+}
+
+/// Issue #1069: `update_system_param` is pause-exempt, matching the Pause
+/// Model docs and ADR 001, so `bypass_gov_fees` can be set during an incident.
+#[test]
+fn update_system_param_allowed_while_paused() {
+    let (env, client, admins, _recovery) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let key = Symbol::new(&env, BYPASS_GOV_FEES_PARAM);
+    client.update_system_param(&admins, &key, &1);
+    assert_eq!(client.get_system_param(&key), Some(1));
+}
+
+/// Issue #1069: pause exemption does not relax auth.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn update_system_param_while_paused_still_requires_admin() {
+    let (env, client, admins, _recovery) = setup();
+    client.pause(&admins);
+    let non_admin = Address::generate(&env);
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&vec![&env, non_admin, admins.get(1).unwrap()], &key, &5);
+}
+
+/// Issue #1070: setting a parameter to the value it already holds emits no
+/// `sys_param_updated` event but still extends the entry's TTL.
+#[test]
+fn update_system_param_unchanged_value_skips_event_but_extends_ttl() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+
+    client.update_system_param(&admins, &key, &1440);
+    let emitted = count_topic(&env, events::SYS_PARAM_UPDATED_EVENT);
+    assert_eq!(emitted, 1);
+
+    // Let the param's TTL fall below the extension threshold, keeping the
+    // contract instance itself alive while the ledger advances.
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(SYSTEM_PARAM_TTL_BUMP * 2, SYSTEM_PARAM_TTL_BUMP * 2);
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    let advance = ttl_before - SYSTEM_PARAM_TTL_THRESHOLD + 1;
+    env.ledger().with_mut(|l| l.sequence_number += advance);
+    let ttl_aged = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    assert!(ttl_aged < SYSTEM_PARAM_TTL_THRESHOLD);
+
+    client.update_system_param(&admins, &key, &1440);
+    assert_eq!(
+        count_topic(&env, events::SYS_PARAM_UPDATED_EVENT),
+        emitted,
+        "unchanged value must not emit sys_param_updated"
+    );
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::SystemParam(key.clone()))
+    });
+    assert_eq!(ttl_after, SYSTEM_PARAM_TTL_BUMP);
+    assert_eq!(client.get_system_param(&key), Some(1440));
+
+    // A real change still emits.
+    client.update_system_param(&admins, &key, &1500);
+    assert_eq!(
+        count_topic(&env, events::SYS_PARAM_UPDATED_EVENT),
+        emitted + 1
+    );
+}
+
+/// Issue #1071: admins can remove a stored parameter.
+#[test]
+fn remove_system_param_deletes_stored_value() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+
+    client.remove_system_param(&admins, &key);
+    assert_eq!(client.get_system_param(&key), None);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::SYS_PARAM_REMOVED_EVENT)
+    );
+    assert_eq!(Symbol::from_val(&env, &topics.get(1).unwrap()), key);
+    let (admin, previous): (Address, i128) = data.into_val(&env);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(previous, 1440);
+}
+
+/// Issue #1071: removing a missing parameter is a silent no-op.
+#[test]
+fn remove_system_param_missing_key_is_noop() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "never_set");
+
+    assert!(client.try_remove_system_param(&admins, &key).is_ok());
+    assert_eq!(client.get_system_param(&key), None);
+    assert_eq!(count_topic(&env, events::SYS_PARAM_REMOVED_EVENT), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn remove_system_param_blocked_while_paused() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+    client.pause(&admins);
+    client.remove_system_param(&admins, &key);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn remove_system_param_rejects_signatures_below_threshold() {
+    let (env, client, admins, _recovery) = setup();
+    let key = Symbol::new(&env, "max_settle");
+    client.update_system_param(&admins, &key, &1440);
+    client.remove_system_param(&vec![&env, admins.get(0).unwrap()], &key);
+}
+
+#[test]
+fn test_issue_1122_set_system_param_boundary_and_negative_values() {
+    let (env, client, admins, _recovery) = setup();
+
+    let min_payment_key = Symbol::new(&env, "min_payment");
+    let bypass_key = Symbol::new(&env, "bypass_gov_fees");
+
+    // 1. Negative values fail with InvalidParamValue
+    let res_neg = client.try_set_system_param(&admins, &min_payment_key, &-1i128);
+    assert_eq!(
+        res_neg.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    let res_min = client.try_set_system_param(&admins, &min_payment_key, &i128::MIN);
+    assert_eq!(
+        res_min.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    // 2. bypass_gov_fees > 1 fails with InvalidParamValue
+    let res_bypass_too_large = client.try_set_system_param(&admins, &bypass_key, &2i128);
+    assert_eq!(
+        res_bypass_too_large.unwrap_err().unwrap(),
+        GovernanceError::InvalidParamValue.into()
+    );
+
+    // 3. Valid values: 0, 1, i128::MAX for min_payment
+    client.set_system_param(&admins, &min_payment_key, &0i128);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(0i128));
+
+    client.set_system_param(&admins, &min_payment_key, &1i128);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(1i128));
+
+    client.set_system_param(&admins, &min_payment_key, &i128::MAX);
+    assert_eq!(client.get_system_param(&min_payment_key), Some(i128::MAX));
+
+    // 4. Valid values for bypass_gov_fees: 0 and 1
+    client.set_system_param(&admins, &bypass_key, &1i128);
+    assert_eq!(client.get_system_param(&bypass_key), Some(1i128));
+
+    client.set_system_param(&admins, &bypass_key, &0i128);
+    assert_eq!(client.get_system_param(&bypass_key), Some(0i128));
+
+    // Verify SYS_PARAM_UPDATED_EVENT was emitted on valid updates
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::SYS_PARAM_UPDATED_EVENT)
+    );
+    let (admin, key, value): (Address, Symbol, i128) = FromVal::from_val(&env, &data);
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert_eq!(key, bypass_key);
+    assert_eq!(value, 0i128);
+}
+
+#[test]
+fn update_recovery_address_authorization_and_event() {
+    let (env, client, admins, _old_recovery) = setup();
+    let new_recovery = Address::generate(&env);
+
+    // 1. Unauthorized signers fail
+    let non_admin = Address::generate(&env);
+    let unauthorized_signers = soroban_sdk::vec![&env, non_admin];
+    assert!(client
+        .try_update_recovery_address(&unauthorized_signers, &new_recovery)
+        .is_err());
+
+    // 2. Zero address fails with InvalidRecoveryAddress
+    let zero = bettapay_common::storage::zero_address(&env);
+    let res_zero = client.try_update_recovery_address(&admins, &zero);
+    assert_eq!(
+        res_zero.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    // 3. Valid admin signers update recovery address and emit event
+    let events_before = env.events().all().len();
+    client.update_recovery_address(&admins, &new_recovery);
+    assert_eq!(client.get_recovery_address(), new_recovery);
+
+    assert_eq!(env.events().all().len(), events_before + 1);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::RECOVERY_ADDRESS_UPDATED_EVENT)
+    );
+    assert_eq!(
+        Address::from_val(&env, &topics.get(1).unwrap()),
+        new_recovery
+    );
+    let emitted_admin: Address = FromVal::from_val(&env, &data);
+    assert_eq!(emitted_admin, admins.get(0).unwrap());
+}
+
+#[test]
+fn get_fee_config_extends_instance_ttl_when_set() {
+    use soroban_sdk::testutils::storage::Instance as _;
+    let (env, client, admins, _recovery) = setup();
+    client.set_fee_config(
+        &admins,
+        &FeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        },
+    );
+
+    // Advance ledger close to TTL threshold so get_fee_config must extend instance TTL.
+    let target_seq = env.ledger().sequence() + TTL_BUMP_LEDGERS - TTL_THRESHOLD_LEDGERS + 100;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = target_seq;
+    });
+
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    let cfg = client.get_fee_config().expect("fee config must be present");
+    assert_eq!(cfg.platform_fee_bps, 100);
+    assert_eq!(cfg.network_fee_bps, 50);
+
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        ttl_after > ttl_before,
+        "get_fee_config must extend governance instance TTL (before={ttl_before}, after={ttl_after})"
+    );
+}
+
+#[test]
+fn upsert_anchor_returns_invalid_anchor_for_zero_or_self_addresses() {
+    let (env, client, admins, _recovery) = setup();
+    let zero = bettapay_common::storage::zero_address(&env);
+    let asset = Address::generate(&env);
+    let anchor = Address::generate(&env);
+    let expected: soroban_sdk::Error = GovernanceError::InvalidAnchor.into();
+
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &zero, &anchor),
+        Err(Ok(expected))
+    );
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &asset, &zero),
+        Err(Ok(expected))
+    );
+    assert_eq!(
+        client.try_upsert_anchor(&admins, &asset, &asset),
+        Err(Ok(expected))
+    );
 }

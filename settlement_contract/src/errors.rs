@@ -8,7 +8,7 @@ use soroban_sdk::contracterror;
 // `300..=399` range reserved for this contract. `settlement_error_codes_match_registry`
 // below fails the build if these literals ever drift from the registry.
 #[contracterror]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum SettlementError {
     /// `init()` has already been called. Only one initialization is permitted.
@@ -47,6 +47,7 @@ pub enum SettlementError {
     AlreadyUnpaused = 16,
     /// `register_merchant` was called for an address that is already registered.
     MerchantExists = 300,
+    // Code 301 is an unassigned historical gap (reservation removed, issue #881).
     /// The target merchant address is not registered. Raised by
     /// `set_settlement_rule`, `store_payment_reference`, `calculate_fee_split`,
     /// and `unregister_merchant` when the merchant is missing.
@@ -56,6 +57,7 @@ pub enum SettlementError {
     DuplicatePaymentReference = 303,
     /// No merchant-specific rule has been set. The merchant will use the default rule or bootstrap fallback.
     MerchantRuleNotSet = 304,
+    // Code 305 is an unassigned historical gap (reservation removed, issue #881).
     /// The supplied address is the zero‑address.
     /// Raised by `register_merchant` and `transfer_admin`.
     ZeroAddress = 306,
@@ -100,6 +102,10 @@ pub enum SettlementError {
     /// `pause()` was called with a reason code above
     /// `bettapay_common::constants::MAX_PAUSE_REASON` (issue #991).
     InvalidPauseReason = 320,
+    /// The merchant already has [`MAX_PAYMENTS_PER_MERCHANT`](crate::policy::MAX_PAYMENTS_PER_MERCHANT)
+    /// stored payment records. Raised by `store_payment_reference` until a
+    /// prune frees capacity (issue #1104).
+    MaxPaymentsReached = 321,
 }
 
 const _: () = {
@@ -151,4 +157,5 @@ const _: () = {
     assert!(SettlementError::PayloadTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::ExecutionDelayTooLong as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::InvalidPauseReason as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::MaxPaymentsReached as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

@@ -87,8 +87,9 @@ pub const SHARED_CODES: &[(&str, u32)] = &[
 
 /// Asserts that a contract's full `(name, code)` table is internally
 /// consistent with the shared registry: every code it reuses from
-/// [`SHARED_CODES`] must be attached to the matching name, and every code
-/// outside the shared `1..=99` range must fall inside `range_start..`.
+/// [`SHARED_CODES`] must be attached to the matching name, every code
+/// outside the shared `1..=99` range must fall inside `range_start..`,
+/// and no code is duplicated within the table.
 ///
 /// Intended to be called from each contract's own test suite with its full
 /// error table, so a future edit that assigns a contract-specific error the
@@ -110,11 +111,141 @@ pub fn assert_no_code_collisions(contract_codes: &[(&str, u32)], range_start: u3
             );
         }
     }
+
+    // Check for duplicate codes (collisions)
+    for (i, &(name_a, code_a)) in contract_codes.iter().enumerate() {
+        for &(name_b, code_b) in &contract_codes[i + 1..] {
+            assert_ne!(
+                code_a, code_b,
+                "duplicate code {code_a} shared between `{name_a}` and `{name_b}`"
+            );
+        }
+    }
+}
+
+/// Enumerates contract-specific codes in `contract_codes` (codes >= `range_start`)
+/// and returns any gaps (missing integers) between the minimum and maximum
+/// code in that range. Used by tests to audit and flag code space gaps.
+pub fn find_code_gaps(contract_codes: &[(&str, u32)], range_start: u32) -> alloc::vec::Vec<u32> {
+    use alloc::vec::Vec;
+
+    let mut specific_codes: Vec<u32> = contract_codes
+        .iter()
+        .map(|&(_, c)| c)
+        .filter(|&c| c >= range_start)
+        .collect();
+    specific_codes.sort_unstable();
+    specific_codes.dedup();
+
+    let mut gaps = Vec::new();
+    if let (Some(&min), Some(&max)) = (specific_codes.first(), specific_codes.last()) {
+        for expected in min..=max {
+            if !specific_codes.contains(&expected) {
+                gaps.push(expected);
+            }
+        }
+    }
+    gaps
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    fn registry_entries(markdown: &str, heading: &str) -> Vec<(String, u32)> {
+        let section_marker = alloc::format!("## {heading}");
+        let start = markdown
+            .find(&section_marker)
+            .unwrap_or_else(|| panic!("ERROR_CODE_REGISTRY.md is missing `{heading}`"));
+        let tail = &markdown[start + section_marker.len()..];
+        let section = tail.split("\n## ").next().unwrap();
+        let mut entries = Vec::new();
+
+        for line in section.lines() {
+            let columns: Vec<&str> = line
+                .split('|')
+                .map(str::trim)
+                .filter(|column| !column.is_empty())
+                .collect();
+            if columns.len() < 2 || columns[0].starts_with("Code") {
+                continue;
+            }
+            if columns[0].contains('-') || columns[1] == "—" {
+                continue;
+            }
+            let code = columns[0]
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("invalid registry code: {}", columns[0]));
+            entries.push((String::from(columns[1].trim_matches('`')), code));
+        }
+        entries
+    }
+
+    fn enum_entries(source: &str, enum_name: &str) -> Vec<(String, u32)> {
+        let marker = alloc::format!("pub enum {enum_name} {{");
+        let start = source
+            .find(&marker)
+            .unwrap_or_else(|| panic!("source is missing `pub enum {enum_name}`"));
+        let body = &source[start + marker.len()..];
+        let mut entries = Vec::new();
+
+        for line in body.lines() {
+            let line = line.trim();
+            if line.starts_with('}') {
+                break;
+            }
+            let Some((name, code)) = line.split_once('=') else {
+                continue;
+            };
+            let name = name.trim();
+            let code = code
+                .trim()
+                .trim_end_matches(',')
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("invalid discriminant for `{name}`"));
+            entries.push((String::from(name), code));
+        }
+        entries
+    }
+
+    #[test]
+    fn error_code_registry_matches_error_sources() {
+        let markdown = include_str!("../../docs/ERROR_CODE_REGISTRY.md");
+        let settlement_source =
+            include_str!("../../settlement_contract/src/errors.rs");
+        let governance_source =
+            include_str!("../../governance_contract/src/lib.rs");
+
+        let mut documented_shared =
+            registry_entries(markdown, "Shared Error Codes (1-99)");
+        documented_shared.sort_by_key(|(_, code)| *code);
+        let mut actual_shared = SHARED_CODES
+            .iter()
+            .map(|&(name, code)| (String::from(name), code))
+            .collect::<Vec<_>>();
+        actual_shared.sort_by_key(|(_, code)| *code);
+        assert_eq!(documented_shared, actual_shared);
+
+        let mut documented_governance =
+            registry_entries(markdown, "Governance Contract Errors (200-299)");
+        documented_governance.sort_by_key(|(_, code)| *code);
+        let mut actual_governance =
+            enum_entries(governance_source, "GovernanceError");
+        actual_governance.retain(|(_, code)| *code >= 200);
+        actual_governance.sort_by_key(|(_, code)| *code);
+        assert_eq!(documented_governance, actual_governance);
+
+        let mut documented_settlement =
+            registry_entries(markdown, "Settlement Contract Errors (300-399)");
+        documented_settlement.sort_by_key(|(_, code)| *code);
+        let mut actual_settlement =
+            enum_entries(settlement_source, "SettlementError");
+        actual_settlement.retain(|(_, code)| *code >= 300);
+        actual_settlement.sort_by_key(|(_, code)| *code);
+        assert_eq!(documented_settlement, actual_settlement);
+    }
 
     #[test]
     fn shared_codes_are_unique_and_within_range() {
@@ -161,6 +292,36 @@ mod tests {
     fn assert_no_code_collisions_detects_out_of_range_code() {
         let invalid: &[(&str, u32)] = &[("CustomCode", 150)];
         assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate code 200 shared between `AnchorMissing` and `DuplicateAnchor`")]
+    fn assert_no_code_collisions_detects_duplicate_contract_codes() {
+        let invalid: &[(&str, u32)] = &[
+            ("AnchorMissing", 200),
+            ("DuplicateAnchor", 200),
+        ];
+        assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+
+    #[test]
+    fn find_code_gaps_identifies_missing_numbers() {
+        let table: &[(&str, u32)] = &[
+            ("CodeA", 300),
+            ("CodeB", 302),
+            ("CodeC", 303),
+            ("CodeD", 306),
+        ];
+        let gaps = find_code_gaps(table, SETTLEMENT_RANGE_START);
+        assert_eq!(gaps, alloc::vec![301, 304, 305]);
+
+        let contiguous: &[(&str, u32)] = &[
+            ("CodeA", 300),
+            ("CodeB", 301),
+            ("CodeC", 302),
+        ];
+        let gaps = find_code_gaps(contiguous, SETTLEMENT_RANGE_START);
+        assert!(gaps.is_empty());
     }
 }
 

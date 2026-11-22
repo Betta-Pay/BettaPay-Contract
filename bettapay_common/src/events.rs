@@ -4,18 +4,24 @@
 //! the same pair of structured payload types (`AdminTransferred`,
 //! `PendingRecovery`). Putting them here so the two contracts cannot diverge.
 
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 use crate::types::SettlementRule;
 
 /// Structured payload emitted with the `admin_transferred` event so that
-/// off-chain consumers can read the old and new admin by field name rather
-/// than by positional order.
+/// off-chain consumers can read the old and new admin **sets** by field name
+/// rather than by positional order, and reconstruct an authorization
+/// transition without a separate storage scan (issue #977).
+///
+/// Both fields carry the full multisig admin set, not just the primary
+/// (index `0`) admin, so a threshold change that accompanies the transfer is
+/// also visible directly from the event. Field order is fixed as old then
+/// new.
 #[derive(Clone)]
 #[contracttype]
 pub struct AdminTransferred {
-    pub old_admin: Address,
-    pub new_admin: Address,
+    pub old_admins: Vec<Address>,
+    pub new_admins: Vec<Address>,
 }
 
 /// In-flight recovery operation. Lives between `initiate_recovery` and a
@@ -54,6 +60,9 @@ pub struct PendingRecovery {
 
 // --- Shared: emitted by both governance_contract and settlement_contract ---
 
+/// Topic emitted once, when either contract's `init` completes.
+pub const INITIALIZED_EVENT: &str = "initialized";
+
 /// Topic emitted when the admin role is transferred (also reused by
 /// `execute_recovery`).
 pub const ADMIN_TRANSFERRED_EVENT: &str = "admin_transferred";
@@ -77,6 +86,11 @@ pub const RECOVERY_EXECUTED_EVENT: &str = "recovery_executed";
 pub const CONTRACT_UPGRADED_EVENT: &str = "contract_upgraded";
 
 /// Topic emitted when the multisig admin threshold changes.
+///
+/// Both contracts publish the same canonical data payload through
+/// [`emit_threshold_changed`]: `(current_threshold, new_threshold)`. Keep the
+/// actor out of the payload so a single indexer decoder works for events from
+/// either contract.
 pub const THRESHOLD_CHANGED_EVENT: &str = "threshold_changed";
 
 /// Topic emitted when the recovery address is rotated (issue #694).
@@ -84,14 +98,14 @@ pub const RECOVERY_ADDRESS_UPDATED_EVENT: &str = "recovery_address_updated";
 
 // --- governance_contract only ---
 
-/// Topic emitted once, when `GovernanceContract::init` completes.
-pub const INITIALIZED_EVENT: &str = "initialized";
-
 /// Topic emitted when `migrate` completes (schema version management).
 pub const MIGRATED_EVENT: &str = "migrated";
 
 /// Topic emitted when an arbitrary system parameter is updated.
 pub const SYS_PARAM_UPDATED_EVENT: &str = "sys_param_updated";
+
+/// Topic emitted when a stored system parameter is removed.
+pub const SYS_PARAM_REMOVED_EVENT: &str = "sys_param_removed";
 
 /// Topic emitted when the protocol fee configuration changes.
 pub const FEE_CONFIG_UPDATED_EVENT: &str = "fee_config_updated";
@@ -146,6 +160,15 @@ pub const PAYMENT_STORED_EVENT: &str = "payment_stored";
 /// `(admin, removed_count)`.
 pub const PAYMENTS_PRUNED_EVENT: &str = "payments_pruned";
 
+/// Topic emitted when a single payment record is removed by `prune_payment`.
+///
+/// Topics: `(Symbol("payment_pruned"), Address merchant, BytesN<32> reference)`
+/// Data:   `(Address merchant, BytesN<32> reference)`
+///
+/// Emitted only when a record actually existed and was removed; pruning a
+/// missing record is a no-op and stays silent (issue #890).
+pub const PAYMENT_PRUNED_EVENT: &str = "payment_pruned";
+
 /// Topic emitted when a timelocked administrative operation is scheduled.
 pub const OP_SCHEDULED_EVENT: &str = "op_scheduled";
 
@@ -155,10 +178,6 @@ pub const OP_EXECUTED_EVENT: &str = "op_executed";
 /// Topic emitted when a scheduled administrative operation is cancelled.
 pub const OP_CANCELLED_EVENT: &str = "op_cancelled";
 
-/// Topic emitted when `validate_fee_against_governance` rejects a fee rule
-/// that exceeds governance's configured ceiling.
-pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
-
 /// Every topic name defined in this registry, across all groups (shared,
 /// governance-only, settlement-only).
 ///
@@ -167,6 +186,7 @@ pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
 /// sites cannot silently drift from the registry.
 pub const ALL_EVENT_TOPICS: &[&str] = &[
     // Shared
+    INITIALIZED_EVENT,
     ADMIN_TRANSFERRED_EVENT,
     PAUSED_EVENT,
     UNPAUSED_EVENT,
@@ -177,9 +197,9 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     THRESHOLD_CHANGED_EVENT,
     RECOVERY_ADDRESS_UPDATED_EVENT,
     // governance_contract only
-    INITIALIZED_EVENT,
     MIGRATED_EVENT,
     SYS_PARAM_UPDATED_EVENT,
+    SYS_PARAM_REMOVED_EVENT,
     FEE_CONFIG_UPDATED_EVENT,
     ANCHOR_UPSERTED_EVENT,
     ANCHOR_REMOVED_EVENT,
@@ -194,21 +214,38 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
     BOOTSTRAP_FALLBACK_EVENT,
     PAYMENT_STORED_EVENT,
     PAYMENTS_PRUNED_EVENT,
+    PAYMENT_PRUNED_EVENT,
     OP_SCHEDULED_EVENT,
     OP_EXECUTED_EVENT,
     OP_CANCELLED_EVENT,
-    FEE_CEILING_REJECTED_EVENT,
 ];
 
 /// Emits the `admin_transferred` event with the structured
 /// [`AdminTransferred`] payload.
 ///
 /// Topics: `(Symbol("admin_transferred"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, ADMIN_TRANSFERRED_EVENT),),
         payload.clone(),
+    );
+}
+
+/// Emits the `threshold_changed` event with the canonical shared payload.
+///
+/// Topics: `(Symbol("threshold_changed"),)`
+/// Data:    `(current_threshold, new_threshold)` — both `u32`.
+///
+/// Both `governance_contract::change_threshold` and
+/// `settlement_contract::change_threshold` publish through this helper so the
+/// topic has one payload shape across the two contracts. Indexers decoding a
+/// `threshold_changed` event therefore never have to guess which contract
+/// emitted it (issue: align THRESHOLD_CHANGED_EVENT payloads).
+pub fn emit_threshold_changed(env: &Env, current_threshold: u32, new_threshold: u32) {
+    env.events().publish(
+        (Symbol::new(env, THRESHOLD_CHANGED_EVENT),),
+        (current_threshold, new_threshold),
     );
 }
 
@@ -268,7 +305,7 @@ pub fn emit_recovery_cancelled(env: &Env, canceller: &Address) {
 /// Emits the `recovery_executed` event.
 ///
 /// Topics: `(Symbol("recovery_executed"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_recovery_executed(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, RECOVERY_EXECUTED_EVENT),),
@@ -315,18 +352,18 @@ mod tests {
     #[test]
     fn admin_transferred_payload_shape_is_canonical() {
         let env = Env::default();
-        let old_admin = Address::generate(&env);
-        let new_admin = Address::generate(&env);
+        let old_admins = Vec::from_array(&env, [Address::generate(&env)]);
+        let new_admins = Vec::from_array(&env, [Address::generate(&env)]);
         let payload = AdminTransferred {
-            old_admin: old_admin.clone(),
-            new_admin: new_admin.clone(),
+            old_admins: old_admins.clone(),
+            new_admins: new_admins.clone(),
         };
 
         let val: Val = payload.try_into_val(&env).unwrap();
         let fields: Map<Symbol, Val> = Map::try_from_val(&env, &val).unwrap();
 
-        assert!(fields.contains_key(Symbol::new(&env, "old_admin")));
-        assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
+        assert!(fields.contains_key(Symbol::new(&env, "old_admins")));
+        assert!(fields.contains_key(Symbol::new(&env, "new_admins")));
         assert_eq!(fields.len(), 2);
     }
 

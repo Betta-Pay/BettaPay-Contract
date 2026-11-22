@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports, unused_variables)]
 //! # BettaPay Settlement Contract
 //!
 //! This module provides the core implementation of the settlement contract for BettaPay.
@@ -61,6 +60,7 @@
 //! | `DataKey::ArchivedMerchant(Address)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister |
 //! | `DataKey::Payment(Address, BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Scoped by merchant and payment reference |
 //! | `DataKey::ScheduledOperation(BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Timelocked operation payload and execute_at |
+//! | `DataKey::PendingOperationCount` | `settlement_contract` | Instance | Instance TTL | **Contract-Local / Settlement-Only**: Pending timelock queue depth, incremented by `schedule` and decremented by `execute` / `cancel` / `cancel_all` |
 //! | `governance_contract::DataKey::Admin` | `governance_contract` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Governance admin set |
 //! | `governance_contract::DataKey::FeeConfig` | `governance_contract` | Instance | Instance TTL | **Contract-Local / Governance-Only**: Protocol fee ceilings |
 //! | `governance_contract::DataKey::SchemaVersion` | `governance_contract` | Instance | Instance TTL | **Contract-Local**: Governance schema version |
@@ -74,7 +74,7 @@
 //! - **Contract-Local Admin**: `Admin` is contract-local (`Vec<Address>`) declared in each contract's
 //!   own `DataKey` enum, preserving administrative separation.
 //! - **Settlement-Only Keys**: `CachedGovRule`, `Initializing`, `Governance`, `DefaultRule`, `Merchant`,
-//!   `Rule`, `ArchivedMerchant`, `Payment`, and `ScheduledOperation`.
+//!   `Rule`, `ArchivedMerchant`, `Payment`, `ScheduledOperation`, and `PendingOperationCount`.
 //! - **Governance-Only Keys**: `FeeConfig`, `Anchor`, and `SystemParam`.
 //! - **Local Duplications**: `SchemaVersion` and `Deployer` are declared locally in each contract
 //!   to manage contract-specific migration baselines and deployer authorization independently.
@@ -179,7 +179,7 @@
 //! The pause flag blocks payment-processing and merchant-management
 //! operations (`register_merchant`, `unregister_merchant`,
 //! `set_settlement_rule`, `clear_settlement_rule`, `set_default_rule`,
-//! `store_payment_reference`, `update_governance` all call
+//! `store_payment_reference`, `prune_payment`, `update_governance` all call
 //! `assert_not_paused`). The following administrative operations are
 //! intentionally NOT blocked during pause, so the admin can fix the root
 //! cause of the emergency:
@@ -222,23 +222,22 @@
 //! | Entry Point | Policy | Behavior on Governance Outage / Trap |
 //! |---|---|---|
 //! | `store_payment_reference` | fail-open to bootstrap | Degrades to `BOOTSTRAP_DEFAULT_RULE` and emits `bootstrap_fallback` |
-//! | `get_payment` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_payment_reference` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
+//! | `calculate_fee_split` | fail-open | Resolves the merchant rule through the fallback chain (merchant rule, default rule, cached governance rule, `BOOTSTRAP_DEFAULT_RULE`); never aborts with `GovernanceCallFailed` |
+//! | `get_effective_rule` / `get_rule_provenance` | fail-open | Same fallback chain as `calculate_fee_split`, TTL-neutral; always returns a rule |
+//! | `get_payment_reference` / `get_payments` | fail-open | Storage read only; unaffected by governance availability |
+//! | `get_settlement_rule` / `get_default_rule` | fail-open | Storage read only; unaffected by governance availability |
 //! | `is_merchant_registered` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_min_payment_amount` | fail-open | Storage read only; unaffected by governance availability |
-//! | `get_version` | fail-open | Storage read only; unaffected by governance availability |
+//! | `version` | fail-open | Constant read; unaffected by governance availability |
 //! | `set_settlement_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
 //! | `set_default_rule` | fail-closed GovernanceCallFailed | Reverts with `SettlementError::GovernanceCallFailed` |
 //! | `update_governance` | fail-closed GovernanceCallFailed | Reverts if new governance contract fails interface checks |
 //! | `register_merchant` / `unregister_merchant` | fail-closed | Requires valid admin multisig authorization |
 //! | `clear_settlement_rule` | fail-closed | Requires valid admin multisig authorization |
-//! | `set_min_payment_amount` | fail-closed | Requires valid admin multisig authorization |
 //! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
 //! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
 //! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
 //! | `schedule` | fail-closed GovernanceCallFailed | Probes governance `get_fee_config` before writing; an unreachable governance reverts with `SettlementError::GovernanceCallFailed` and writes nothing (issue #994) |
-//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`); also rejected with `Paused` while the contract is paused |
+//! | `schedule` / `execute` / `cancel` / `cancel_all` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`/`cancel_all`); also rejected with `Paused` while the contract is paused |
 //!
 //! ## Event Convention
 //!
@@ -307,11 +306,14 @@ use soroban_sdk::contract;
 
 pub use errors::SettlementError;
 pub(crate) use policy::*;
-pub use policy::{FALLBACK_SETTLEMENT_DELAY_LEDGER, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT};
+pub use policy::{
+    FALLBACK_SETTLEMENT_DELAY_LEDGER, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT,
+    MAX_TIMELOCK_DELAY_SECONDS,
+};
 pub use storage::{assert_admin_and_not_paused, validate_nonzero_address};
 pub use types::{
-    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage, ScheduledOp,
-    SettlementRule,
+    Bps, EffectiveRule, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage,
+    RuleProvenance, ScheduledOp, SettlementRule,
 };
 
 #[contract]

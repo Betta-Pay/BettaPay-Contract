@@ -1,6 +1,10 @@
 [advisories]
 version = 2
-ignore = []
+# Grandfathered advisory baseline (do NOT add new entries casually):
+# - RUSTSEC-2026-0387: crypto-bigint 0.5.5 timing variability; comes in
+#   transitively through soroban-sdk 21.7.x — clears on the next soroban upgrade.
+# - RUSTSEC-2024-0436: paste is unmaintained, no impact on correctness.
+ignore = ["RUSTSEC-2026-0387", "RUSTSEC-2024-0436"]
 
 [licenses]
 version = 2

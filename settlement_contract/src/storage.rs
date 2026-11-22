@@ -11,7 +11,7 @@ use crate::policy::{
     MERCHANT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
     RULE_TTL_THRESHOLD,
 };
-use crate::types::{DataKey, GovFeeConfig, SettlementRule};
+use crate::types::{DataKey, EffectiveRule, GovFeeConfig, RuleProvenance, SettlementRule};
 
 /// Governance system-parameter key for the fee circuit-breaker (issue #743).
 ///
@@ -32,24 +32,32 @@ pub(crate) fn read_admins(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
+#[allow(dead_code)] // Helper for accessing primary admin when only single admin address is needed
 pub(crate) fn read_admin(env: &Env) -> Address {
-    storage::primary_admin(&read_admins(env)).unwrap()
+    storage::primary_admin(&read_admins(env))
+        .unwrap_or_else(|| panic_with_error!(env, SettlementError::AdminSetEmpty))
+}
+
+/// Returns the stored admin set, or an empty vector when the admin entry is
+/// missing or corrupt. Used only by `execute_recovery`, which must be able to
+/// repair a corrupt admin set (issue #514 / #687) and must still report the
+/// previous admin set on the `admin_transferred` event (issue #977).
+pub(crate) fn read_optional_admins(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514 / #687).
+/// admin entry is missing or has no primary. Preserved per ADR-004.
+#[allow(dead_code)] // Preserved for ADR-004 compatibility
 pub(crate) fn read_optional_primary_admin(env: &Env) -> Address {
     env.storage()
         .instance()
         .get::<_, Vec<Address>>(&DataKey::Admin)
         .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
+        .unwrap_or_else(|| storage::zero_address(env))
 }
 
 /// Validates and writes the complete admin configuration in its canonical
@@ -73,15 +81,13 @@ pub(crate) fn read_threshold(env: &Env) -> u32 {
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
 }
 
-/// Returns the instance-storage schema version, defaulting to the current
-/// version when the marker is absent. Per governance_contract's convention,
-/// an entry written before the marker existed is treated as version 1
-/// (issue #507, issue #704).
+/// Returns the instance-storage schema version, defaulting to 0
+/// when the marker is absent so future migrations are not skipped (issue #1107).
 pub(crate) fn read_schema_version(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::SchemaVersion)
-        .unwrap_or(CURRENT_SCHEMA_VERSION)
+        .unwrap_or(0)
 }
 
 pub(crate) fn validate_admins_and_threshold(env: &Env, admins: &Vec<Address>, threshold: u32) {
@@ -177,6 +183,30 @@ pub(crate) fn read_pending_recovery(env: &Env) -> PendingRecovery {
 /// and [`validate_fee_against_governance`].
 pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
+    // The settlement contract cannot be its own governance: cross-contract
+    // probes such as `get_fee_config` would call back into this contract and
+    // fail or misbehave. Reject the self-address here so every path that routes
+    // through this function (init, direct update, and the timelocked update)
+    // enforces the same rule.
+    if governance == &env.current_contract_address() {
+        panic_with_error!(env, SettlementError::InvalidGovernance);
+    }
+}
+
+/// Rejects a governance update that targets the address already stored under
+/// `DataKey::Governance`.
+///
+/// Both the direct [`update_governance`](crate::SettlementContract::update_governance)
+/// path and the timelocked `_update_governance` path call this, so a no-op
+/// update fails identically with [`SettlementError::InvalidGovernance`]
+/// instead of storing the same value and emitting a redundant
+/// `governance_updated` event. `init` deliberately does **not** call this
+/// helper: at init time no governance address is stored yet, and writing the
+/// first one is valid.
+pub(crate) fn assert_governance_changed(env: &Env, new_governance: &Address) {
+    if read_governance(env) == *new_governance {
+        panic_with_error!(env, SettlementError::InvalidGovernance);
+    }
 }
 
 /// Rejects the zero address with a caller-supplied `SettlementError`.
@@ -258,17 +288,106 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
     exists
 }
 
+/// Returns the number of `Payment` records currently stored for `merchant`
+/// (issue #980). A merchant with no counter entry — including a registered
+/// merchant that has never stored a payment — reads as zero.
+pub(crate) fn read_payment_count(env: &Env, merchant: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PaymentCount(merchant.clone()))
+        .unwrap_or(0)
+}
+
+/// Increments `merchant`'s payment counter by one, called when
+/// `store_payment_reference` stores a new record. Keeps the counter entry
+/// warm on the same TTL policy as the merchant marker, since both live for
+/// as long as the merchant is active.
+///
+/// Saturates at [`u32::MAX`] like [`increment_pending_operation_count`], so a
+/// corrupted or manually seeded counter cannot panic the payment path with an
+/// arithmetic overflow (issue #1106).
+pub(crate) fn increment_payment_count(env: &Env, merchant: &Address) {
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage().persistent().set(&key, &count.saturating_add(1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+}
+
+/// Decrements `merchant`'s payment counter by `by`, called when
+/// `prune_payment` / `prune_payments` actually remove stored records. A `by`
+/// of zero is a no-op. The counter never underflows below zero.
+pub(crate) fn decrement_payment_count(env: &Env, merchant: &Address, by: u32) {
+    if by == 0 {
+        return;
+    }
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage()
+        .persistent()
+        .set(&key, &count.saturating_sub(by));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+}
+
+/// Returns the number of scheduled operations currently pending in the
+/// timelock queue (issue #887). A missing counter means an empty queue, so a
+/// fresh contract reads as zero.
+pub(crate) fn read_pending_operation_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PendingOperationCount)
+        .unwrap_or(0)
+}
+
+/// Records that one operation was added to the timelock queue.
+///
+/// The counter lives in instance storage alongside the other queue-wide
+/// singletons and is maintained by `schedule`; it is the only way to observe
+/// queue depth because Soroban cannot enumerate persistent
+/// `ScheduledOperation` keys.
+pub(crate) fn increment_pending_operation_count(env: &Env) {
+    let count = read_pending_operation_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingOperationCount, &count.saturating_add(1));
+}
+
+/// Records that `by` operations left the timelock queue via `execute`,
+/// `cancel`, or `cancel_all`. A `by` of zero is a no-op and the counter never
+/// underflows below zero, so a repeated or skipped removal cannot corrupt it.
+pub(crate) fn decrement_pending_operation_count(env: &Env, by: u32) {
+    if by == 0 {
+        return;
+    }
+    let count = read_pending_operation_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingOperationCount, &count.saturating_sub(by));
+}
+
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, then governance fee config, and finally using the bootstrap fallback.
 /// See `docs/bootstrap-fallback.md` for full semantics, trigger conditions, and emission rules.
 ///
-/// This is a **pure resolution** function — it does NOT emit events.
-/// Callers that need to signal an unconfigured deployment (e.g. mutating
-/// entry points such as `store_payment_reference` or `set_settlement_rule`)
-/// must check whether the returned rule equals [`BOOTSTRAP_DEFAULT_RULE`]
-/// and emit `bootstrap_fallback` explicitly. Read-only paths (e.g.
-/// `calculate_fee_split`) must not emit events.
+/// This is the rule-only view of [`read_effective_rule`]: it keeps the
+/// merchant-specific rule warm but discards provenance. Mutating callers that
+/// need to emit `bootstrap_fallback` must use [`read_effective_rule`] and test
+/// [`RuleProvenance::Bootstrap`] instead of comparing rule values (issue #1105).
+/// Read-only paths (e.g. `calculate_fee_split`) must not emit events.
 pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRule {
+    read_effective_rule(env, merchant).rule
+}
+
+/// Provenance-aware counterpart of [`read_rule_or_default`] (issue #1105).
+///
+/// Applies the same TTL-preserving merchant-rule read, then delegates to
+/// [`read_effective_rule_no_bump`] so callers can distinguish an unconfigured
+/// deployment from an explicitly configured rule that happens to carry the
+/// bootstrap values.
+pub(crate) fn read_effective_rule(env: &Env, merchant: Address) -> EffectiveRule {
     // Keep the merchant's rule warm so active merchants do not lose their
     // override to archival while authenticated paths keep reading it. The
     // bump happens only when the merchant-specific key exists, matching the
@@ -279,7 +398,7 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
             .persistent()
             .extend_ttl(&merchant_key, RULE_TTL_THRESHOLD, RULE_TTL_BUMP);
     }
-    read_rule_or_default_no_bump(env, merchant)
+    read_effective_rule_no_bump(env, merchant)
 }
 
 /// TTL-neutral variant of [`read_rule_or_default`] (issue #761): resolves the
@@ -291,6 +410,14 @@ pub(crate) fn read_rule_or_default(env: &Env, merchant: Address) -> SettlementRu
 /// Authenticated paths that want the keep-alive side effect must call
 /// [`read_rule_or_default`] instead.
 pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> SettlementRule {
+    read_effective_rule_no_bump(env, merchant).rule
+}
+
+/// Same resolution as [`read_rule_or_default_no_bump`], but also reports which
+/// source produced the rule (issue #997). The returned `rule` is byte-for-byte
+/// what the plain reader yields; provenance is observability only and never
+/// changes a fee value.
+pub(crate) fn read_effective_rule_no_bump(env: &Env, merchant: Address) -> EffectiveRule {
     // Merchant-specific rule wins over any shared configuration.
     let merchant_key = DataKey::Rule(merchant);
     if let Some(rule) = env
@@ -298,25 +425,12 @@ pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> Sett
         .persistent()
         .get::<_, SettlementRule>(&merchant_key)
     {
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Merchant,
+        };
     }
-    // Fall back to the admin-controlled global default when present.
-    let default_key = DataKey::DefaultRule;
-    if let Some(rule) = env
-        .storage()
-        .instance()
-        .get::<_, SettlementRule>(&default_key)
-    {
-        return rule;
-    }
-    // Protocol fee source: governance's GovFeeConfig, when available.
-    if let Some(rule) = read_governance_fee_rule(env) {
-        return rule;
-    }
-    // Final fallback keeps the contract usable before any config is stored.
-    // No event emitted here — the hot path runs this on every payment and
-    // event spam would burn unnecessary compute (issue #691).
-    BOOTSTRAP_DEFAULT_RULE
+    read_effective_fallback_rule(env)
 }
 
 /// Reads the effective fallback rule without a merchant-specific override,
@@ -326,21 +440,39 @@ pub(crate) fn read_rule_or_default_no_bump(env: &Env, merchant: Address) -> Sett
 /// `unregister_merchant`) where the returned rule is included in a different
 /// event payload and a separate bootstrap event would be misleading (issue #689).
 pub(crate) fn read_fallback_rule(env: &Env) -> SettlementRule {
+    read_effective_fallback_rule(env).rule
+}
+
+/// Shared tail of the resolution chain (default → governance → bootstrap),
+/// tagging each source so the plain readers and the provenance reader cannot
+/// drift apart.
+fn read_effective_fallback_rule(env: &Env) -> EffectiveRule {
+    // Fall back to the admin-controlled global default when present.
     let default_key = DataKey::DefaultRule;
     if let Some(rule) = env
         .storage()
         .instance()
         .get::<_, SettlementRule>(&default_key)
     {
-        // fallback: default rule
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Default,
+        };
     }
+    // Protocol fee source: governance's GovFeeConfig, when available.
     if let Some(rule) = read_governance_fee_rule(env) {
-        // fallback: governance fee config
-        return rule;
+        return EffectiveRule {
+            rule,
+            provenance: RuleProvenance::Governance,
+        };
     }
-    // fallback: bootstrap default (no default rule or governance fee config set)
-    BOOTSTRAP_DEFAULT_RULE
+    // Final fallback keeps the contract usable before any config is stored.
+    // No event emitted here — the hot path runs this on every payment and
+    // event spam would burn unnecessary compute (issue #691).
+    EffectiveRule {
+        rule: BOOTSTRAP_DEFAULT_RULE,
+        provenance: RuleProvenance::Bootstrap,
+    }
 }
 
 /// Reads governance's `bypass_gov_fees` circuit-breaker flag (issue #743).
@@ -369,8 +501,13 @@ fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
 /// fallback chain to [`BOOTSTRAP_DEFAULT_RULE`]:
 /// - Governance has no fee configuration yet (`Ok(Ok(None))`).
 /// - The `get_fee_config` call fails — a contract trap, a typed error, or a
-///   host error (issue #741). The payment path degrades gracefully: a broken
-///   governance contract must not brick fallback payments.
+///   host error (issue #741) — and no earlier read has cached a rule. The
+///   payment path degrades gracefully: a broken governance contract must not
+///   brick fallback payments.
+///
+/// Every successful read overwrites `DataKey::CachedGovRule`. When a later
+/// call fails, that cached rule is returned instead of `None`, so payments
+/// keep the last good governance fees through an outage (issue #744).
 ///
 /// The bypass circuit-breaker (issue #743) is checked first: when governance's
 /// `bypass_gov_fees` system parameter is `1`, this returns `None` without
@@ -412,14 +549,16 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         return None;
     }
 
-    // Issue #741: the read/payment path degrades to bootstrap on any failure.
+    // Issue #741 / #744: the read/payment path never fails on a governance
+    // outage. It serves the last good cached rule when one exists and
+    // otherwise degrades to bootstrap.
     let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         Vec::new(env),
     ) {
         Ok(Ok(val)) => val,
-        Ok(Err(_)) | Err(_) => return None,
+        Ok(Err(_)) | Err(_) => return read_cached_governance_fee_rule(env),
     };
 
     let config = try_read_governance_fee_config(env, raw_val)?;
@@ -440,6 +579,16 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         .set(&DataKey::CachedGovRule, &Some(rule.clone()));
 
     Some(rule)
+}
+
+/// Returns the last governance-derived rule cached by a successful
+/// [`read_governance_fee_rule`], or `None` when governance has never answered
+/// with a valid config (issue #744).
+fn read_cached_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
+    env.storage()
+        .instance()
+        .get::<_, Option<SettlementRule>>(&DataKey::CachedGovRule)
+        .flatten()
 }
 
 /// Reads the minimum payment amount from the governance contract's system
@@ -606,6 +755,11 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// Any call failure (contract trap or host error) is surfaced as the typed
 /// [`SettlementError::GovernanceCallFailed`] rather than an untyped host panic.
 ///
+/// A rule that exceeds the configured ceiling panics with
+/// [`SettlementError::FeeExceedsGovernanceConfig`] and emits no event: Soroban
+/// discards all events from a failed invocation, so publishing a rejection
+/// event before the panic would only waste CPU and footprint (issue #1157).
+///
 /// # Hard-fail is intentional here (issue #742)
 ///
 /// This is the **write** path (`set_settlement_rule` / `set_default_rule` and
@@ -617,6 +771,13 @@ fn try_read_governance_fee_config(env: &Env, raw_val: Val) -> Option<GovFeeConfi
 /// writes fail loud.
 pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) {
     let governance: Address = read_governance(env);
+
+    // Issue #1112: if emergency bypass is active, skip governance fee ceiling checks.
+    // Local bounds are still enforced by validate_rule_bounds.
+    if governance_bypass_enabled(env, &governance) {
+        return;
+    }
+
     let raw_val = invoke_governance_get_fee_config(env, &governance);
 
     let fee_config = match try_read_governance_fee_config(env, raw_val) {
@@ -628,13 +789,8 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     if rule.platform_fee_bps > fee_config.platform_fee_bps
         || rule.network_fee_bps > fee_config.network_fee_bps
     {
-        env.events().publish(
-            (
-                Symbol::new(env, bettapay_common::events::FEE_CEILING_REJECTED_EVENT),
-                rule.platform_fee_bps,
-            ),
-            rule.network_fee_bps,
-        );
+        // No event here: Soroban rolls back events on panic, so an event
+        // published immediately before this error is unobservable (issue #1157).
         panic_with_error!(env, SettlementError::FeeExceedsGovernanceConfig);
     }
 }
@@ -758,5 +914,73 @@ mod governance_fee_config_shape_tests {
             classify_governance_fee_config(&env, map.into_val(&env)),
             Err(SettlementError::GovernanceCallFailed)
         ));
+    }
+}
+
+#[cfg(test)]
+mod payment_count_tests {
+    //! Issue #1106: the payment counter must saturate at `u32::MAX`, matching
+    //! the pending-operation counter, instead of trapping on unchecked `+ 1`.
+
+    use super::{
+        increment_pending_operation_count, increment_payment_count, read_pending_operation_count,
+        read_payment_count,
+    };
+    use crate::tests::setup;
+    use crate::types::DataKey;
+
+    #[test]
+    fn increment_payment_count_increases_normally_below_max() {
+        let (env, client, _admins, merchant) = setup();
+
+        let count = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &(u32::MAX - 1));
+            increment_payment_count(&env, &merchant);
+            read_payment_count(&env, &merchant)
+        });
+
+        assert_eq!(count, u32::MAX);
+    }
+
+    #[test]
+    fn increment_payment_count_saturates_at_u32_max() {
+        let (env, client, _admins, merchant) = setup();
+
+        let count = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &u32::MAX);
+            increment_payment_count(&env, &merchant);
+            read_payment_count(&env, &merchant)
+        });
+
+        assert_eq!(count, u32::MAX);
+    }
+
+    #[test]
+    fn payment_count_overflow_behavior_matches_pending_operation_count() {
+        let (env, client, _admins, merchant) = setup();
+
+        let (payments, operations) = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PaymentCount(merchant.clone()), &u32::MAX);
+            env.storage()
+                .instance()
+                .set(&DataKey::PendingOperationCount, &u32::MAX);
+
+            increment_payment_count(&env, &merchant);
+            increment_pending_operation_count(&env);
+
+            (
+                read_payment_count(&env, &merchant),
+                read_pending_operation_count(&env),
+            )
+        });
+
+        assert_eq!(payments, operations);
+        assert_eq!(payments, u32::MAX);
     }
 }

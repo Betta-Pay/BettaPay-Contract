@@ -26,26 +26,27 @@ Defined in `bettapay_common/src/error_codes.rs` as `SHARED_CODES`.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 1 | `Unauthorized` | Caller lacks required authorization |
-| 2 | `AlreadyInitialized` | Contract cannot be re-initialized |
-| 3 | `NotInitialized` | Contract must be initialized before use |
-| 4 | `InvalidAmount` | Amount value is zero, negative, or exceeds limits |
-| 5 | `InvalidAddress` | Address is malformed or zero-address sentinel |
-| 6 | `InvalidFee` | Fee configuration violates constraints |
-| 7 | `StorageFailure` | Persistent storage operation failed |
-| 8 | `ArithmeticOverflow` | Numeric operation would overflow |
-| 9 | `DivisionByZero` | Division or modulo by zero |
-| 10 | `InvalidTimestamp` | Timestamp is in the past or too far in the future |
-| 11 | `DeadlineExpired` | Operation deadline has passed |
-| 12 | `InvalidSignature` | Cryptographic signature verification failed |
-| 13 | `DuplicateEntry` | Entry already exists (merchant, schedule, etc.) |
-| 14 | `EntryNotFound` | Requested entry does not exist |
-| 15 | `Paused` | Contract is paused; operation not allowed |
+| 1 | `AlreadyInitialized` | Contract has already been initialized |
+| 2 | `NotInitialized` | Contract has not been initialized |
+| 3 | `Unauthorized` | Caller lacks required authorization |
+| 4 | `InvalidFeeBps` | Fee basis points are invalid |
+| 5 | `Paused` | Contract is paused; operation not allowed |
+| 6 | `InvalidAdmin` | Proposed admin set or address is invalid |
+| 7 | `InvalidRecoveryAddress` | Recovery address is invalid |
+| 8 | `RecoveryNotPending` | No pending recovery operation exists |
+| 9 | `RecoveryDelayActive` | Recovery timelock has not elapsed |
+| 10 | `ExecutionNotReady` | Scheduled operation timelock has not elapsed |
+| 11 | `OperationNotScheduled` | Scheduled operation does not exist |
+| 12 | `OperationAlreadyScheduled` | Operation is already scheduled |
+| 13 | `InvalidWasmInterface` | Deployed WASM interface is unsupported |
+| 14 | `InvalidThreshold` | Admin threshold is invalid |
+| 15 | `RecoveryAlreadyPending` | A recovery operation is already pending |
 | 16 | `AlreadyUnpaused` | Contract is already unpaused |
 | 17 | `AlreadyPaused` | Contract is already paused |
-| 18-99 | — | **Reserved for future shared errors** |
+| 18 | `SameAdmin` | Proposed admin set and threshold are unchanged |
+| 19-99 | — | **Reserved for future shared errors** |
 
-**Note on code 16 and 17:** These idempotent pause state checks are intentionally ordered this way in the codebase for historical reasons. New shared errors should use codes 18+.
+**Note on code 16 and 17:** These idempotent pause state checks are intentionally ordered this way in the codebase for historical reasons. New shared errors should use codes 19+.
 
 ---
 
@@ -57,10 +58,9 @@ Defined in `governance_contract/src/lib.rs` as `GovernanceError`.
 |------|------|---------|
 | 200 | `AnchorMissing` | Required anchor contract address not set |
 | 201 | `InvalidParamValue` | Configuration parameter value out of acceptable range |
-| 202 | — | **Reserved** |
+| 202 | `InvalidAnchor` | Anchor or asset address is invalid (zero or self) |
 | 203 | — | **Reserved** |
-| 204 | `SameAdmin` | New admin address is the same as the current admin |
-| 205-299 | — | **Reserved for future governance errors** |
+| 204-299 | — | **Reserved for future governance errors** |
 
 ---
 
@@ -70,26 +70,28 @@ Defined in `settlement_contract/src/errors.rs` as `SettlementError`.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 300 | `MerchantNotFound` | Merchant address not registered |
+| 300 | `MerchantExists` | Merchant address is already registered |
 | 301 | — | **Reserved (formerly allocated, now unused)** |
-| 302 | `InvalidMerchantConfig` | Merchant configuration violates constraints |
-| 303 | `PaymentNotFound` | Payment reference does not exist |
-| 304 | `InvalidPaymentState` | Payment state transition not allowed |
+| 302 | `MerchantMissing` | Merchant address is not registered |
+| 303 | `DuplicatePaymentReference` | Payment reference already exists |
+| 304 | `MerchantRuleNotSet` | Merchant has no merchant-specific rule |
 | 305 | — | **Reserved (formerly allocated, now unused)** |
-| 306 | `InsufficientBalance` | Payer balance too low for payment |
-| 307 | `InvalidRecipient` | Recipient address invalid for payment |
-| 308 | `FeeCalculationFailed` | Fee split computation failed |
-| 309 | `GovernanceCallFailed` | Cross-contract governance call returned error |
-| 310 | `ScheduleNotFound` | Scheduled operation does not exist |
-| 311 | `ScheduleAlreadyExecuted` | Scheduled operation already executed |
-| 312 | `ScheduleNotReady` | Scheduled operation execution time not reached |
-| 313 | `RecoveryNotInitiated` | Recovery mode must be initiated before execution |
-| 314 | `RecoveryAlreadyActive` | Recovery mode already in progress |
-| 315 | `InvalidRecoveryState` | Recovery state transition not allowed |
-| 316 | `UpgradeHashMismatch` | Upgrade WASM hash does not match scheduled hash |
-| 317 | `InvalidBytesLength` | Byte array length constraint violated |
-| 318 | `ReferenceAlreadyUsed` | Payment reference already exists (duplicate) |
-| 319-399 | — | **Reserved for future settlement errors** |
+| 306 | `ZeroAddress` | Supplied address is the zero-address sentinel |
+| 307 | `InvalidPaymentReference` | Payment reference is invalid or reserved |
+| 308 | `InvalidSettlementDelay` | Settlement delay exceeds the configured maximum |
+| 309 | `InvalidGovernance` | Governance address or contract state is invalid |
+| 310 | `AmountOverflow` | Fee calculation would overflow |
+| 311 | `GovernanceCallFailed` | Cross-contract governance call returned error |
+| 312 | `FeeExceedsGovernanceConfig` | Settlement fee exceeds governance limits |
+| 313 | `AmountTooSmall` | Payment amount is below the minimum |
+| 314 | `BatchTooLarge` | Cancellation batch exceeds the configured maximum |
+| 315 | `PaymentOrphaned` | Payment records are orphaned by merchant removal |
+| 316 | `OperationHashCollision` | Stored operation hash collided or payload mismatched |
+| 317 | `AdminSetEmpty` | Stored admin list was empty when resolving primary admin |
+| 318 | `PayloadTooLarge` | Scheduled operation payload exceeds the size limit |
+| 319 | `ExecutionDelayTooLong` | Scheduled execution delay exceeds the maximum |
+| 320 | `InvalidPauseReason` | Pause reason exceeds the maximum value |
+| 321-399 | — | **Reserved for future settlement errors** |
 
 ---
 

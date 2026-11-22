@@ -40,31 +40,37 @@ WASM_PATH=""
 SOROBAN_RPC_URL="${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org}"
 SOROBAN_NETWORK_PASSPHRASE="${SOROBAN_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 
+# usage [EXIT_CODE]: help text goes to stdout on success (exit 0, e.g. --help)
+# and to stderr on error paths (exit 2) so automation sees the failure.
 usage() {
-  sed -n '3,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-  exit 0
+  local code="${1:-0}"
+  if [ "$code" -eq 0 ]; then
+    sed -n '3,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  else
+    sed -n '3,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  fi
+  exit "$code"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -c|--contract-id)
-      CONTRACT_ID="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; CONTRACT_ID="$2"; shift 2 ;;
     -w|--wasm)
-      WASM_PATH="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; WASM_PATH="$2"; shift 2 ;;
     -r|--rpc-url)
-      SOROBAN_RPC_URL="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; SOROBAN_RPC_URL="$2"; shift 2 ;;
     -p|--network-passphrase)
-      SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
+      require_arg "$1" "$#" 2; SOROBAN_NETWORK_PASSPHRASE="$2"; shift 2 ;;
     -h|--help)
       usage ;;
     *)
       log_error "Unknown option: $1"
-      usage
-      exit 2 ;;
+      usage 2 ;;
   esac
 done
 
-[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage; }
+[ -n "$CONTRACT_ID" ] || { log_error "--contract-id is required."; usage 2; }
 assert_contract_id "$CONTRACT_ID" "contract ID"
 
 # ---- Resolve the local optimized Wasm ---------------------------------------

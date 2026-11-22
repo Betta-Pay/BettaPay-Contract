@@ -4,18 +4,71 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP,
-    PAYMENT_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT,
+    MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
-    read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
+    assert_admin_and_not_paused, assert_not_paused, assert_payments_readable,
+    decrement_payment_count, increment_payment_count, is_merchant_registered_and_bump_ttl,
+    is_merchant_registered_internal, read_effective_rule, read_min_payment_amount,
+    read_payment_count, read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
+    verify_admin_auth,
 };
-use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
+use crate::types::{
+    Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, RuleProvenance, SettlementRule,
+};
 use crate::{SettlementContract, SettlementContractClient};
 
+/// Clamps ceil-rounded fee legs against the gross and derives the merchant remainder.
+///
+/// This is the single place that enforces the fee-split invariants (issue #988),
+/// shared by every fee path: `store_payment_reference` and `calculate_fee_split`
+/// both reach it through [`calculate_split`].
+///
+/// Returns `(platform_fee, network_fee, merchant_payout)` such that:
+///
+/// * every leg is non-negative (`merchant_payout >= 0` in particular);
+/// * `platform_fee + network_fee <= gross`;
+/// * `platform_fee + network_fee + merchant_payout == max(gross, 0)`.
+///
+/// The platform leg is clamped to the gross first and the network leg takes
+/// whatever remains of the gross when the two would otherwise overshoot, which
+/// matches the network-leg clamp from issue #683. Fee values are unchanged for
+/// every input whose legs already fit within the gross, and the ceil rounding
+/// rules are not touched.
+fn clamp_fee_legs(gross: i128, platform_fee: i128, network_fee: i128) -> (i128, i128, i128) {
+    let gross = gross.max(0);
+    let platform_fee = platform_fee.clamp(0, gross);
+    // Both subtractions are bounded by the clamps above and cannot underflow;
+    // `saturating_sub` keeps the helper free of unchecked arithmetic anyway.
+    let network_fee = network_fee.clamp(0, gross.saturating_sub(platform_fee));
+    let merchant_payout = gross
+        .saturating_sub(platform_fee)
+        .saturating_sub(network_fee);
+
+    debug_assert!(merchant_payout >= 0);
+    debug_assert!(platform_fee.saturating_add(network_fee) <= gross);
+    (platform_fee, network_fee, merchant_payout)
+}
+
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
+///
+/// # Checked-math policy (issue #989)
+///
+/// Every basis-point computation on this path uses checked (or saturating, where
+/// the bound is proven) arithmetic so extreme inputs surface as a typed error
+/// instead of an arithmetic trap or a wrapped value in release builds:
+///
+/// * `amount * bps + (BPS_DENOMINATOR - 1)` is computed with `checked_mul` /
+///   `checked_add` ([`Bps::calculate_fee_ceil`]); `None` maps to
+///   [`SettlementError::AmountOverflow`].
+/// * The combined platform + network rate is guarded the same way, so an
+///   overflowing sum also maps to `AmountOverflow` rather than a later trap.
+/// * Rule-side bps sums (`validate_rule_bounds`) use `checked_add` and map
+///   overflow to [`SettlementError::InvalidFeeBps`].
+///
+/// No arbitrary-precision arithmetic is used, and in-range inputs produce
+/// exactly the same fees as before.
 ///
 /// # Known edge case: clamping merchant payout
 ///
@@ -63,26 +116,16 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     let platform_fee_amount = platform_bps
         .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
-    let mut network_fee_amount = network_bps
+    let network_fee_amount = network_bps
         .calculate_fee_ceil(amount)
         .unwrap_or_else(|| panic_with_error!(env, SettlementError::AmountOverflow));
 
     // Ceil-rounded fees can sum to more than the gross for tiny amounts with
-    // high fee configs. Clamp the network leg so total fees never exceed the
-    // gross, keeping the accounting equation balanced (issue #683). An
-    // overflowing sum is treated as exceeding the gross.
-    let fees_exceed_gross = platform_fee_amount
-        .checked_add(network_fee_amount)
-        .is_none_or(|total| total > amount);
-    if fees_exceed_gross {
-        network_fee_amount = amount.checked_sub(platform_fee_amount).unwrap_or(0).max(0);
-    }
-
-    let merchant_payout_amount = amount
-        .checked_sub(platform_fee_amount)
-        .and_then(|remainder| remainder.checked_sub(network_fee_amount))
-        .unwrap_or(0)
-        .max(0);
+    // high fee configs (issue #683). The shared helper clamps the legs and
+    // derives the merchant remainder so every fee path upholds the same
+    // invariants (issue #988).
+    let (platform_fee_amount, network_fee_amount, merchant_payout_amount) =
+        clamp_fee_legs(amount, platform_fee_amount, network_fee_amount);
     FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
@@ -91,38 +134,22 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     }
 }
 
-/// Returns true if `rule` matches the bootstrap default settlement rule across all fields.
-fn is_bootstrap_rule(rule: &SettlementRule) -> bool {
-    rule.platform_fee_bps == BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
-        && rule.network_fee_bps == BOOTSTRAP_DEFAULT_RULE.network_fee_bps
-        && rule.settlement_delay_ledger == BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
-        && rule.auto_settle == BOOTSTRAP_DEFAULT_RULE.auto_settle
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::{prop_assert, prop_assert_eq, proptest};
+    use crate::types::Bps;
+    use proptest::prelude::*;
+    use proptest::{prop_assert, prop_assert_eq, prop_assume, proptest};
 
-    #[test]
-    fn is_bootstrap_rule_identifies_matching_and_divergent_rules() {
-        assert!(is_bootstrap_rule(&BOOTSTRAP_DEFAULT_RULE));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.platform_fee_bps += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.network_fee_bps += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.settlement_delay_ledger += 1;
-        assert!(!is_bootstrap_rule(&modified));
-
-        let mut modified = BOOTSTRAP_DEFAULT_RULE;
-        modified.auto_settle = !BOOTSTRAP_DEFAULT_RULE.auto_settle;
-        assert!(!is_bootstrap_rule(&modified));
+    fn fee_test_amounts() -> impl proptest::strategy::Strategy<Value = i128> {
+        prop_oneof![
+            Just(0i128),
+            Just(1i128),
+            Just(crate::MIN_PAYMENT_AMOUNT),
+            Just(i128::MIN),
+            Just(i128::MAX),
+            1i128..=1_000_000_000i128,
+        ]
     }
 
     #[test]
@@ -280,12 +307,85 @@ mod tests {
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
             prop_assert_eq!(split.network_fee_amount, clamped_network);
             prop_assert_eq!(split.merchant_payout_amount, clamped_merchant);
+            prop_assert_eq!(
+                split.platform_fee_amount
+                    + split.network_fee_amount
+                    + split.merchant_payout_amount,
+                split.gross_amount,
+            );
             prop_assert!(split.merchant_payout_amount >= 0);
         }
 
         #[test]
+        fn clamp_fee_legs_keeps_total_fees_within_gross_and_merchant_non_negative(
+            gross in prop_oneof![Just(i128::MIN), Just(-1i128), Just(0i128), Just(i128::MAX), 0i128..=1_000_000i128],
+            platform_fee in prop_oneof![Just(i128::MIN), Just(i128::MAX), -10i128..=2_000_000i128],
+            network_fee in prop_oneof![Just(i128::MIN), Just(i128::MAX), -10i128..=2_000_000i128],
+        ) {
+            let (platform, network, merchant) = clamp_fee_legs(gross, platform_fee, network_fee);
+
+            prop_assert!(platform >= 0);
+            prop_assert!(network >= 0);
+            prop_assert!(merchant >= 0);
+            prop_assert!(platform + network <= gross.max(0));
+            prop_assert_eq!(platform + network + merchant, gross.max(0));
+            // Legs that already fit within the gross are returned untouched.
+            let fits = platform_fee >= 0
+                && network_fee >= 0
+                && platform_fee.checked_add(network_fee).is_some_and(|total| total <= gross);
+            if fits {
+                prop_assert_eq!(platform, platform_fee);
+                prop_assert_eq!(network, network_fee);
+            }
+        }
+
+        #[test]
+        fn fee_ceiling_is_monotonic_for_platform_and_network_legs(
+            platform_rate in 0u32..=BPS_DENOMINATOR,
+            network_rate in 0u32..=BPS_DENOMINATOR,
+            amount_a in fee_test_amounts(),
+            amount_b in fee_test_amounts(),
+        ) {
+            let (amount_a, amount_b) = if amount_a <= amount_b {
+                (amount_a, amount_b)
+            } else {
+                (amount_b, amount_a)
+            };
+            for rate in [platform_rate, network_rate] {
+                let fee_a = Bps::new(rate).calculate_fee_ceil(amount_a);
+                let fee_b = Bps::new(rate).calculate_fee_ceil(amount_b);
+                prop_assume!(fee_a.is_some() && fee_b.is_some());
+                prop_assert!(fee_a.unwrap() <= fee_b.unwrap());
+                if rate == 0 {
+                    prop_assert_eq!(fee_a, Some(0));
+                    prop_assert_eq!(fee_b, Some(0));
+                }
+            }
+        }
+
+        #[test]
+        fn clamped_network_leg_is_monotonic_in_gross_amount(
+            platform_fee_bps in 0u32..=BPS_DENOMINATOR,
+            network_fee_bps in 0u32..=BPS_DENOMINATOR,
+            amount_a in 1i128..=1_000_000_000i128,
+            amount_b in 1i128..=1_000_000_000i128,
+        ) {
+            let (amount_a, amount_b) = if amount_a <= amount_b {
+                (amount_a, amount_b)
+            } else {
+                (amount_b, amount_a)
+            };
+            let env = Env::default();
+            let rule = rule(platform_fee_bps, network_fee_bps);
+            let split_a = calculate_split(&env, amount_a, &rule);
+            let split_b = calculate_split(&env, amount_b, &rule);
+
+            prop_assert!(split_a.network_fee_amount <= split_b.network_fee_amount);
+        }
+
+        #[test]
         fn zero_fee_legs_preserve_the_gross_amount(
-            amount in 1i128..=i128::MAX,
+            amount in 0i128..=i128::MAX,
         ) {
             let env = Env::default();
             let rule = SettlementRule {
@@ -372,6 +472,8 @@ impl SettlementContract {
     /// * [`InvalidPaymentReference`](SettlementError::InvalidPaymentReference) — if `reference` is all zeros.
     /// * [`AmountTooSmall`](SettlementError::AmountTooSmall) — if `amount` is below the minimum.
     /// * [`DuplicatePaymentReference`](SettlementError::DuplicatePaymentReference) — if the reference already exists for this merchant.
+    /// * [`MaxPaymentsReached`](SettlementError::MaxPaymentsReached) — if the merchant already has
+    ///   [`MAX_PAYMENTS_PER_MERCHANT`] stored records and has not pruned any.
     /// * [`AmountOverflow`](SettlementError::AmountOverflow) — if `amount * bps` would overflow `i128`
     ///   for either fee leg or for the combined platform + network fee rate.
     ///
@@ -416,6 +518,14 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::DuplicatePaymentReference);
         }
 
+        // Issue #1104: bound each merchant's persistent payment history. The
+        // counter is decremented by both prune entry points, so pruning frees
+        // capacity again. Check before writing the reentrancy-guard dummy so a
+        // rejected payment leaves no storage footprint.
+        if read_payment_count(&env, &merchant) >= MAX_PAYMENTS_PER_MERCHANT {
+            panic_with_error!(&env, SettlementError::MaxPaymentsReached);
+        }
+
         // ISSUE 495: Reentrancy guard.
         // We write a dummy record to storage immediately so that if the external
         // read_governance_fee_rule call results in a reentrant call back to this
@@ -436,8 +546,13 @@ impl SettlementContract {
         };
         env.storage().persistent().set(&payment_key, &dummy_record);
 
-        let rule = read_rule_or_default(&env, merchant.clone());
-        if is_bootstrap_rule(&rule) {
+        let effective = read_effective_rule(&env, merchant.clone());
+        let rule = effective.rule;
+        // Issue #1105: provenance, not field equality, identifies an
+        // unconfigured deployment. An admin or governance rule that happens to
+        // carry the bootstrap values is an explicit configuration and must stay
+        // silent on the hot path.
+        if effective.provenance == RuleProvenance::Bootstrap {
             env.events().publish(
                 (Symbol::new(&env, events::BOOTSTRAP_FALLBACK_EVENT),),
                 BOOTSTRAP_DEFAULT_RULE,
@@ -464,6 +579,7 @@ impl SettlementContract {
             PAYMENT_TTL_THRESHOLD,
             PAYMENT_TTL_BUMP,
         );
+        increment_payment_count(&env, &merchant);
 
         env.events().publish(
             (
@@ -498,37 +614,72 @@ impl SettlementContract {
         // queries. Fee values are unchanged — the no-bump reader resolves the
         // identical rule through the same fallback chain.
         let rule = read_rule_or_default_no_bump(&env, merchant);
+        // `calculate_split` routes the legs through `clamp_fee_legs`, the same
+        // shared invariant helper `store_payment_reference` uses (issue #988).
         calculate_split(&env, amount, &rule)
     }
 
     /// Remove a payment reference after the configured admin threshold has
     /// authorized the operation. Removing a missing record is intentionally a
     /// no-op so maintenance callers can safely retry cleanup work.
+    ///
+    /// When a record actually exists, it is removed and a single
+    /// `payment_pruned` event is emitted with topics
+    /// `(Symbol("payment_pruned"), merchant, reference)` and data
+    /// `(merchant, reference)` (issue #890). The missing-record no-op path
+    /// emits nothing, so indexers never observe a prune that removed nothing.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if the signers do
+    ///   not satisfy the admin threshold.
     pub fn prune_payment(
         env: Env,
         signers: Vec<Address>,
         merchant: Address,
         reference: BytesN<32>,
     ) {
+        // Check pause before signer authorization so `Paused` takes precedence
+        // over authorization errors and no stored payment can be removed.
+        assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Payment(merchant, reference));
+        let key = DataKey::Payment(merchant.clone(), reference.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            decrement_payment_count(&env, &merchant, 1);
+            // Issue #890: one event per actually-removed record. Keeping the
+            // publish inside this branch also keeps the no-op path silent.
+            env.events().publish(
+                (
+                    Symbol::new(&env, events::PAYMENT_PRUNED_EVENT),
+                    merchant.clone(),
+                    reference.clone(),
+                ),
+                (merchant, reference),
+            );
+        }
     }
 
     /// Remove several of one merchant's payment references in a single call
     /// after the configured admin threshold has authorized the operation.
     ///
-    /// Issue #983: the bounded batch form of [`prune_payment`](Self::prune_payment).
+    /// Issue #983: the bounded batch form of `prune_payment`.
     /// References that are not stored (never existed, already pruned, or
     /// repeated within `refs`) are skipped as no-ops, so a cleanup can be
-    /// retried safely. One `payments_pruned` event is emitted per call with
-    /// topics `(Symbol("payments_pruned"), merchant)` and data
+    /// retried safely. When at least one record is actually deleted, one
+    /// `payments_pruned` event is emitted with topics
+    /// `(Symbol("payments_pruned"), merchant)` and data
     /// `(admin, removed_count)`, where `removed_count` is the number of
-    /// records actually deleted. There are no accounting or refund side effects.
+    /// records actually deleted. A no-op batch (empty `refs`, or none of them
+    /// stored) emits nothing, matching [`prune_payment`](Self::prune_payment)'s
+    /// silent missing-record path, so indexers never observe an empty prune.
+    /// There are no accounting or refund side effects.
     ///
     /// # Panics
     ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is paused. The
+    ///   check runs before signer authorization so `Paused` takes precedence.
     /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
     ///   [`MAX_PAYMENTS_BATCH`].
     /// * Auth failure — if the signers do not satisfy the admin threshold.
@@ -538,6 +689,9 @@ impl SettlementContract {
         merchant: Address,
         refs: Vec<BytesN<32>>,
     ) -> u32 {
+        // Match `prune_payment`: the pause guard runs before the signer checks
+        // so no batch deletion can happen while the contract is paused.
+        assert_not_paused(&env);
         verify_admin_auth(&env, &signers, read_threshold(&env));
         if refs.len() > MAX_PAYMENTS_BATCH {
             panic_with_error!(&env, SettlementError::BatchTooLarge);
@@ -552,12 +706,11 @@ impl SettlementContract {
             }
         }
 
+        decrement_payment_count(&env, &merchant, removed);
+
         let admin = signers.get(0).unwrap();
         env.events().publish(
-            (
-                Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT),
-                merchant,
-            ),
+            (Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT), merchant),
             (admin, removed),
         );
         removed
@@ -638,8 +791,9 @@ impl SettlementContract {
     /// call, and the cap is enforced on `refs` itself, exactly as before.
     /// `PaymentsPage::next_cursor` is `Some(cursor + refs.len())` whenever
     /// this call's `refs` filled a full page (length == `MAX_PAYMENTS_BATCH`,
-    /// signalling the caller's own reference set may extend further), and
-    /// `None` once a shorter page confirms there is nothing left to resolve.
+    /// signalling the caller's own reference set may extend further), saturating
+    /// at `u32::MAX` if that sum would overflow, and `None` once a shorter page
+    /// confirms there is nothing left to resolve.
     /// Pass `cursor = 0` for a single, non-paginated call.
     ///
     /// # Panics
@@ -686,7 +840,11 @@ impl SettlementContract {
         }
 
         let next_cursor = if refs.len() == MAX_PAYMENTS_BATCH {
-            Some(cursor + refs.len())
+            // A caller-supplied cursor near `u32::MAX` plus a full page would
+            // trap on arithmetic overflow. Check the addition and saturate at
+            // `u32::MAX` so a page is always returned; normal cursors are
+            // unaffected.
+            Some(cursor.checked_add(refs.len()).unwrap_or(u32::MAX))
         } else {
             None
         };
@@ -696,11 +854,33 @@ impl SettlementContract {
             next_cursor,
         }
     }
+
+    /// Returns the number of payment records currently stored for `merchant`,
+    /// matching [`MAX_PAYMENTS_PER_MERCHANT`](crate::policy::MAX_PAYMENTS_PER_MERCHANT)
+    /// usage (issue #980).
+    ///
+    /// Enforces the same read authorization as `get_payments`: pass an
+    /// empty `signers` vector to authorize as the merchant, or a non-empty
+    /// vector of admin signers to authorize through the configured admin
+    /// threshold. A registered merchant that has never stored a payment
+    /// returns zero.
+    ///
+    /// # Panics
+    ///
+    /// * Auth failure — if the caller is neither the merchant nor an
+    ///   authorized admin signer set.
+    /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
+    ///   merchant was unregistered, its payment records are orphaned and no
+    ///   longer readable (issue #490).
+    pub fn get_payment_count(env: Env, merchant: Address, signers: Vec<Address>) -> u32 {
+        assert_read_authorized(&env, &merchant, &signers);
+        assert_payments_readable(&env, &merchant);
+        read_payment_count(&env, &merchant)
+    }
 }
 
 #[cfg(test)]
 mod read_authorization_tests {
-    use super::SettlementContractClient;
     use crate::tests::setup;
     use soroban_sdk::{BytesN, Error};
 
@@ -752,5 +932,91 @@ mod read_authorization_tests {
         assert!(client
             .get_payment_reference(&merchant, &reference, &admins)
             .is_some());
+    }
+}
+
+#[cfg(test)]
+mod checked_math_tests {
+    use crate::tests::setup;
+    use crate::types::SettlementRule;
+    use bettapay_common::constants::{MAX_FEE_BPS, MIN_FEE_BPS};
+    use proptest::prelude::*;
+    use proptest::{prop_assert, proptest};
+    use soroban_sdk::Error;
+
+    fn is_error(err: &Error, code: u32) -> bool {
+        *err == Error::from_contract_error(code)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Extreme amounts and bps either split successfully or fail with
+        /// `AmountOverflow` (310); never any other error or arithmetic trap.
+        #[test]
+        fn extreme_amounts_yield_a_split_or_amount_overflow(
+            amount in prop_oneof![
+                Just(i128::MAX),
+                Just(i128::MAX - 1),
+                Just(i128::MAX / 2),
+                Just(i128::MAX / 5_000),
+                Just(i128::MAX / 10_000),
+                (i128::MAX / 10_000 - 2)..=(i128::MAX / 10_000 + 2),
+                crate::MIN_PAYMENT_AMOUNT..=i128::MAX,
+            ],
+            platform_fee_bps in MIN_FEE_BPS..=MAX_FEE_BPS,
+            network_fee_bps in MIN_FEE_BPS..=MAX_FEE_BPS,
+        ) {
+            let (_env, client, admins, merchant) = setup();
+            client.register_merchant(&admins, &merchant);
+            client.set_settlement_rule(
+                &admins,
+                &merchant,
+                &SettlementRule {
+                    platform_fee_bps,
+                    network_fee_bps,
+                    settlement_delay_ledger: 0,
+                    auto_settle: false,
+                },
+            );
+
+            match client.try_calculate_fee_split(&merchant, &amount) {
+                Ok(Ok(split)) => {
+                    prop_assert!(split.merchant_payout_amount >= 0);
+                    prop_assert!(
+                        split.platform_fee_amount + split.network_fee_amount <= split.gross_amount
+                    );
+                }
+                Err(Ok(err)) => prop_assert!(is_error(&err, 310)),
+                _ => prop_assert!(false, "unexpected error kind"),
+            }
+        }
+
+        /// Any bps pair, including values whose `u32` sum would overflow, is
+        /// accepted or rejected with `InvalidFeeBps` (4); never a trap.
+        #[test]
+        fn extreme_bps_rules_are_accepted_or_invalid_fee_bps(
+            platform_fee_bps in prop_oneof![Just(u32::MAX), Just(u32::MAX - 1), 0u32..=20_000],
+            network_fee_bps in prop_oneof![Just(u32::MAX), Just(u32::MAX - 1), 0u32..=20_000],
+        ) {
+            let (_env, client, admins, merchant) = setup();
+            client.register_merchant(&admins, &merchant);
+
+            let outcome = client.try_set_settlement_rule(
+                &admins,
+                &merchant,
+                &SettlementRule {
+                    platform_fee_bps,
+                    network_fee_bps,
+                    settlement_delay_ledger: 0,
+                    auto_settle: false,
+                },
+            );
+            match outcome {
+                Ok(Ok(())) => {}
+                Err(Ok(err)) => prop_assert!(is_error(&err, 4)),
+                _ => prop_assert!(false, "unexpected error kind"),
+            }
+        }
     }
 }

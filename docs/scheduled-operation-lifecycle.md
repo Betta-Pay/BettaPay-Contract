@@ -131,3 +131,36 @@ The `Operation` enum in `settlement_contract::types` contains exactly nine varia
 | 7 | `SetSettlementRule(Address, SettlementRule)` | `merchant: Address`, `rule: SettlementRule` | Validates fee bps and delay bounds against governance ceilings, writes `DataKey::Rule(merchant)`, extends TTL, and emits `settlement_rule_updated`. |
 | 8 | `ClearSettlementRule(Address)` | `merchant: Address` | Deletes `DataKey::Rule(merchant)`, resolves the effective fallback rule (without emitting `bootstrap_fallback`), and emits `settlement_rule_cleared`. |
 | 9 | `SetDefaultRule(SettlementRule)` | `rule: SettlementRule` | Validates fee bps and delay bounds against governance ceilings, writes singleton `DataKey::DefaultRule` to instance storage, and emits `default_rule_updated`. |
+
+---
+
+## 7. Queue-Depth Metric
+
+Soroban cannot enumerate persistent `ScheduledOperation` keys, so the contract maintains an explicit queue-depth counter for operators, indexers, and monitoring dashboards.
+
+- **Key**: `DataKey::PendingOperationCount` in **instance** storage.
+- **Value**: `u32` number of entries currently pending in the timelock queue.
+- **Absence**: a missing key means an empty queue, so a fresh contract reports `0` without an initialisation write.
+- **Query**: `get_pending_operation_count()` is read-only, permissionless, and TTL-neutral.
+
+### Maintenance Rules
+
+| Transition | Effect on counter |
+|---|---|
+| `schedule()` writes a new `ScheduledOperation` slot | Incremented by 1 |
+| `execute()` consumes the slot (`consume_scheduled_operation`) | Decremented by 1 |
+| `cancel()` removes the slot | Decremented by 1 |
+| `cancel_all()` removes each matching slot | Decremented once per actually-removed entry |
+
+Decrements saturate at zero, so a repeated or skipped removal cannot underflow the counter. Failed calls that panic (for example a duplicate schedule, a missing-operation cancel, or an early `ExecutionNotReady`) roll back their storage writes and therefore leave the counter unchanged.
+
+Because the counter lives in instance storage, it shares the contract instance TTL and needs no separate TTL bump. Build tooling that needs a pending-operation list (for example `scripts/list_pending_ops.sh`) still reconstructs entries from `op_scheduled` / `op_executed` / `op_cancelled` events; the counter is the authoritative count to reconcile against.
+
+### Example
+
+```rust
+let pending = client.get_pending_operation_count();
+if pending > 0 {
+    // Reconcile against op_scheduled minus op_executed/op_cancelled events.
+}
+```

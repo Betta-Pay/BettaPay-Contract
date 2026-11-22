@@ -38,6 +38,14 @@ impl Bps {
     /// Calculates ceil-rounded fee amount for a given gross amount:
     /// `ceil(amount * bps / BPS_DENOMINATOR) = (amount * bps + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR`.
     ///
+    /// # Checked-math policy (issue #989)
+    ///
+    /// Every basis-point fee computation is checked: the multiply, the
+    /// ceil-rounding add and the division all use `checked_*`, so extreme
+    /// inputs return `None` rather than trapping or wrapping. Callers map
+    /// `None` to `SettlementError::AmountOverflow`; rule-side bps sums map
+    /// overflow to `InvalidFeeBps`.
+    ///
     /// Uses checked arithmetic throughout: returns `None` when the intermediate
     /// `amount * bps + (BPS_DENOMINATOR - 1)` would overflow `i128`, so callers
     /// can map the condition to a typed `AmountOverflow` error instead of
@@ -70,7 +78,7 @@ impl From<Bps> for u32 {
 /// This struct defines the fee allocation and settlement timing for a merchant,
 /// including the platform and network fee shares as well as whether
 /// settlement is processed automatically after a delay.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
 pub struct SettlementRule {
     /// Platform fee charged on each payment, expressed in basis points.
@@ -135,5 +143,48 @@ mod tests {
 
         assert_eq!(rule.platform_bps(), Bps::new(rule.platform_fee_bps));
         assert_eq!(rule.network_bps(), Bps::new(rule.network_fee_bps));
+    fn settlement_rule_partial_eq_and_debug() {
+        let rule1 = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        let rule2 = SettlementRule {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+        let rule3 = SettlementRule {
+            platform_fee_bps: 101,
+            network_fee_bps: 50,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+
+        assert_eq!(rule1, rule2);
+        assert_ne!(rule1, rule3);
+
+        extern crate std;
+        use std::format;
+        let formatted = format!("{:?}", rule1);
+        assert!(formatted.contains("SettlementRule"));
+        assert!(formatted.contains("platform_fee_bps: 100"));
+    }
+
+    #[test]
+    fn bps_partial_eq_and_debug() {
+        let bps1 = Bps::new(100);
+        let bps2 = Bps::new(100);
+        let bps3 = Bps::new(200);
+
+        assert_eq!(bps1, bps2);
+        assert_ne!(bps1, bps3);
+
+        extern crate std;
+        use std::format;
+        let formatted = format!("{:?}", bps1);
+        assert!(formatted.contains("Bps(100)"));
     }
 }

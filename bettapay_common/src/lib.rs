@@ -36,9 +36,13 @@
 
 #![no_std]
 
+extern crate alloc;
+
 pub mod constants;
 pub mod error_codes;
 pub mod events;
 pub mod storage;
 pub mod types;
 pub mod upgrade;
+
+pub use storage::{is_zero_address, zero_address, ZERO_ADDRESS_STRKEY};

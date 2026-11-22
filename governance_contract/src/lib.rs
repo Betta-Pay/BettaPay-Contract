@@ -63,8 +63,14 @@
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — repair a
 //!   lost or corrupted admin set
 //!
-//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes` and
-//! `pause_allows_admin_transfer_threshold_and_recovery`. See also
+//! `update_system_param` skips `assert_not_paused` on purpose (issue #1069):
+//! during an incident the admin may need to set `bypass_gov_fees` to decouple
+//! settlement from a broken fee config. `remove_system_param` deletes state
+//! rather than fixing it, so it stays blocked while paused.
+//!
+//! This matrix is pinned by `pause_blocks_fee_and_anchor_writes`,
+//! `pause_allows_admin_transfer_threshold_and_recovery` and
+//! `update_system_param_allowed_while_paused`. See also
 //! [`adr/001-selective-pause-model.md`](https://github.com/Betta-Pay/BettaPay-Contract/blob/main/adr/001-selective-pause-model.md).
 //!
 //! ### Fee Configuration
@@ -105,7 +111,9 @@
 //! maximum settlement delay, minimum collateral ratio) to other contracts
 //! without upgrading the governance contract itself. Parameters are read via
 //! [`GovernanceContract::get_system_param`], which also refreshes the
-//! persistent-entry TTL.
+//! persistent-entry TTL. Writing the value that is already stored only
+//! refreshes the TTL and emits no event (issue #1070). Obsolete parameters
+//! are deleted with [`GovernanceContract::remove_system_param`] (issue #1071).
 //!
 //! One key is special-cased: `bypass_gov_fees` (issue #743) is the settlement
 //! fee circuit-breaker and only accepts `0` or `1`. Setting `1` makes
@@ -134,6 +142,7 @@
 //! | 18 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
+//! | 202 | `InvalidAnchor` | Asset or anchor address is zero-address, or asset equals anchor |
 //!
 //! ## Event Conventions
 //!
@@ -167,7 +176,8 @@
 //! | `paused` | Contract paused |
 //! | `unpaused` | Contract unpaused |
 //! | `recovery_initiated` / `recovery_cancelled` / `recovery_executed` | Admin-recovery lifecycle |
-//! | `sys_param_updated` | System parameter updated |
+//! | `sys_param_updated` | System parameter value changed |
+//! | `sys_param_removed` | System parameter removed |
 //! | `fee_config_updated` | Fee configuration changed |
 //! | `anchor_upserted` | Anchor created or replaced for an asset | Data: `(Option<Address> previous, Address current)` |
 //! | `anchor_removed` | Anchor removed for an asset |
@@ -320,6 +330,8 @@ pub enum GovernanceError {
     /// The anchor for the specified asset was not found.
     AnchorMissing = 200,
     InvalidParamValue = 201,
+    /// Asset or anchor address is zero-address, or asset equals anchor.
+    InvalidAnchor = 202,
     /// `pause` was called while the contract was already paused.
     AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
@@ -350,6 +362,7 @@ const _: () = {
     assert!(GovernanceError::SameAdmin as u32 == error_codes::SAME_ADMIN);
     assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::InvalidAnchor as u32 >= error_codes::GOVERNANCE_RANGE_START);
 };
 
 #[contract]
@@ -359,6 +372,11 @@ pub struct GovernanceContract;
 impl GovernanceContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
         version == SUPPORTED_INTERFACE_VERSION
+    }
+
+    /// Returns the schema version expected by this build (issue #1126).
+    pub fn version(_env: Env) -> u32 {
+        CURRENT_SCHEMA_VERSION
     }
 
     /// Initialises the governance contract and sets the initial administrator.
@@ -382,6 +400,14 @@ impl GovernanceContract {
     /// # Errors
     ///
     /// Panics with `GovernanceError::AlreadyInitialized` if already initialised.
+    ///
+    /// # Error precedence
+    ///
+    /// The `AlreadyInitialized` check runs **before** `deployer.require_auth()`.
+    /// A call against an already-initialized contract therefore returns
+    /// `AlreadyInitialized` even when the caller cannot authorize, which keeps
+    /// the one-shot state observable instead of masking it with `Unauthorized`.
+    /// This ordering is intentional and must not be reversed.
     pub fn init(
         env: Env,
         deployer: Address,
@@ -424,6 +450,18 @@ impl GovernanceContract {
         // TTL — going through `storage::read_admin` would do an extend_ttl on
         // every check and could panic if the contract has no instance entries.
         env.storage().instance().has(&DataKey::Admin)
+    }
+
+    /// Returns the deployer address recorded at `init`.
+    ///
+    /// # Panics
+    ///
+    /// * [`NotInitialized`](GovernanceError::NotInitialized) — if `init` has not been called.
+    pub fn get_deployer(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Deployer)
+            .unwrap_or_else(|| panic_with_error!(&env, GovernanceError::NotInitialized))
     }
 
     pub fn get_admin(env: Env) -> Vec<Address> {
@@ -565,6 +603,15 @@ impl GovernanceContract {
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`GovernanceError::RecoveryNotPending`].
     ///
+    /// # Admin set reset
+    ///
+    /// Recovery **does not preserve** the current multisig configuration. It
+    /// replaces `admins` with the single-element set `[pending.new_admin]` and
+    /// sets the threshold to `1`, collapsing any prior M-of-N set to 1-of-1. A
+    /// multisig must be restored afterwards with
+    /// [`transfer_admin`](GovernanceContract::transfer_admin) from the
+    /// recovered admin.
+    ///
     /// # Panics
     ///
     /// - [`GovernanceError::RecoveryDelayActive`] if the delay window has not
@@ -579,10 +626,9 @@ impl GovernanceContract {
 
         // Issue #514: never let event-building read the possibly-corrupt admin
         // entry and abort recovery before it can repair the set. Resolve the
-        // old admin to `Option` and fall back to the zero-address sentinel
-        // when the entry is missing or has no primary admin, so recovery
-        // always succeeds in replacing the set.
-        let old_admin = read_optional_primary_admin(&env);
+        // old admin set to an empty vector when the entry is missing or
+        // corrupt, so recovery always succeeds in replacing the set.
+        let old_admins = read_optional_admins(&env);
 
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
@@ -595,8 +641,8 @@ impl GovernanceContract {
         events::emit_recovery_executed(
             &env,
             &AdminTransferred {
-                old_admin,
-                new_admin: pending.new_admin.clone(),
+                old_admins,
+                new_admins,
             },
         );
     }
@@ -630,28 +676,46 @@ impl GovernanceContract {
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
-                old_admin: storage::primary_admin(&old_admins).unwrap(),
-                new_admin: new_admins.get(0).unwrap(),
+                old_admins,
+                new_admins,
             },
         );
     }
 
+    /// Updates the multisig threshold required for admin operations.
+    ///
+    /// # Authorization
+    ///
+    /// Requires `current_threshold` distinct authorized admin signers (matching
+    /// the standard admin multisig quorum). Admin authorization is verified
+    /// before validating `new_threshold` bounds so unauthenticated callers
+    /// cannot probe the size of the admin set.
+    ///
+    /// # Errors
+    ///
+    /// - [`GovernanceError::Unauthorized`] if fewer than `current_threshold`
+    ///   valid, distinct admin signers authorize the call.
+    /// - [`GovernanceError::InvalidThreshold`] if `new_threshold == 0` or
+    ///   `new_threshold > admins.len()`.
+    /// - [`GovernanceError::SameAdmin`] if `new_threshold == current_threshold`.
     pub fn change_threshold(env: Env, signers: Vec<Address>, new_threshold: u32) {
+        let current_threshold = read_threshold(&env);
+        verify_admin_auth(&env, &signers, current_threshold);
+
         let admins = read_admins(&env);
         if new_threshold == 0 || new_threshold > admins.len() {
             panic_with_error!(&env, GovernanceError::InvalidThreshold);
         }
-
-        let current_threshold = read_threshold(&env);
-        verify_admin_auth(&env, &signers, current_threshold);
+        if new_threshold == current_threshold {
+            panic_with_error!(&env, GovernanceError::SameAdmin);
+        }
 
         env.storage()
             .instance()
             .set(&CommonDataKey::Threshold, &new_threshold);
-        env.events().publish(
-            (Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT),),
-            (current_threshold, new_threshold),
-        );
+        // Shared canonical payload `(current_threshold, new_threshold)`;
+        // settlement_contract emits the identical shape for this topic.
+        events::emit_threshold_changed(&env, current_threshold, new_threshold);
     }
 
     pub fn pause(env: Env, signers: Vec<Address>) {
@@ -695,15 +759,27 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
-        run_migrations(&env);
-        env.events().publish(
-            (Symbol::new(&env, events::MIGRATED_EVENT),),
-            (admin, CURRENT_SCHEMA_VERSION),
-        );
+        if run_migrations(&env) {
+            env.events().publish(
+                (Symbol::new(&env, events::MIGRATED_EVENT),),
+                (admin, CURRENT_SCHEMA_VERSION),
+            );
+        }
     }
 
+    /// Alias for update_system_param to maintain interface parity (issue #1122).
+    pub fn set_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
+        Self::update_system_param(env, signers, key, value);
+    }
+
+    /// Stores `value` under the system parameter `key`.
+    ///
+    /// Not blocked while paused (issue #1069), so the admin can flip
+    /// emergency knobs such as `bypass_gov_fees` during an incident. Writing
+    /// the value that is already stored only extends the TTL and emits no
+    /// `sys_param_updated` event (issue #1070).
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
-        assert_admin_and_not_paused(&env, &signers);
+        verify_admin_auth(&env, &signers, read_threshold(&env));
 
         if value < 0 {
             panic_with_error!(&env, GovernanceError::InvalidParamValue);
@@ -720,30 +796,59 @@ impl GovernanceContract {
         let admin = signers.get(0).unwrap();
         let storage_key = DataKey::SystemParam(key.clone());
         let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+        let changed = previous_value != Some(value);
 
-        env.storage().persistent().set(&storage_key, &value);
+        if changed {
+            env.storage().persistent().set(&storage_key, &value);
+        }
         env.storage().persistent().extend_ttl(
             &storage_key,
             SYSTEM_PARAM_TTL_THRESHOLD,
             SYSTEM_PARAM_TTL_BUMP,
         );
 
+        if changed {
+            env.events().publish(
+                (Symbol::new(&env, events::SYS_PARAM_UPDATED_EVENT), key),
+                (admin, previous_value, value),
+            );
+        }
+    }
+
+    /// Deletes the system parameter stored under `key` (issue #1071).
+    ///
+    /// Admin-gated and blocked while paused. Emits `sys_param_removed` with
+    /// topic `(Symbol("sys_param_removed"), key)` and data
+    /// `(admin, previous_value)`. Removing a key that is not stored is a
+    /// no-op and emits nothing, so retries are safe.
+    pub fn remove_system_param(env: Env, signers: Vec<Address>, key: Symbol) {
+        assert_admin_and_not_paused(&env, &signers);
+
+        let storage_key = DataKey::SystemParam(key.clone());
+        let previous_value: Option<i128> = env.storage().persistent().get(&storage_key);
+        let Some(previous_value) = previous_value else {
+            return;
+        };
+
+        env.storage().persistent().remove(&storage_key);
+        let admin = signers.get(0).unwrap();
         env.events().publish(
-            (Symbol::new(&env, events::SYS_PARAM_UPDATED_EVENT), key),
-            (admin, previous_value, value),
+            (Symbol::new(&env, events::SYS_PARAM_REMOVED_EVENT), key),
+            (admin, previous_value),
         );
     }
 
     pub fn get_system_param(env: Env, key: Symbol) -> Option<i128> {
         let storage_key = DataKey::SystemParam(key);
-        if env.storage().persistent().has(&storage_key) {
+        let result = env.storage().persistent().get(&storage_key);
+        if result.is_some() {
             env.storage().persistent().extend_ttl(
                 &storage_key,
                 SYSTEM_PARAM_TTL_THRESHOLD,
                 SYSTEM_PARAM_TTL_BUMP,
             );
         }
-        env.storage().persistent().get(&storage_key)
+        result
     }
 
     /// Sets the global fee configuration.
@@ -768,7 +873,11 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
-        if config.platform_fee_bps + config.network_fee_bps > BPS_DENOMINATOR {
+        let total_fee_bps = config
+            .platform_fee_bps
+            .checked_add(config.network_fee_bps)
+            .unwrap_or_else(|| panic_with_error!(&env, GovernanceError::InvalidFeeBps));
+        if total_fee_bps > BPS_DENOMINATOR {
             panic_with_error!(&env, GovernanceError::InvalidFeeBps);
         }
 
@@ -781,20 +890,33 @@ impl GovernanceContract {
         );
     }
 
+    /// Returns the global fee configuration and extends instance TTL when set,
+    /// so active settlement reads keep governance instance storage alive.
     pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
         let key = DataKey::FeeConfig;
-        env.storage().instance().get(&key)
+        let result: Option<FeeConfig> = env.storage().instance().get(&key);
+        if result.is_some() {
+            storage::bump_instance_ttl(&env);
+        }
+        result
     }
 
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {
         assert_admin_and_not_paused(&env, &signers);
-        assert_not_zero(&env, &asset, GovernanceError::InvalidAdmin);
-        assert_not_zero(&env, &anchor, GovernanceError::InvalidAdmin);
+        assert_not_zero(&env, &asset, GovernanceError::InvalidAnchor);
+        assert_not_zero(&env, &anchor, GovernanceError::InvalidAnchor);
         if asset == anchor {
-            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+            panic_with_error!(&env, GovernanceError::InvalidAnchor);
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
+        if old_anchor.as_ref() == Some(&anchor) {
+            // Same anchor again: keep the entry alive but emit nothing.
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);
+            return;
+        }
         env.storage().persistent().set(&key, &anchor);
         env.storage()
             .persistent()
@@ -848,6 +970,9 @@ fn read_admins(env: &Env) -> Vec<Address> {
 }
 
 fn read_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
     env.storage()
         .instance()
         .get(&CommonDataKey::Threshold)
@@ -946,9 +1071,20 @@ fn migrate_step(_env: &Env, from_version: u32) {
 }
 
 /// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
-/// [`migrate_step`] for each version crossed. A no-op when already current.
-fn run_migrations(env: &Env) {
-    let mut version = read_schema_version(env);
+/// [`migrate_step`] for each version crossed. Returns `true` if the stored
+/// version advanced, or `false` when already at `CURRENT_SCHEMA_VERSION`.
+///
+/// Issue #1068: `read_schema_version` treats a missing marker as current, so
+/// the loop below would never write it. Persist the marker explicitly on
+/// instances that predate it, so later migrations have a stored baseline.
+fn run_migrations(env: &Env) -> bool {
+    if !env.storage().instance().has(&DataKey::SchemaVersion) {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+    }
+    let start_version = read_schema_version(env);
+    let mut version = start_version;
     while version < CURRENT_SCHEMA_VERSION {
         migrate_step(env, version);
         version += 1;
@@ -956,6 +1092,7 @@ fn run_migrations(env: &Env) {
             .instance()
             .set(&DataKey::SchemaVersion, &version);
     }
+    version > start_version
 }
 
 /// Returns the instance-storage schema version, defaulting to the current
@@ -968,20 +1105,15 @@ fn read_schema_version(env: &Env) -> u32 {
         .unwrap_or(CURRENT_SCHEMA_VERSION)
 }
 
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514).
-fn read_optional_primary_admin(env: &Env) -> Address {
+/// Returns the stored admin set, or an empty vector when the admin entry is
+/// missing or corrupt. Used only by `execute_recovery`, which must be able
+/// to repair a corrupt admin set (issue #514) and must still report the
+/// previous admin set on the `admin_transferred` event (issue #977).
+fn read_optional_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Rejects the zero address with a caller-supplied `GovernanceError`.

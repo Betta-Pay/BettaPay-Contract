@@ -95,18 +95,29 @@ mitigation.
 ### Overview
 
 A governance trap occurs when the configured governance contract is broken,
-mis-deployed, or returns an unexpected error, causing every mutating entry
-point in `settlement_contract` to abort with `GovernanceCallFailed`.  Admin
-writes (fee-rule updates, merchant registration, pausing) become impossible
-until the trap is resolved.
+mis-deployed, or returns an unexpected error. The rule-writing entry points
+of `settlement_contract` fail closed and abort with
+`GovernanceCallFailed`, so fee-rule updates and scheduling of timelocked
+operations become impossible until the trap is resolved. Payment ingestion and
+read paths fail open and keep working. Other admin entry points, including
+`register_merchant` and `pause`, never call governance and are unaffected.
 
 ### Symptoms
 
-- On-chain transaction invoking any mutating entry point returns a contract
-  error whose `SettlementError` code corresponds to `GovernanceCallFailed`.
-- `update_governance`, `set_settlement_rule`, `set_default_rule`, and similar
-  admin calls all fail; read-only calls such as `calculate_fee_split` still
-  succeed because they do not invoke governance.
+- On-chain transactions invoking `set_settlement_rule`, `set_default_rule`, or
+  `schedule` return a contract error whose `SettlementError` code corresponds
+  to `GovernanceCallFailed` (fail closed). `schedule` probes governance
+  `get_fee_config` before writing, so nothing is queued.
+- `update_governance` only fails if the *new* governance contract fails its
+  interface checks; it does not call the broken contract.
+- `register_merchant`, `unregister_merchant`, `pause`, and `unpause` are
+  unaffected: they do not invoke governance and keep working while the trap is
+  active.
+- `calculate_fee_split` and `store_payment_reference` fail open: they do not
+  abort with `GovernanceCallFailed`. Fee resolution falls back to the cached
+  governance rule or `BOOTSTRAP_DEFAULT_RULE` (`store_payment_reference` also
+  emits `bootstrap_fallback`). Storage reads such as `get_payment_reference`
+  and `get_settlement_rule` are unaffected.
 - Monitoring dashboards for the governance contract show panics or missing
   `get_fee_config` export.
 
@@ -121,8 +132,10 @@ until the trap is resolved.
    `GovFeeConfig`.  If it cannot, deploy a new governance contract that exports
    `get_fee_config` correctly.
 
-3. **Update governance address via the recovery path.**  Because the multisig
-   admin write is blocked, use the recovery mechanism:
+3. **Update the governance address.**  Call `update_governance` with the
+   fixed or replacement governance address; it validates only the new address,
+   so it is not blocked by the broken one. If the admin keys are unavailable,
+   use the recovery mechanism:
    - Invoke `initiate_recovery` with the new-governance deployer address.
    - After the recovery timelock elapses, invoke `execute_recovery` to complete
      the admin transfer to an address that can call `update_governance`.
@@ -146,7 +159,7 @@ soroban contract invoke --id <governance_contract_id> -- get_fee_config
 # 3. After updating governance, confirm the new address is stored.
 soroban contract read --id <settlement_contract_id> --key Governance
 
-# 4. Smoke-test a read-only path — should succeed even during the trap.
+# 4. Smoke-test a fail-open path — should succeed even during the trap.
 soroban contract invoke --id <settlement_contract_id> -- calculate_fee_split \
   --merchant <merchant_address> --amount 1000000
 

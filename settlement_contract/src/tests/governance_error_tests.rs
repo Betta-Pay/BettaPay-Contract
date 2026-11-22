@@ -771,7 +771,77 @@ fn settlement_rule_exceeding_governance_ceiling_is_rejected() {
         settlement_delay_ledger: 0,
         auto_settle: false,
     };
-    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &over_ceiling_rule);
+    client.set_settlement_rule(
+        &soroban_sdk::vec![&env, admin],
+        &merchant,
+        &over_ceiling_rule,
+    );
+}
+
+/// Issues #1156/#1157: a rule above the governance ceiling is rejected with
+/// `FeeExceedsGovernanceConfig`, and the failed invocation emits no
+/// `fee_ceiling_rejected` event because Soroban rolls back events on panic.
+#[test]
+fn fee_ceiling_rejection_emits_no_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let gov_admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    gov_client.init(
+        &Address::generate(&env),
+        &gov_admins,
+        &1,
+        &Address::generate(&env),
+    );
+    gov_client.set_fee_config(
+        &gov_admins,
+        &GovFeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        },
+    );
+
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &gov_id,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let over_ceiling_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let result = client.try_set_settlement_rule(&admins, &merchant, &over_ceiling_rule);
+    assert_eq!(
+        result.map(|_| ()).map_err(|e| e.map_err(|_| ())),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::FeeExceedsGovernanceConfig as u32
+        )))
+    );
+
+    let events = env.events().all();
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() {
+            let sym = Symbol::from_val(&env, &topics.get(0).unwrap());
+            assert_ne!(
+                sym,
+                Symbol::new(&env, "fee_ceiling_rejected"),
+                "a reverted ceiling rejection must not emit an event"
+            );
+        }
+    }
 }
 
 /// When governance has no fee config set, the settlement read path falls back
@@ -857,8 +927,167 @@ fn schedule_rejects_unreachable_governance_without_writing_storage() {
     inject_governance(&env, &contract_id, &panicking_gov);
 
     assert_eq!(
-        client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS),
-        Err(Ok(SettlementError::GovernanceCallFailed))
+        client
+            .try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+            .map(|_| ())
+            .map_err(|e| e.map_err(|_| ())),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::GovernanceCallFailed as u32
+        )))
     );
     assert!(!env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #901: CachedGovRule cache invalidation and fail-open fallback
+// ---------------------------------------------------------------------------
+
+/// Reads `DataKey::CachedGovRule`, returning `None` when the key is absent.
+fn cached_gov_rule(env: &Env, contract_id: &Address) -> Option<Option<SettlementRule>> {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .instance()
+            .get::<_, Option<SettlementRule>>(&DataKey::CachedGovRule)
+    })
+}
+
+/// Asserts the cache holds `Some(expected)`.
+fn assert_cached(env: &Env, contract_id: &Address, expected: &SettlementRule) {
+    let cached = cached_gov_rule(env, contract_id)
+        .expect("CachedGovRule must be written")
+        .expect("CachedGovRule must hold Some(rule)");
+    super::assert_rule_eq(&cached, expected, "CachedGovRule");
+}
+
+fn gov_rule(platform_fee_bps: u32, network_fee_bps: u32) -> SettlementRule {
+    SettlementRule {
+        platform_fee_bps,
+        network_fee_bps,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    }
+}
+
+/// Every successful governance read overwrites the cache, so a governance
+/// config change is never shadowed by a stale value. Once governance traps,
+/// the payment path fails open onto the last good cached rule, while admin
+/// writes still fail loud with `GovernanceCallFailed`.
+#[test]
+fn governance_fee_cache_tracks_updates_and_survives_trap() {
+    use super::mock_governance::MockGovernanceClient;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance_with_config(
+        &env,
+        crate::GovFeeConfig {
+            platform_fee_bps: 250,
+            network_fee_bps: 50,
+        },
+    );
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    // A successful read populates the cache.
+    assert!(cached_gov_rule(&env, &contract_id).is_none());
+    super::assert_rule_eq(
+        &client.get_effective_rule(&merchant),
+        &gov_rule(250, 50),
+        "effective rule",
+    );
+    assert_cached(&env, &contract_id, &gov_rule(250, 50));
+
+    // Governance changes its config: the next read replaces the cached value.
+    gov.set_fee_config(&crate::GovFeeConfig {
+        platform_fee_bps: 300,
+        network_fee_bps: 40,
+    });
+    super::assert_rule_eq(
+        &client.get_effective_rule(&merchant),
+        &gov_rule(300, 40),
+        "effective rule",
+    );
+    assert_cached(&env, &contract_id, &gov_rule(300, 40));
+
+    // Governance now traps: the payment uses the cached bps, not bootstrap.
+    gov.set_mode(&super::MockGovMode::Trap);
+    let reference = soroban_sdk::BytesN::<32>::from_array(&env, &[0x91; 32]);
+    let split = client.store_payment_reference(&merchant, &reference, &10_000);
+    assert_eq!(split.platform_fee_amount, 300);
+    assert_eq!(split.network_fee_amount, 40);
+    let record = client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+        .expect("payment record must exist despite governance trap");
+    assert_eq!(record.platform_fee_bps, 300);
+    assert_eq!(record.network_fee_bps, 40);
+    assert_ne!(
+        record.platform_fee_bps,
+        BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+    );
+    // A failed read leaves the last good value in place.
+    assert_cached(&env, &contract_id, &gov_rule(300, 40));
+
+    // Reads fail open, writes fail loud: the cache never satisfies an admin write.
+    let res = client.try_set_default_rule(&admins, &gov_rule(200, 30));
+    assert_eq!(
+        res.map(|_| ()).map_err(|e| e.map_err(|_| ())),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::GovernanceCallFailed as u32
+        )))
+    );
+    assert!(client.get_default_rule().is_none());
+}
+
+/// With no successful governance read yet, a trap has nothing cached to fall
+/// back on, so the payment resolves to `BOOTSTRAP_DEFAULT_RULE`.
+#[test]
+fn governance_trap_without_cache_uses_bootstrap_rule() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let reference = soroban_sdk::BytesN::<32>::from_array(&env, &[0x92; 32]);
+    client.store_payment_reference(&merchant, &reference, &10_000);
+    let record = client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+        .expect("payment record must exist despite governance trap");
+    assert_eq!(
+        record.platform_fee_bps,
+        BOOTSTRAP_DEFAULT_RULE.platform_fee_bps
+    );
+    assert_eq!(
+        record.network_fee_bps,
+        BOOTSTRAP_DEFAULT_RULE.network_fee_bps
+    );
+    assert_eq!(
+        record.settlement_delay_ledger,
+        BOOTSTRAP_DEFAULT_RULE.settlement_delay_ledger
+    );
+    assert_eq!(record.auto_settle, BOOTSTRAP_DEFAULT_RULE.auto_settle);
+    assert!(cached_gov_rule(&env, &contract_id).is_none());
 }

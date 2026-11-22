@@ -22,12 +22,9 @@ use soroban_sdk::{Address, Env, Vec};
 
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use bettapay_common::events::PendingRecovery;
-use bettapay_common::storage::CommonDataKey;
+use bettapay_common::storage::{CommonDataKey, ZERO_ADDRESS_STRKEY};
 
 use super::{register_governance, setup};
-
-/// Stellar's zero-address (all-zero ed25519 public key) in strkey form.
-const ZERO_ADDRESS_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
 fn zero_address(env: &Env) -> Address {
     Address::from_string(&soroban_sdk::String::from_str(env, ZERO_ADDRESS_STRKEY))
@@ -465,3 +462,51 @@ fn recovery_veto_blocks_scheduled_upgrade() {
     client.cancel_recovery(&admins);
     client.execute(&admins.get(0).unwrap(), &op);
 }
+
+// ---------------------------------------------------------------------------
+// execute_after arithmetic (checked_add near u64::MAX)
+// ---------------------------------------------------------------------------
+
+/// A ledger timestamp close to `u64::MAX` must not wrap or surface an untyped
+/// arithmetic panic. `initiate_recovery` uses `checked_add` for
+/// `RECOVERY_DELAY_SECONDS` and reports a typed contract error instead.
+#[test]
+fn initiate_recovery_rejects_timestamp_overflow_with_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let (client, _recovery_address) = setup_with_admins(&env, &admins, 1);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = u64::MAX - 1);
+
+    assert_eq!(
+        client.try_initiate_recovery(&Address::generate(&env)),
+        Err(Ok(contract_error(SettlementError::ExecutionDelayTooLong)))
+    );
+    assert!(
+        !env.as_contract(&client.address, || env
+            .storage()
+            .instance()
+            .has(&CommonDataKey::PendingRecovery)),
+        "an overflowing recovery must not leave a pending record"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #884: read_admin returns SettlementError::AdminSetEmpty on empty admin set
+// ---------------------------------------------------------------------------
+
+/// Issue #884: read_admin must panic with typed SettlementError::AdminSetEmpty (317)
+/// when the stored admin set is empty, instead of producing an untyped host unwrap panic.
+#[test]
+#[should_panic(expected = "Error(Contract, #317)")]
+fn read_admin_panics_with_admin_set_empty_when_admin_set_is_empty() {
+    let (env, client, _admins, _merchant) = setup();
+    let empty: Vec<Address> = Vec::new(&env);
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&bettapay_common::storage::CommonDataKey::Admin, &empty);
+        crate::storage::read_admin(&env);
+    });
+}
+

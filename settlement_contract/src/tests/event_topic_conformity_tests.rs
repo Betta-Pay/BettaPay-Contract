@@ -113,10 +113,28 @@ fn settlement_rule_cleared_data_is_identical_across_both_paths() {
 }
 
 #[test]
+fn initialized_uses_canonical_topic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+
+    client.init(&soroban_sdk::vec![&env, admin], &1, &governance, &recovery);
+
+    assert_eq!(
+        last_topic(&env),
+        Symbol::new(&env, events::INITIALIZED_EVENT)
+    );
+}
+
+#[test]
 fn threshold_changed_uses_canonical_topic() {
-    // change_threshold requires `current_threshold + 1` signers, so a
-    // single-admin setup() contract can never call it; register a
-    // two-admin contract directly instead.
+    // change_threshold requires `current_threshold + 1` signers (capped at
+    // the admin count); a single-admin setup() contract has no valid new
+    // threshold to set, so register a two-admin contract directly instead.
     let env = Env::default();
     env.mock_all_auths();
     let admin1 = Address::generate(&env);
@@ -134,6 +152,72 @@ fn threshold_changed_uses_canonical_topic() {
         last_topic(&env),
         Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT)
     );
+}
+
+/// The shared `threshold_changed` topic must have one cross-contract payload
+/// shape: `(current_threshold, new_threshold)`. Decoding it as a triple (the
+/// old settlement shape, which prefixed the caller) must fail, so indexers can
+/// use a single decoder for events from either contract.
+#[test]
+fn threshold_changed_payload_is_canonical() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admins = soroban_sdk::vec![&env, Address::generate(&env), Address::generate(&env)];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery);
+
+    client.change_threshold(&admins, &2);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::THRESHOLD_CHANGED_EVENT)
+    );
+    let (current, new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((current, new), (1, 2));
+}
+
+/// `cancel_all` emits no `op_cancelled` event when none of the supplied
+/// operations were pending, and exactly one `(caller, count)` event otherwise.
+#[test]
+fn cancel_all_emits_event_only_for_nonzero_count() {
+    let (env, client, admins, merchant) = setup();
+    let scheduled = Operation::RegisterMerchant(merchant);
+    client.schedule(&admins, &scheduled, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // An unscheduled operation matches nothing: return 0, emit nothing.
+    let unrelated = Operation::UnregisterMerchant(Address::generate(&env));
+    let before = env.events().all().len();
+    assert_eq!(
+        client.cancel_all(&admins, &soroban_sdk::vec![&env, unrelated]),
+        0
+    );
+    assert_eq!(
+        env.events().all().len(),
+        before,
+        "a no-op cancel_all must emit no event"
+    );
+
+    // Cancelling the actually scheduled operation emits one event.
+    let before = env.events().all().len();
+    assert_eq!(
+        client.cancel_all(&admins, &soroban_sdk::vec![&env, scheduled]),
+        1
+    );
+    let emitted = env.events().all();
+    assert_eq!(emitted.len() - before, 1);
+    let (_, topics, data) = emitted.get(emitted.len() - 1).unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::OP_CANCELLED_EVENT)
+    );
+    let (caller, cancelled): (Address, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(caller, admins.get(0).unwrap());
+    assert_eq!(cancelled, 1);
 }
 
 #[test]
@@ -261,6 +345,65 @@ fn default_rule_and_payment_use_canonical_topics() {
     assert_eq!(
         last_topic(&env),
         Symbol::new(&env, events::PAYMENT_STORED_EVENT)
+    );
+}
+
+/// Issue #890: `prune_payment` emits exactly one `payment_pruned` event with
+/// the canonical topic and `(merchant, reference)` payload, and stays silent
+/// when the record does not exist.
+#[test]
+fn prune_payment_emits_one_canonical_event_and_none_on_noop() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let reference = BytesN::from_array(&env, &[9; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+
+    let before = env.events().all().len();
+    client.prune_payment(&admins, &merchant, &reference);
+
+    let emitted = env.events().all();
+    assert_eq!(
+        emitted.len() - before,
+        1,
+        "a successful prune must emit exactly one event"
+    );
+
+    let (_, topics, data) = emitted.get(emitted.len() - 1).unwrap();
+    assert_eq!(
+        topics.len(),
+        3,
+        "payment_pruned topics must be (name, merchant, reference)"
+    );
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, events::PAYMENT_PRUNED_EVENT),
+        "topic[0] must match the registered constant"
+    );
+    assert_eq!(
+        Address::from_val(&env, &topics.get(1).unwrap()),
+        merchant,
+        "topic[1] must carry the merchant"
+    );
+    assert_eq!(
+        BytesN::<32>::from_val(&env, &topics.get(2).unwrap()),
+        reference,
+        "topic[2] must carry the payment reference"
+    );
+
+    let (payload_merchant, payload_reference): (Address, BytesN<32>) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload_merchant, merchant, "payload merchant must match");
+    assert_eq!(payload_reference, reference, "payload reference must match");
+
+    // Pruning an already-removed record is a no-op and must not emit a second
+    // event, so indexers cannot observe a prune that removed nothing.
+    let before_noop = env.events().all().len();
+    client.prune_payment(&admins, &merchant, &reference);
+    assert_eq!(
+        env.events().all().len(),
+        before_noop,
+        "pruning a missing record must emit no event"
     );
 }
 
@@ -477,10 +620,8 @@ fn rule_updated_carries_prev_and_new() {
     let data = payload.expect("settlement_rule_updated event must have been emitted");
     let (_executor, prev, new): (Address, SettlementRule, SettlementRule) =
         TryFromVal::try_from_val(&env, &data).unwrap();
-    assert_eq!(prev.platform_fee_bps, old_rule.platform_fee_bps);
-    assert_eq!(prev.network_fee_bps, old_rule.network_fee_bps);
-    assert_eq!(new.platform_fee_bps, new_rule.platform_fee_bps);
-    assert_eq!(new.network_fee_bps, new_rule.network_fee_bps);
+    assert_eq!(prev, old_rule);
+    assert_eq!(new, new_rule);
 }
 
 #[test]
@@ -507,4 +648,125 @@ fn clear_settlement_rule_emits_only_one_event() {
         last_topic(&env),
         Symbol::new(&env, events::SETTLEMENT_RULE_CLEARED_EVENT)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #902: bootstrap_fallback fires only when resolution reaches bootstrap
+// ---------------------------------------------------------------------------
+
+/// Counts every `bootstrap_fallback` event recorded so far in `env.events()`.
+fn bootstrap_fallback_count(env: &Env) -> u32 {
+    let events = env.events().all();
+    let topic = Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT);
+    let mut count = 0;
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() && Symbol::from_val(env, &topics.get(0).unwrap()) == topic {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// The `bootstrap_fallback` event signals an unconfigured deployment, so the
+/// payment hot path must emit it only when resolution truly reaches
+/// `BOOTSTRAP_DEFAULT_RULE`: never under a merchant or default rule, never on
+/// the read-only `calculate_fee_split`, and never as a side effect of setting
+/// or clearing a rule (issue #689).
+#[test]
+fn bootstrap_fallback_emitted_only_when_resolution_reaches_bootstrap() {
+    // `setup()` wires a governance stub with no fee config, so nothing but
+    // bootstrap is configured.
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let reference = |byte: u8| BytesN::<32>::from_array(&env, &[byte; 32]);
+    // The event log accumulates across calls, so each step asserts how many
+    // events its own call added.
+    let mut seen = 0;
+    let mut assert_emitted = |expected: u32, step: &str| {
+        let total = bootstrap_fallback_count(&env);
+        assert_eq!(total - seen, expected, "{step}");
+        seen = total;
+    };
+
+    // Nothing configured: the read-only path stays silent...
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split");
+
+    // ...while the payment path emits exactly one event.
+    client.store_payment_reference(&merchant, &reference(1), &10_000);
+    assert_emitted(1, "store_payment_reference, no rule");
+
+    // Setting and clearing a merchant rule while bootstrap is the fallback.
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 3,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+    assert_emitted(0, "set_settlement_rule");
+
+    // Merchant rule resolves: no event.
+    client.store_payment_reference(&merchant, &reference(2), &10_000);
+    assert_emitted(0, "store_payment_reference, merchant rule");
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split, merchant rule");
+
+    client.clear_settlement_rule(&admins, &merchant);
+    assert_emitted(0, "clear_settlement_rule");
+
+    // Default rule resolves: no event.
+    let default_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 30,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &default_rule);
+    assert_emitted(0, "set_default_rule");
+    client.store_payment_reference(&merchant, &reference(3), &10_000);
+    assert_emitted(0, "store_payment_reference, default rule");
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split, default rule");
+}
+
+/// Issue #1105: an explicitly configured default rule carrying the bootstrap
+/// values is a `Default` rule, so the payment path must not report a fallback.
+#[test]
+fn bootstrap_fallback_not_emitted_for_default_rule_with_bootstrap_values() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    client.set_default_rule(&admins, &crate::policy::BOOTSTRAP_DEFAULT_RULE);
+
+    let before = bootstrap_fallback_count(&env);
+    client.store_payment_reference(&merchant, &BytesN::from_array(&env, &[11; 32]), &10_000);
+
+    assert_eq!(bootstrap_fallback_count(&env), before);
+}
+
+/// Issue #1105: the same applies to a governance config with the bootstrap
+/// fee values. Value equality must never masquerade as `RuleProvenance::Bootstrap`.
+#[test]
+fn bootstrap_fallback_not_emitted_for_governance_rule_with_bootstrap_values() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let bootstrap = crate::policy::BOOTSTRAP_DEFAULT_RULE;
+    let governance = super::register_governance_with_config(
+        &env,
+        GovFeeConfig {
+            platform_fee_bps: bootstrap.platform_fee_bps,
+            network_fee_bps: bootstrap.network_fee_bps,
+        },
+    );
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&crate::types::DataKey::Governance, &governance);
+    });
+
+    let before = bootstrap_fallback_count(&env);
+    client.store_payment_reference(&merchant, &BytesN::from_array(&env, &[12; 32]), &10_000);
+
+    assert_eq!(bootstrap_fallback_count(&env), before);
 }

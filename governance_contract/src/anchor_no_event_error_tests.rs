@@ -30,14 +30,11 @@ fn upsert_anchor_emits_no_event_when_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_emits_no_event_when_zero_asset() {
     let (env, client, admins) = setup();
     let anchor = Address::generate(&env);
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
 
     let prev = env.events().all().len();
     client.upsert_anchor(&admins, &zero, &anchor);
@@ -45,14 +42,11 @@ fn upsert_anchor_emits_no_event_when_zero_asset() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #202)")]
 fn upsert_anchor_emits_no_event_when_zero_anchor() {
     let (env, client, admins) = setup();
     let asset = Address::generate(&env);
-    let zero = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    ));
+    let zero = bettapay_common::storage::zero_address(&env);
 
     let prev = env.events().all().len();
     client.upsert_anchor(&admins, &asset, &zero);
@@ -323,15 +317,14 @@ fn update_system_param_emits_no_event_when_unauthorized() {
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn change_threshold_emits_no_event_when_insufficient_signatures() {
-    // Setup: 3 admins, threshold 2. change_threshold requires 3 signers
-    // (current_threshold + 1), but we only provide 1 → Unauthorized (#3).
-    // The new_threshold (2) is within bounds so the bound check passes first.
+    // Setup: 3 admins, threshold 2. change_threshold requires current_threshold
+    // (2) signers, so providing only 1 signer panics with Unauthorized (#3).
     let (env, client, admins, _recovery) = setup_with(3, 2);
     let a1 = admins.get(0).unwrap();
 
     let single_signer = vec![&env, a1.clone()];
     let prev = env.events().all().len();
-    client.change_threshold(&single_signer, &2);
+    client.change_threshold(&single_signer, &3);
     assert_eq!(
         env.events().all().len(),
         prev,

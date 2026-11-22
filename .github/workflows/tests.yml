@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -67,8 +67,19 @@ jobs:
       - name: Check storage layout docs
         run: make check_storage_docs
 
-      - name: Make All
-        run: make all
+      # The remaining targets from `make all` that are not run above, so every
+      # check runs exactly once per CI run.
+      - name: Check documented constants
+        run: make check_constants
+
+      - name: Check test snapshots
+        run: make check_snapshots
+
+      - name: Check README API docs
+        run: make docs_check
+
+      - name: Check Wasm binary sizes
+        run: make wasm_size
 
   msrv:
     name: MSRV

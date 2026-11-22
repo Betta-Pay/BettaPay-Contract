@@ -1,5 +1,6 @@
 //! Anchor removal verification test
 
+use crate::GovernanceError;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Error};
 

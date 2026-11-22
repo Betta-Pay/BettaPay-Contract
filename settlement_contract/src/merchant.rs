@@ -5,8 +5,8 @@ use bettapay_common::events;
 use crate::errors::SettlementError;
 use crate::policy::{MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD};
 use crate::storage::{
-    assert_admin_and_not_paused, assert_not_paused, is_merchant_registered_read,
-    read_fallback_rule, read_threshold, validate_nonzero_address, verify_admin_auth,
+    assert_admin_and_not_paused, is_merchant_registered_read, read_fallback_rule,
+    validate_nonzero_address,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -36,6 +36,13 @@ impl SettlementContract {
             }
         }
 
+        // Check for duplicate registration before requiring merchant auth and emitting
+        // merchant consent event, avoiding wasted auth and compute (issue #1109).
+        let key = DataKey::Merchant(merchant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, SettlementError::MerchantExists);
+        }
+
         // The merchant must consent to its own registration — admin auth alone
         // is not proof the merchant address is controlled by the party being
         // registered, and would otherwise let an admin register arbitrary or
@@ -51,11 +58,6 @@ impl SettlementContract {
             ),
             (),
         );
-
-        let key = DataKey::Merchant(merchant.clone());
-        if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SettlementError::MerchantExists);
-        }
 
         env.storage().persistent().set(&key, &());
         env.storage()
@@ -163,5 +165,77 @@ mod tests {
         let non_admin = Address::generate(&env);
         client.register_merchant(&admins, &non_admin);
         assert!(client.is_merchant_registered(&non_admin));
+    }
+
+    #[test]
+    fn register_merchant_rejects_zero_address_without_writing_storage() {
+        let (env, client, admins, _) = setup();
+        let zero_address = bettapay_common::storage::zero_address(&env);
+        assert!(bettapay_common::storage::is_zero_address(
+            &env,
+            &zero_address
+        ));
+
+        let result = client.try_register_merchant(&admins, &zero_address);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::ZeroAddress.into()
+        );
+
+        let merchant_key = DataKey::Merchant(zero_address.clone());
+        let archived_key = DataKey::ArchivedMerchant(zero_address);
+        env.as_contract(&client.address, || {
+            assert!(!env.storage().persistent().has(&merchant_key));
+            assert!(!env.storage().persistent().has(&archived_key));
+        });
+    }
+
+    #[test]
+    fn register_merchant_accepts_valid_generated_address() {
+        let (env, client, admins, _) = setup();
+        let merchant = Address::generate(&env);
+
+        client.register_merchant(&admins, &merchant);
+
+        assert!(client.is_merchant_registered(&merchant));
+    }
+
+    #[test]
+    fn unregister_merchant_rejects_unknown_address_without_writing_storage() {
+        let (env, client, admins, registered_merchant) = setup();
+        client.register_merchant(&admins, &registered_merchant);
+        let unknown_merchant = Address::generate(&env);
+
+        let result = client.try_unregister_merchant(&admins, &unknown_merchant);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            SettlementError::MerchantMissing.into()
+        );
+
+        assert!(client.is_merchant_registered(&registered_merchant));
+        assert!(!client.is_merchant_registered(&unknown_merchant));
+
+        let merchant_key = DataKey::Merchant(unknown_merchant.clone());
+        let archived_key = DataKey::ArchivedMerchant(unknown_merchant);
+        env.as_contract(&client.address, || {
+            assert!(!env.storage().persistent().has(&merchant_key));
+            assert!(!env.storage().persistent().has(&archived_key));
+        });
+    }
+
+    #[test]
+    fn unregister_merchant_writes_tombstone_for_registered_merchant() {
+        let (env, client, admins, merchant) = setup();
+        client.register_merchant(&admins, &merchant);
+
+        client.unregister_merchant(&admins, &merchant);
+
+        assert!(!client.is_merchant_registered(&merchant));
+        let merchant_key = DataKey::Merchant(merchant.clone());
+        let archived_key = DataKey::ArchivedMerchant(merchant);
+        env.as_contract(&client.address, || {
+            assert!(!env.storage().persistent().has(&merchant_key));
+            assert!(env.storage().persistent().has(&archived_key));
+        });
     }
 }

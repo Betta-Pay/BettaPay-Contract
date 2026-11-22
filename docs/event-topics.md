@@ -28,6 +28,7 @@ is emitted by both contracts; other rows identify the only emitting contract.
 
 | Registry constant | Topic value | Emitting contract(s) |
 | --- | --- | --- |
+| `INITIALIZED_EVENT` | `initialized` | `governance_contract`, `settlement_contract` |
 | `ADMIN_TRANSFERRED_EVENT` | `admin_transferred` | `governance_contract`, `settlement_contract` |
 | `PAUSED_EVENT` | `paused` | `governance_contract`, `settlement_contract` |
 | `UNPAUSED_EVENT` | `unpaused` | `governance_contract`, `settlement_contract` |
@@ -38,13 +39,17 @@ is emitted by both contracts; other rows identify the only emitting contract.
 | `THRESHOLD_CHANGED_EVENT` | `threshold_changed` | `governance_contract`, `settlement_contract` |
 | `RECOVERY_ADDRESS_UPDATED_EVENT` | `recovery_address_updated` | `governance_contract`, `settlement_contract` |
 
+`initialized` is emitted once by each contract's `init` with the primary
+admin address as its data payload, so indexers can decode it identically for
+both contracts.
+
 ### Governance-only topics
 
 | Registry constant | Topic value | Emitting contract |
 | --- | --- | --- |
-| `INITIALIZED_EVENT` | `initialized` | Governance |
 | `MIGRATED_EVENT` | `migrated` | Governance |
 | `SYS_PARAM_UPDATED_EVENT` | `sys_param_updated` | Governance |
+| `SYS_PARAM_REMOVED_EVENT` | `sys_param_removed` | Governance |
 | `FEE_CONFIG_UPDATED_EVENT` | `fee_config_updated` | Governance |
 | `ANCHOR_UPSERTED_EVENT` | `anchor_upserted` | Governance |
 | `ANCHOR_REMOVED_EVENT` | `anchor_removed` | Governance |
@@ -63,10 +68,31 @@ is emitted by both contracts; other rows identify the only emitting contract.
 | `BOOTSTRAP_FALLBACK_EVENT` | `bootstrap_fallback` | Settlement |
 | `PAYMENT_STORED_EVENT` | `payment_stored` | Settlement |
 | `PAYMENTS_PRUNED_EVENT` | `payments_pruned` | Settlement |
+| `PAYMENT_PRUNED_EVENT` | `payment_pruned` | Settlement |
 | `OP_SCHEDULED_EVENT` | `op_scheduled` | Settlement |
 | `OP_EXECUTED_EVENT` | `op_executed` | Settlement |
 | `OP_CANCELLED_EVENT` | `op_cancelled` | Settlement |
-| `FEE_CEILING_REJECTED_EVENT` | `fee_ceiling_rejected` | Settlement |
+
+### `payment_pruned` payload
+
+`prune_payment` emits exactly one event per actually-removed record with
+topics `(Symbol("payment_pruned"), merchant, reference)` and data
+`(merchant, reference)`. Pruning a missing record is a no-op and emits
+nothing, so an indexer never sees a prune that removed no state (issue #890).
+
+### `threshold_changed` payload
+
+`change_threshold` in **both** contracts publishes through the shared
+`bettapay_common::events::emit_threshold_changed` helper, so the topic has a
+single cross-contract shape:
+
+- topics: `(Symbol("threshold_changed"),)`
+- data: `(current_threshold, new_threshold)` — two `u32` values, no actor
+  field.
+
+Settlement previously prefixed the caller address, which made indexers decode
+the same topic differently depending on the emitting contract. Keep both call
+sites on the helper so the arity and types cannot drift apart again.
 
 ## Stability and changes
 

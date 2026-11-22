@@ -287,6 +287,124 @@ fn timelocked_transfer_admin_parity_with_direct_path() {
     );
 }
 
+/// A scheduled `TransferAdmin` that leaves both the admin set and the
+/// threshold unchanged must be rejected with `SameAdmin` at execution time,
+/// exactly like the direct `transfer_admin` path. Nothing is written and no
+/// misleading `admin_transferred` event is emitted for a state no-op.
+///
+/// The no-op check intentionally lives at execution time, not `schedule()`,
+/// so the operation is still accepted into the queue.
+#[test]
+fn timelocked_transfer_admin_identical_set_rejects_same_admin() {
+    let (env, client, admins, _merchant) = setup();
+    let threshold = client.get_threshold();
+
+    // Reuse the exact current configuration — this is a no-op transfer.
+    let operation = Operation::TransferAdmin(admins.clone(), threshold);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &operation)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::SameAdmin as u32
+        ))
+    );
+
+    // Unchanged state: no write happened before the panic.
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), threshold);
+}
+
+/// Timelocked rule setters must reject locally-invalid input before paying for
+/// the cross-contract governance call. With governance trapping only at
+/// execution time, a missing merchant or out-of-bound fee still surfaces its
+/// local error instead of `GovernanceCallFailed`, matching the direct setters.
+#[test]
+fn timelocked_rule_setters_check_local_errors_before_governance() {
+    use super::mock_governance::{MockGovMode, MockGovernanceClient};
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance(&env);
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let missing_merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, crate::SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let invalid_fee_rule = SettlementRule {
+        platform_fee_bps: 0,
+        network_fee_bps: 0,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    let valid_rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+
+    let bad_fee_op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
+    let missing_merchant_op =
+        Operation::SetSettlementRule(missing_merchant.clone(), valid_rule.clone());
+    let bad_default_op = Operation::SetDefaultRule(invalid_fee_rule.clone());
+
+    // `schedule()` probes governance, so queue everything while it is reachable.
+    client.schedule(&admins, &bad_fee_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(
+        &admins,
+        &missing_merchant_op,
+        &DEFAULT_TIMELOCK_DELAY_SECONDS,
+    );
+    client.schedule(&admins, &bad_default_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    // Governance becomes unreachable only at execution time.
+    gov.set_mode(&MockGovMode::Trap);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &bad_fee_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::InvalidFeeBps as u32
+        ))
+    );
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &missing_merchant_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::MerchantMissing as u32
+        ))
+    );
+    assert_eq!(
+        client
+            .try_execute(&admins.get(0).unwrap(), &bad_default_op)
+            .unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            SettlementError::InvalidFeeBps as u32
+        ))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Timelock Pause-Gating Tests
 // ---------------------------------------------------------------------------
@@ -421,6 +539,38 @@ fn scheduled_update_governance_rejects_zero_address() {
     client.execute(&admins.get(0).unwrap(), &operation);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_contract_address() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::UpdateGovernance(client.address.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+/// The timelocked path must mirror the direct path's equality check: pointing
+/// an `UpdateGovernance` operation at the currently stored address is a no-op
+/// and must be rejected with `InvalidGovernance` (#309) at execution time.
+#[test]
+#[should_panic(expected = "Error(Contract, #309)")]
+fn scheduled_update_governance_rejects_current_address() {
+    let (env, client, admins, _) = setup();
+    let current_governance = client.get_governance();
+    let operation = Operation::UpdateGovernance(current_governance);
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.execute(&admins.get(0).unwrap(), &operation);
+}
+
 /// The scheduled path accepts a governance address that passes
 /// `validate_governance`, mirroring the direct path.
 #[test]
@@ -437,6 +587,34 @@ fn scheduled_update_governance_accepts_valid_address() {
     client.execute(&admins.get(0).unwrap(), &operation);
 
     assert_eq!(client.get_governance(), new_governance);
+}
+
+#[test]
+fn scheduled_register_merchant_rejects_zero_address_without_writing_storage() {
+    let (env, client, admins, _) = setup();
+    let zero_address = bettapay_common::storage::zero_address(&env);
+    assert!(bettapay_common::storage::is_zero_address(
+        &env,
+        &zero_address
+    ));
+    let operation = Operation::RegisterMerchant(zero_address.clone());
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    let result = client.try_execute(&admins.get(0).unwrap(), &operation);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        SettlementError::ZeroAddress.into()
+    );
+
+    let merchant_key = DataKey::Merchant(zero_address.clone());
+    let archived_key = DataKey::ArchivedMerchant(zero_address);
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().persistent().has(&merchant_key));
+        assert!(!env.storage().persistent().has(&archived_key));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -570,26 +748,14 @@ fn test_execute_uniform_auth_all_variants() {
 
     client.execute(&dummy_executor, &op_set_settlement_rule);
     let stored_rule = client.get_settlement_rule(&merchant3).unwrap();
-    assert_eq!(stored_rule.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored_rule.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(
-        stored_rule.settlement_delay_ledger,
-        rule.settlement_delay_ledger
-    );
-    assert_eq!(stored_rule.auto_settle, rule.auto_settle);
+    assert_eq!(stored_rule, rule);
 
     client.execute(&dummy_executor, &op_clear_settlement_rule);
     assert!(client.get_settlement_rule(&merchant4).is_none());
 
     client.execute(&dummy_executor, &op_set_default_rule);
     let stored_default = client.get_default_rule().unwrap();
-    assert_eq!(stored_default.platform_fee_bps, rule.platform_fee_bps);
-    assert_eq!(stored_default.network_fee_bps, rule.network_fee_bps);
-    assert_eq!(
-        stored_default.settlement_delay_ledger,
-        rule.settlement_delay_ledger
-    );
-    assert_eq!(stored_default.auto_settle, rule.auto_settle);
+    assert_eq!(stored_default, rule);
 
     // `Upgrade` runs last: the test host lets an empty Wasm stand in for a
     // valid contract, and `execute`'s `_upgrade` (unlike the admin-gated
@@ -829,10 +995,11 @@ fn op_scheduled_event_count(env: &Env) -> u32 {
     count
 }
 
-/// Issue #893: a zero delay would collapse the timelock entirely. `schedule`
+/// Issues #885, #893: a zero delay collapses the timelock entirely. `schedule`
 /// must reject it with the typed `ExecutionNotReady` error, write no
-/// `ScheduledOperation` entry, and emit no `op_scheduled` event. The minimal
-/// valid delay (the floor) still schedules and emits `op_scheduled`.
+/// `ScheduledOperation` entry, and emit no `op_scheduled` event.
+/// Boundary test: delay 0 is rejected, while the minimum valid delay
+/// (`MIN_TIMELOCK_DELAY_SECONDS`) successfully schedules and emits `op_scheduled`.
 #[test]
 fn schedule_with_zero_delay_is_rejected() {
     let (env, client, admins, merchant) = setup();
@@ -931,6 +1098,36 @@ fn schedule_accepts_max_delay_with_exact_execute_at() {
     assert_eq!(event_execute_at, expected);
 }
 
+/// Issue #886: Boundary test at MAX_TIMELOCK_DELAY_SECONDS and just above it.
+/// A delay of MAX_TIMELOCK_DELAY_SECONDS must be accepted and scheduled,
+/// while MAX_TIMELOCK_DELAY_SECONDS + 1 must be rejected with ExecutionDelayTooLong.
+#[test]
+fn schedule_boundary_test_at_and_above_max_timelock_delay() {
+    let (env, client, admins, merchant) = setup();
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = OVERFLOW_TEST_TIMESTAMP);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    // Just above maximum delay must be rejected with typed SettlementError::ExecutionDelayTooLong
+    let result_above = client.try_schedule(&admins, &operation, &(MAX_TIMELOCK_DELAY_SECONDS + 1));
+    assert_eq!(
+        result_above,
+        Err(Ok(SettlementError::ExecutionDelayTooLong.into())),
+        "MAX_TIMELOCK_DELAY_SECONDS + 1 must be rejected with ExecutionDelayTooLong"
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+
+    // Exactly at maximum delay must succeed
+    let result_at = client.try_schedule(&admins, &operation, &MAX_TIMELOCK_DELAY_SECONDS);
+    assert!(result_at.is_ok(), "MAX_TIMELOCK_DELAY_SECONDS must be accepted");
+    let stored = read_scheduled_op(&env, &client, &operation)
+        .expect("operation scheduled at MAX_TIMELOCK_DELAY_SECONDS must be stored");
+    assert_eq!(
+        stored.execute_at,
+        OVERFLOW_TEST_TIMESTAMP + MAX_TIMELOCK_DELAY_SECONDS
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Issue #976: Admin set change confirmation across read helpers and events
 // ---------------------------------------------------------------------------
@@ -943,7 +1140,6 @@ fn schedule_accepts_max_delay_with_exact_execute_at() {
 #[test]
 fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
     let (env, client, admins, _merchant) = setup();
-    let old_admin = admins.get(0).unwrap();
 
     // --- Direct path ---
     let new_admin = Address::generate(&env);
@@ -955,11 +1151,11 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
 
     let (_, _, data) = env.events().all().last().unwrap();
     let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, old_admin);
-    assert_eq!(payload.new_admin, new_admin);
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, new_admins);
 
     assert!(
-        client.try_pause(&admins).is_err(),
+        client.try_pause(&admins, &0u32).is_err(),
         "the old signer set must no longer satisfy an admin-gated call"
     );
 
@@ -977,11 +1173,333 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
 
     let (_, _, data) = env.events().all().last().unwrap();
     let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, new_admin);
-    assert_eq!(payload.new_admin, next_admin);
+    assert_eq!(payload.old_admins, new_admins);
+    assert_eq!(payload.new_admins, next_admins);
 
     assert!(
-        client.try_pause(&new_admins).is_err(),
+        client.try_pause(&new_admins, &0u32).is_err(),
         "the superseded signer set must no longer satisfy an admin-gated call"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #895: cancel after execute
+// ---------------------------------------------------------------------------
+
+/// `execute` consumes the `ScheduledOperation` slot, so a later `cancel` of the
+/// same operation by valid admin signers must fail with the typed
+/// `OperationNotScheduled` error — not resurrect the slot, not panic untyped,
+/// and not roll back the effect the execution already applied.
+#[test]
+fn cancel_after_execute_returns_operation_not_scheduled() {
+    use crate::types::DataKey;
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::BytesN;
+
+    let (env, client, admins, _) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+
+    let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+    let scheduled_key = DataKey::ScheduledOperation(op_hash);
+    let slot_present = || {
+        env.as_contract(&client.address, || {
+            env.storage().persistent().has(&scheduled_key)
+        })
+    };
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(slot_present(), "schedule must write the scheduled slot");
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS + 1);
+    client.execute(&admins.get(0).unwrap(), &operation);
+
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(!slot_present(), "execute must consume the scheduled slot");
+
+    // `try_cancel` surfaces the contract error as a value: a typed
+    // `Err(Ok(..))` proves the failure is a `SettlementError` raised via
+    // `panic_with_error!`, not an untyped panic crossing the boundary.
+    let result = client.try_cancel(&admins, &operation);
+    assert_eq!(
+        result.err(),
+        Some(Ok(soroban_sdk::Error::from(
+            SettlementError::OperationNotScheduled
+        )))
+    );
+
+    // The executed effect is not rolled back and the slot stays absent.
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(
+        !slot_present(),
+        "a failed cancel must not resurrect the scheduled slot"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #888: execute consumes the ScheduledOperation on every path
+// ---------------------------------------------------------------------------
+
+/// The scheduled slot is removed before the operation is applied, so a
+/// successful execution is a one-shot transition. A retry fails with the
+/// typed `OperationNotScheduled` error, and retrying that failure again leaves
+/// both the slot and the error unchanged — the operation can never be replayed.
+#[test]
+fn execute_consumes_slot_and_failed_retry_stays_operation_not_scheduled() {
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant.clone());
+    let executor = admins.get(0).unwrap();
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_some(),
+        "schedule must queue the operation"
+    );
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&executor, &operation);
+
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_none(),
+        "execute must consume the scheduled slot before applying the operation"
+    );
+
+    let failed_retry = client.try_execute(&executor, &operation);
+    assert_eq!(
+        failed_retry.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into())),
+        "a replay after execution must fail with OperationNotScheduled"
+    );
+
+    // A retry of the failed execute is not a re-schedule: the queue stays
+    // empty and the same typed error is returned.
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+    let retry_after_failure = client.try_execute(&executor, &operation);
+    assert_eq!(
+        retry_after_failure.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into())),
+        "a retry after a failed execute must stay OperationNotScheduled"
+    );
+}
+
+/// The recovery veto is checked before the slot is consumed, so a vetoed
+/// execution leaves the operation queued. Once the recovery is cancelled the
+/// same operation executes exactly once, after which retries are
+/// `OperationNotScheduled`.
+#[test]
+fn recovery_veto_preserves_scheduled_slot_until_recovery_resolves() {
+    let (env, client, admins, _merchant) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+    let executor = admins.get(0).unwrap();
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.initiate_recovery(&Address::generate(&env));
+    let vetoed = client.try_execute(&executor, &operation);
+    assert_eq!(
+        vetoed.err(),
+        Some(Ok(SettlementError::RecoveryDelayActive.into())),
+        "a pending recovery must veto the execution"
+    );
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_some(),
+        "the RecoveryDelayActive veto must leave the scheduled slot intact"
+    );
+
+    client.cancel_recovery(&admins);
+    client.execute(&executor, &operation);
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_none(),
+        "execution must consume the slot once the veto is lifted"
+    );
+
+    let retry = client.try_execute(&executor, &operation);
+    assert_eq!(
+        retry.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #887: scheduled-operation queue-depth metric
+// ---------------------------------------------------------------------------
+
+/// The queue-depth query starts at zero on a fresh contract and tracks
+/// schedule, execute, and cancel. A failed cancel of a missing operation
+/// leaves the count untouched and a failed replay after execution cannot
+/// underflow it.
+#[test]
+fn pending_operation_count_tracks_schedule_execute_and_cancel() {
+    let (env, client, admins, _merchant) = setup();
+
+    assert_eq!(
+        client.get_pending_operation_count(),
+        0,
+        "a fresh contract must report an empty timelock queue"
+    );
+
+    let first_merchant = Address::generate(&env);
+    let second_merchant = Address::generate(&env);
+    let first = Operation::RegisterMerchant(first_merchant.clone());
+    let second = Operation::RegisterMerchant(second_merchant.clone());
+
+    client.schedule(&admins, &first, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 1);
+    client.schedule(&admins, &second, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 2);
+
+    // Cancelling an operation that is not queued fails before any removal, so
+    // the counter cannot underflow.
+    let missing = Operation::RegisterMerchant(Address::generate(&env));
+    let missing_cancel = client.try_cancel(&admins, &missing);
+    assert_eq!(
+        missing_cancel.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+    assert_eq!(
+        client.get_pending_operation_count(),
+        2,
+        "a failed cancel of a missing operation must not change the count"
+    );
+
+    client.cancel(&admins, &first);
+    assert_eq!(client.get_pending_operation_count(), 1);
+    assert!(read_scheduled_op(&env, &client, &first).is_none());
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap(), &second);
+    assert_eq!(client.get_pending_operation_count(), 0);
+    assert!(client.is_merchant_registered(&second_merchant));
+
+    // A replay fails with OperationNotScheduled; the counter must stay at 0.
+    let replay = client.try_execute(&admins.get(0).unwrap(), &second);
+    assert_eq!(
+        replay.err(),
+        Some(Ok(SettlementError::OperationNotScheduled.into()))
+    );
+    assert_eq!(
+        client.get_pending_operation_count(),
+        0,
+        "a failed replay must not decrement the counter below zero"
+    );
+}
+
+/// `cancel_all` removes each actually-cancelled queue entry and decrements the
+/// metric once per removal, skipping missing entries without touching it.
+#[test]
+fn pending_operation_count_tracks_cancel_all() {
+    let (env, client, admins, _merchant) = setup();
+
+    let first = Operation::RegisterMerchant(Address::generate(&env));
+    let second = Operation::RegisterMerchant(Address::generate(&env));
+    client.schedule(&admins, &first, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    client.schedule(&admins, &second, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(client.get_pending_operation_count(), 2);
+
+    let missing = Operation::RegisterMerchant(Address::generate(&env));
+    let batch = soroban_sdk::vec![&env, first.clone(), missing, first.clone()];
+    assert_eq!(client.cancel_all(&admins, &batch), 1);
+    assert_eq!(
+        client.get_pending_operation_count(),
+        1,
+        "cancel_all must decrement only for operations it actually removed"
+    );
+
+    client.cancel(&admins, &second);
+    assert_eq!(client.get_pending_operation_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// dry_run (issue #998)
+// ---------------------------------------------------------------------------
+
+fn contract_error(error: SettlementError) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(error as u32)
+}
+
+#[test]
+fn dry_run_on_ready_operation_succeeds_without_consuming_the_key() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+    let pending_before = client.get_pending_operation_count();
+
+    client.dry_run(&operation);
+
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+    assert_eq!(client.get_pending_operation_count(), pending_before);
+    assert_eq!(client.get_admin(), admins, "dry_run must not run the operation");
+    // The real execution is still available afterwards.
+    client.execute(&admins.get(0).unwrap(), &operation);
+    assert!(read_scheduled_op(&env, &client, &operation).is_none());
+}
+
+#[test]
+fn dry_run_on_not_ready_operation_returns_execution_not_ready() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::ExecutionNotReady)))
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+}
+
+#[test]
+fn dry_run_on_unscheduled_operation_returns_operation_not_scheduled() {
+    let (env, client, _admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::OperationNotScheduled)))
+    );
+}
+
+#[test]
+fn dry_run_respects_the_recovery_veto() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RECOVERY_DELAY_SECONDS + DEFAULT_TIMELOCK_DELAY_SECONDS;
+    });
+    client.initiate_recovery(&Address::generate(&env));
+
+    assert_eq!(
+        client.try_dry_run(&operation),
+        Err(Ok(contract_error(SettlementError::RecoveryDelayActive)))
+    );
+    assert!(read_scheduled_op(&env, &client, &operation).is_some());
+}
+
+#[test]
+fn dry_run_emits_no_execution_event() {
+    let (env, client, admins, _) = setup();
+    let operation = Operation::TransferAdmin(soroban_sdk::vec![&env, Address::generate(&env)], 1);
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.dry_run(&operation);
+
+    assert!(env.events().all().iter().all(|(_, topics, _)| {
+        topics.get(0).is_none_or(|first| {
+            Symbol::try_from_val(&env, &first)
+                .map(|s| s != Symbol::new(&env, events::OP_EXECUTED_EVENT))
+                .unwrap_or(true)
+        })
+    }));
 }

@@ -23,6 +23,37 @@ pub struct FeeSplit {
     pub merchant_payout_amount: i128,
 }
 
+/// Where an effective settlement rule came from (issue #997).
+///
+/// Mirrors the resolution chain used by the write and payment paths:
+/// merchant-specific rule → global default → governance fee config →
+/// bootstrap fallback. Provenance is a property of the *source*, not the
+/// values: a governance config that happens to equal the bootstrap values
+/// still reports [`Governance`](Self::Governance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[contracttype]
+pub enum RuleProvenance {
+    /// A rule stored for this specific merchant.
+    Merchant = 0,
+    /// The admin-configured global default rule.
+    Default = 1,
+    /// Governance's fee config, either read live or served from the
+    /// last-good cache during a governance outage.
+    Governance = 2,
+    /// The compiled-in bootstrap fallback; nothing else was configured.
+    Bootstrap = 3,
+}
+
+/// An effective settlement rule together with its [`RuleProvenance`].
+#[derive(Clone)]
+#[contracttype]
+pub struct EffectiveRule {
+    /// The resolved rule, identical to what `get_effective_rule` returns.
+    pub rule: SettlementRule,
+    /// Which source in the resolution chain produced `rule`.
+    pub provenance: RuleProvenance,
+}
+
 /// A single page of results from [`SettlementContract::get_payments`](crate::SettlementContract::get_payments).
 ///
 /// Soroban cannot enumerate persistent storage keys, so pagination is over the
@@ -157,7 +188,8 @@ pub enum Operation {
 /// All `DataKey` variants follow the UpperCamelCase singular noun convention
 /// without ad-hoc abbreviations (e.g., `Admin`, `Initializing`, `Governance`,
 /// `Merchant`, `Rule`, `ArchivedMerchant`, `DefaultRule`, `Payment`,
-/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`).
+/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`,
+/// `PaymentCount`, `PendingOperationCount`).
 ///
 /// **Stability Notice:**
 /// In Soroban, contracttype enum variants are serialized into ledger keys using
@@ -181,10 +213,11 @@ pub(crate) enum DataKey {
     Rule(Address),
     /// Persistent — tombstone written when a merchant is unregistered.
     ///
-    /// Survives re-registration so a merchant can never resurrect the payment
-    /// history of an earlier registration (issue #490).
+    /// Cleared on re-registration so the tombstone is removed when the
+    /// merchant is registered again (issue #1115).
     ArchivedMerchant(Address),
-    /// Persistent — single value but may be updated.
+    /// Instance — singleton global default rule, read on fallback paths and
+    /// updated by `set_default_rule`.
     DefaultRule,
     /// Persistent — one per (merchant, reference), high volume.
     ///
@@ -206,4 +239,15 @@ pub(crate) enum DataKey {
     /// Stores `Option<SettlementRule>` where `None` means no successful
     /// governance fetch has occurred yet.
     CachedGovRule,
+    /// Persistent — one per merchant, tracks the number of `Payment` records
+    /// currently stored for that merchant (issue #980). Incremented by
+    /// `store_payment_reference`, decremented by `prune_payment` /
+    /// `prune_payments`. Absence means zero, matching a registered merchant
+    /// that has never stored a payment.
+    PaymentCount(Address),
+    /// Instance — number of scheduled operations currently pending in the
+    /// timelock queue (issue #887). Incremented by `schedule`, decremented by
+    /// `execute`, `cancel`, and `cancel_all`. Absence means zero, so a fresh
+    /// contract reports an empty queue without an initialisation write.
+    PendingOperationCount,
 }

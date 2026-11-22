@@ -477,10 +477,10 @@ fn recovery_events_follow_shared_convention_on_both_contracts() {
             continue;
         }
         if let Ok(payload) = AdminTransferred::try_from_val(&env, &data) {
-            if payload.new_admin == new_gov {
+            if payload.new_admins.contains(&new_gov) {
                 found_gov = true;
             }
-            if payload.new_admin == new_settle {
+            if payload.new_admins.contains(&new_settle) {
                 found_settle = true;
             }
         }
@@ -945,6 +945,18 @@ fn stranger_cannot_read_payment_records_or_bump_ttl() {
         ),
         "a non-admin signer must be rejected with Unauthorized"
     );
+
+    // The same stranger-as-admin signer set is rejected with the identical
+    // Unauthorized code on the batch read entry point (issue #981).
+    assert!(
+        matches!(
+            settle_client.try_get_payments(&merchant, &refs, &0, &invalid_admins),
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(
+                SettlementError::Unauthorized as u32
+            )
+        ),
+        "a non-admin signer must be rejected with Unauthorized on get_payments"
+    );
 }
 
 /// The merchant who owns the records can always read them back.
@@ -1280,6 +1292,26 @@ fn get_payments_accepts_max_batch_size() {
         payments.next_cursor,
         Some(100),
         "a full page (refs.len() == MAX_PAYMENTS_BATCH) must signal more may remain"
+    );
+}
+
+/// A caller-supplied cursor near `u32::MAX` plus a full page must not trap on
+/// arithmetic overflow; `next_cursor` saturates at `u32::MAX` instead.
+#[test]
+fn get_payments_cursor_near_u32_max_does_not_overflow() {
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    let mut refs = Vec::new(&env);
+    for i in 0..MAX_PAYMENTS_BATCH {
+        refs.push_back(BytesN::<32>::from_array(&env, &[i as u8; 32]));
+    }
+
+    let page = settle_client.get_payments(&merchant, &refs, &u32::MAX, &soroban_sdk::vec![&env]);
+    assert_eq!(
+        page.next_cursor,
+        Some(u32::MAX),
+        "a full page at the cursor boundary must saturate instead of overflowing"
     );
 }
 
@@ -1793,4 +1825,226 @@ fn both_contracts_deployed_together_enforce_governance_fees_on_payment() {
     // Both rules are stored for later reference.
     assert_eq!(gov_client.get_fee_config().unwrap().platform_fee_bps, 200);
     assert_eq!(settle_client.get_settlement_rule(&merchant).unwrap().platform_fee_bps, 150);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #899: auto_settle round-trip on the default rule
+// ---------------------------------------------------------------------------
+
+/// The `auto_settle` flag on a stored default rule must persist, propagate
+/// through `get_effective_rule` for a merchant with no override, and be
+/// snapshotted onto every `PaymentRecord` written under that rule — for both
+/// `true` and `false`. The `true` leg is what catches a dropped field: a
+/// missing write or read would silently fall back to `false`.
+#[test]
+fn default_rule_auto_settle_round_trips_to_effective_rule_and_payment() {
+    let (env, client, admins, merchant) = super::setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Documented baseline: the bootstrap rule never auto-settles.
+    assert!(!BOOTSTRAP_DEFAULT_RULE.auto_settle);
+    assert!(!client.get_effective_rule(&merchant).auto_settle);
+
+    for (i, auto_settle) in [true, false].into_iter().enumerate() {
+        let rule = SettlementRule {
+            platform_fee_bps: 200,
+            network_fee_bps: 30,
+            settlement_delay_ledger: 12,
+            auto_settle,
+        };
+        client.set_default_rule(&admins, &rule);
+
+        let stored = client
+            .get_default_rule()
+            .expect("default rule must be stored");
+        assert_eq!(stored.auto_settle, auto_settle);
+        super::assert_rule_eq(&stored, &rule, "get_default_rule");
+
+        // No merchant override exists, so the effective rule is the default.
+        assert!(client.get_settlement_rule(&merchant).is_none());
+        assert_eq!(
+            client.get_effective_rule(&merchant).auto_settle,
+            auto_settle
+        );
+
+        let reference = BytesN::<32>::from_array(&env, &[0x90 + i as u8; 32]);
+        client.store_payment_reference(&merchant, &reference, &10_000);
+        let record = client
+            .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+            .expect("payment record must exist");
+        assert_eq!(record.auto_settle, auto_settle);
+        assert_eq!(record.settlement_delay_ledger, rule.settlement_delay_ledger);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #900: effective-rule precedence
+// ---------------------------------------------------------------------------
+
+/// Walks every rung of the resolution chain in one environment, configuring
+/// each source in turn: bootstrap → governance fee config → global default →
+/// merchant override, then clears the override to drop back to the default.
+/// At every step `get_effective_rule`, `read_rule_or_default` and
+/// `read_rule_or_default_no_bump` must agree.
+#[test]
+fn effective_rule_precedence_walks_all_four_rungs() {
+    use super::mock_governance::MockGovernanceClient;
+    use crate::storage::{read_rule_or_default, read_rule_or_default_no_bump};
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance(&env);
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let assert_resolves_to = |expected: &SettlementRule, rung: &str| {
+        super::assert_rule_eq(&client.get_effective_rule(&merchant), expected, rung);
+        env.as_contract(&contract_id, || {
+            super::assert_rule_eq(
+                &read_rule_or_default(&env, merchant.clone()),
+                expected,
+                rung,
+            );
+            super::assert_rule_eq(
+                &read_rule_or_default_no_bump(&env, merchant.clone()),
+                expected,
+                rung,
+            );
+        });
+    };
+
+    // Rung 4: nothing configured and governance has no fee config.
+    assert_resolves_to(&BOOTSTRAP_DEFAULT_RULE, "bootstrap");
+
+    // Rung 3: governance fee config only. Timing fields are fixed by design.
+    gov.set_fee_config(&crate::GovFeeConfig {
+        platform_fee_bps: 300,
+        network_fee_bps: 40,
+    });
+    let gov_rule = SettlementRule {
+        platform_fee_bps: 300,
+        network_fee_bps: 40,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    assert_resolves_to(&gov_rule, "governance");
+
+    // Rung 2: a global default outranks governance.
+    let default_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 30,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &default_rule);
+    assert_resolves_to(&default_rule, "global default");
+
+    // Rung 1: a merchant override outranks everything.
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 3,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+    assert_resolves_to(&merchant_rule, "merchant override");
+
+    // Clearing the override falls back to the global default.
+    client.clear_settlement_rule(&admins, &merchant);
+    assert_resolves_to(&default_rule, "after clear_settlement_rule");
+}
+
+// Issue #896: get_payments ordering is positional
+// ---------------------------------------------------------------------------
+
+/// `get_payments` resolves refs in the exact order the caller passed them:
+/// `records[i]` corresponds to the i-th *existing* ref, regardless of the
+/// order the payments were stored in. Refs with no stored record are omitted
+/// (no placeholder), so indexers can map results back to their input by
+/// walking `refs` and skipping the ones they know are missing. The
+/// `MAX_PAYMENTS_BATCH` cap still applies to the input length.
+#[test]
+fn get_payments_returns_records_in_input_ref_order() {
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+    let no_signers = soroban_sdk::vec![&env];
+
+    let r1 = BytesN::<32>::from_array(&env, &[1u8; 32]);
+    let r2 = BytesN::<32>::from_array(&env, &[2u8; 32]);
+    let r3 = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    let r4 = BytesN::<32>::from_array(&env, &[4u8; 32]);
+    let missing_a = BytesN::<32>::from_array(&env, &[0xA0u8; 32]);
+    let missing_b = BytesN::<32>::from_array(&env, &[0xB0u8; 32]);
+
+    // Distinct amounts identify each record. Store in ascending ref order.
+    settle_client.store_payment_reference(&merchant, &r1, &1_000);
+    settle_client.store_payment_reference(&merchant, &r2, &2_000);
+    settle_client.store_payment_reference(&merchant, &r3, &3_000);
+    settle_client.store_payment_reference(&merchant, &r4, &4_000);
+
+    let amounts = |page: &PaymentsPage| -> alloc::vec::Vec<i128> {
+        page.records.iter().map(|rec| rec.amount).collect()
+    };
+
+    // A non-sorted input order is reflected verbatim in the output.
+    let refs = soroban_sdk::vec![&env, r3.clone(), r1.clone(), r4.clone(), r2.clone()];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [3_000, 1_000, 4_000, 2_000]);
+    for rec in page.records.iter() {
+        assert_eq!(rec.merchant, merchant);
+    }
+
+    // Reversing the input reverses the output: ordering is positional, not
+    // storage or insertion order.
+    let refs = soroban_sdk::vec![&env, r2.clone(), r4.clone(), r1.clone(), r3.clone()];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [2_000, 4_000, 1_000, 3_000]);
+
+    // Mixed existing and missing refs: missing ones are dropped and the
+    // surviving records keep their relative input order.
+    let refs = soroban_sdk::vec![
+        &env,
+        missing_a.clone(),
+        r4.clone(),
+        missing_b.clone(),
+        r1.clone(),
+        r3.clone(),
+        missing_a.clone(),
+    ];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [4_000, 1_000, 3_000]);
+    assert_eq!(page.next_cursor, None);
+
+    // Omission is consistent: the same mixed input yields the same output.
+    let again = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&again), amounts(&page));
+
+    // An all-missing input yields an empty page rather than an error.
+    let refs = soroban_sdk::vec![&env, missing_a, missing_b];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(page.records.len(), 0);
+
+    // The batch cap still rejects oversized requests.
+    let mut oversized = Vec::new(&env);
+    for _ in 0..=MAX_PAYMENTS_BATCH {
+        oversized.push_back(r1.clone());
+    }
+    assert_eq!(
+        settle_client
+            .try_get_payments(&merchant, &oversized, &0, &no_signers)
+            .err(),
+        Some(Ok(SettlementError::BatchTooLarge.into()))
+    );
 }
