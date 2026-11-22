@@ -287,18 +287,16 @@ fn fee_ceiling_parity_direct_vs_timelocked() {
     let res_direct = client.try_set_settlement_rule(&admins, &merchant, &bad_rule);
     assert!(res_direct.is_err());
 
+    // Issue #1100: the same out-of-bounds rule is rejected when scheduling,
+    // not only at execution, and with the identical error.
     let bad_op = crate::types::Operation::SetSettlementRule(merchant.clone(), bad_rule.clone());
-    client.schedule(&admins, &bad_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger()
-        .with_mut(|l| l.timestamp += crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
-    let executor = soroban_sdk::Address::generate(&env);
-
-    let res_timelocked = client.try_execute(&executor, &bad_op);
-    assert!(res_timelocked.is_err());
+    let res_scheduled =
+        client.try_schedule(&admins, &bad_op, &crate::DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(res_scheduled.is_err());
 
     assert_eq!(
         res_direct.unwrap_err().unwrap(),
-        res_timelocked.unwrap_err().unwrap()
+        res_scheduled.unwrap_err().unwrap()
     );
 }
 

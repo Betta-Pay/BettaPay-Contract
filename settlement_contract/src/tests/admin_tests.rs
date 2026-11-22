@@ -2167,15 +2167,6 @@ fn settlement_rule_check_order_parity_across_paths() {
     };
     let missing = Address::generate(&env); // unregistered merchant
 
-    // Helper: schedule + advance time + execute via the timelocked path.
-    let schedule_and_execute =
-        |client: &SettlementContractClient, admins: &soroban_sdk::Vec<Address>, op: &Operation| {
-            client.schedule(admins, op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-            env.ledger()
-                .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
-            client.execute(&admins.get(0).unwrap(), op);
-        };
-
     // ---- 1. Paused ⇒ Paused (code 5) on both paths ----
     client.pause(&admins);
 
@@ -2203,13 +2194,12 @@ fn settlement_rule_check_order_parity_across_paths() {
             .unwrap_err(),
         Ok(soroban_sdk::Error::from_contract_error(4))
     );
+    // Issue #1100: the scheduled path rejects the same invalid rule at
+    // schedule time, so the two paths still surface the identical error.
     let op = Operation::SetSettlementRule(merchant.clone(), invalid_fee_rule.clone());
-    client.schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
-    env.ledger()
-        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert_eq!(
         client
-            .try_execute(&admins.get(0).unwrap(), &op)
+            .try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS)
             .unwrap_err(),
         Ok(soroban_sdk::Error::from_contract_error(4))
     );
@@ -2304,6 +2294,38 @@ fn storage_snapshot(
             env.storage().persistent().all(),
         )
     })
+}
+
+/// Issue #1101: the all-zero Wasm hash is rejected with the typed
+/// `InvalidWasmInterface` before `probe_supports_interface`, matching the
+/// timelocked `_upgrade` guard. No `contract_upgraded` event is emitted and
+/// storage is unchanged.
+#[test]
+fn upgrade_rejects_zero_wasm_hash_without_side_effects() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let zero_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+    let storage_before = storage_snapshot(&env, &client.address);
+
+    assert_eq!(
+        client.try_upgrade(&admins, &zero_hash).unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidWasmInterface as u32)
+    );
+
+    let upgraded_topic = Symbol::new(&env, bettapay_common::events::CONTRACT_UPGRADED_EVENT);
+    for (_contract, topics, _data) in env.events().all().iter() {
+        assert!(
+            topics.is_empty() || Symbol::from_val(&env, &topics.get(0).unwrap()) != upgraded_topic,
+            "no contract_upgraded event may be emitted on zero-hash rejection"
+        );
+    }
+
+    assert_eq!(
+        storage_snapshot(&env, &client.address),
+        storage_before,
+        "contract storage must be unchanged after a zero-hash rejection"
+    );
 }
 
 /// Issue #892: a non-zero hash that was never uploaded looks plausible but
