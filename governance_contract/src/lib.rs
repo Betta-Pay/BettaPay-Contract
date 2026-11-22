@@ -333,12 +333,10 @@ pub enum GovernanceError {
     InvalidParamValue = 201,
     /// Asset or anchor address is zero-address, or asset equals anchor.
     InvalidAnchor = 202,
-    /// Adding the recovery delay would overflow the ledger timestamp.
-    ExecutionDelayTooLong = 203,
-    /// `pause` was called while the contract was already paused.
-    AlreadyPaused = 17,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
+    /// `pause` was called while the contract was already paused.
+    AlreadyPaused = 17,
     /// The new admin set and threshold are identical to the current ones.
     SameAdmin = 18,
 }

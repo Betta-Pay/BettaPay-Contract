@@ -50,10 +50,10 @@ pub const INVALID_WASM_INTERFACE: u32 = 13;
 pub const INVALID_THRESHOLD: u32 = 14;
 /// A recovery operation is already pending; a second one cannot be initiated.
 pub const RECOVERY_ALREADY_PENDING: u32 = 15;
-/// `pause` was called while the contract was already paused.
-pub const ALREADY_PAUSED: u32 = 17;
 /// `unpause` was called while the contract was already unpaused.
 pub const ALREADY_UNPAUSED: u32 = 16;
+/// `pause` was called while the contract was already paused.
+pub const ALREADY_PAUSED: u32 = 17;
 /// The new admin set and threshold are identical to the current ones.
 pub const SAME_ADMIN: u32 = 18;
 
@@ -80,8 +80,8 @@ pub const SHARED_CODES: &[(&str, u32)] = &[
     ("InvalidWasmInterface", INVALID_WASM_INTERFACE),
     ("InvalidThreshold", INVALID_THRESHOLD),
     ("RecoveryAlreadyPending", RECOVERY_ALREADY_PENDING),
-    ("AlreadyPaused", ALREADY_PAUSED),
     ("AlreadyUnpaused", ALREADY_UNPAUSED),
+    ("AlreadyPaused", ALREADY_PAUSED),
     ("SameAdmin", SAME_ADMIN),
 ];
 
@@ -323,5 +323,44 @@ mod tests {
         let gaps = find_code_gaps(contiguous, SETTLEMENT_RANGE_START);
         assert!(gaps.is_empty());
     }
-}
 
+    #[test]
+    fn find_code_gaps_returns_empty_for_empty_input() {
+        assert!(find_code_gaps(&[], SETTLEMENT_RANGE_START).is_empty());
+    }
+
+    #[test]
+    fn find_code_gaps_returns_empty_for_shared_codes_only() {
+        let table: &[(&str, u32)] = &[("SharedA", 1), ("SharedB", 15), ("SharedC", 99)];
+        assert!(find_code_gaps(table, SETTLEMENT_RANGE_START).is_empty());
+    }
+
+    #[test]
+    fn find_code_gaps_ignores_codes_below_range_start() {
+        let table: &[(&str, u32)] = &[
+            ("Shared", 15),
+            ("BelowRange", 299),
+            ("FirstContractCode", 300),
+            ("NextContractCode", 302),
+        ];
+        assert_eq!(
+            find_code_gaps(table, SETTLEMENT_RANGE_START),
+            alloc::vec![301]
+        );
+    }
+
+    #[test]
+    fn find_code_gaps_sorts_and_deduplicates_input() {
+        let table: &[(&str, u32)] = &[
+            ("CodeD", 304),
+            ("CodeA", 300),
+            ("CodeC", 302),
+            ("DuplicateA", 300),
+            ("DuplicateD", 304),
+        ];
+        assert_eq!(
+            find_code_gaps(table, SETTLEMENT_RANGE_START),
+            alloc::vec![301, 303]
+        );
+    }
+}

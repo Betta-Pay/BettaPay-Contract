@@ -253,6 +253,7 @@ pub fn emit_threshold_changed(env: &Env, current_threshold: u32, new_threshold: 
 ///
 /// Topics: `(Symbol("paused"),)`
 /// Data:    `(admin_address, true, reason)`
+/// This payload intentionally has one more field than `unpaused`.
 ///
 /// `reason` is a bounded numeric code (issue #991) — see
 /// [`crate::constants::MAX_PAUSE_REASON`] — carrying the machine-readable
@@ -269,6 +270,7 @@ pub fn emit_paused(env: &Env, admin: &Address, reason: u32) {
 ///
 /// Topics: `(Symbol("unpaused"),)`
 /// Data:    `(admin_address, false)`
+/// Unlike `paused`, this payload has no reason field.
 pub fn emit_unpaused(env: &Env, admin: &Address) {
     env.events()
         .publish((Symbol::new(env, UNPAUSED_EVENT),), (admin.clone(), false));
@@ -344,7 +346,7 @@ pub fn emit_settlement_rule_cleared(
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Map, TryFromVal, TryIntoVal, Val};
+    use soroban_sdk::{FromVal, Map, TryFromVal, TryIntoVal, Val};
 
     /// The canonical payload shapes must keep their field names stable: an
     /// indexer decodes these structs by field name, so renaming a field would
@@ -384,5 +386,21 @@ mod tests {
         assert!(fields.contains_key(Symbol::new(&env, "execute_after")));
         assert!(fields.contains_key(Symbol::new(&env, "initiated_by")));
         assert_eq!(fields.len(), 3);
+    }
+
+    #[test]
+    fn paused_and_unpaused_payload_arities_are_canonical() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+
+        emit_paused(&env, &admin, 7);
+        let (_, _, paused_data) = env.events().all().last().unwrap();
+        let paused_payload: (Address, bool, u32) = FromVal::from_val(&env, &paused_data);
+        assert_eq!(paused_payload, (admin.clone(), true, 7));
+
+        emit_unpaused(&env, &admin);
+        let (_, _, unpaused_data) = env.events().all().last().unwrap();
+        let unpaused_payload: (Address, bool) = FromVal::from_val(&env, &unpaused_data);
+        assert_eq!(unpaused_payload, (admin, false));
     }
 }
