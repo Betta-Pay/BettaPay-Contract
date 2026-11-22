@@ -38,7 +38,7 @@
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::constants::{TTL_BUMP_LEDGERS, TTL_THRESHOLD_LEDGERS};
+use crate::constants::{MAX_PAUSE_REASON, TTL_BUMP_LEDGERS, TTL_THRESHOLD_LEDGERS};
 
 /// Instance-storage keys shared by every BettaPay contract.
 ///
@@ -93,10 +93,12 @@ pub fn set_paused(env: &Env, paused: bool) {
 ///
 /// `reason` is a bounded numeric code (issue #991) threaded through to
 /// [`crate::events::emit_paused`]. Callers must validate it against
-/// [`crate::constants::MAX_PAUSE_REASON`] themselves (with their own typed
-/// error) before calling this — out-of-range rejection cannot live here for
-/// the same reason the admin-auth/idempotency checks can't.
+/// [`crate::constants::MAX_PAUSE_REASON`].
 pub fn apply_pause(env: &Env, admin: &Address, reason: u32) {
+    assert!(
+        reason <= MAX_PAUSE_REASON,
+        "pause reason exceeds MAX_PAUSE_REASON"
+    );
     set_paused(env, true);
     crate::events::emit_paused(env, admin, reason);
 }
@@ -178,7 +180,11 @@ pub fn bump_instance_ttl(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, testutils::Address as _, vec};
+    use soroban_sdk::{
+        contract,
+        testutils::{Address as _, Events as _},
+        vec, FromVal, Symbol,
+    };
 
     /// No-op contract used only to obtain a real, registered contract
     /// address for [`Env::as_contract`] — instance storage helpers like
@@ -225,6 +231,69 @@ mod tests {
         });
         env.as_contract(&governance_like, || {
             assert!(is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn apply_pause_and_unpause_update_state_and_emit_canonical_events() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        let admin = Address::generate(&env);
+        let reason = crate::constants::PAUSE_REASON_NONE;
+
+        env.as_contract(&contract_id, || {
+            apply_pause(&env, &admin, reason);
+            assert!(is_paused(&env));
+        });
+
+        let (_, pause_topics, pause_data) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &pause_topics.get(0).unwrap()),
+            Symbol::new(&env, crate::events::PAUSED_EVENT)
+        );
+        let (event_admin, paused, event_reason): (Address, bool, u32) =
+            <(Address, bool, u32)>::from_val(&env, &pause_data);
+        assert_eq!(event_admin, admin);
+        assert!(paused);
+        assert_eq!(event_reason, reason);
+
+        env.as_contract(&contract_id, || {
+            apply_unpause(&env, &admin);
+            assert!(!is_paused(&env));
+        });
+
+        let (_, unpause_topics, unpause_data) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::from_val(&env, &unpause_topics.get(0).unwrap()),
+            Symbol::new(&env, crate::events::UNPAUSED_EVENT)
+        );
+        let (event_admin, paused): (Address, bool) =
+            <(Address, bool)>::from_val(&env, &unpause_data);
+        assert_eq!(event_admin, admin);
+        assert!(!paused);
+    }
+
+    #[test]
+    fn apply_pause_accepts_none_and_max_reason() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            apply_pause(&env, &admin, crate::constants::PAUSE_REASON_NONE);
+            apply_pause(&env, &admin, MAX_PAUSE_REASON);
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn apply_pause_rejects_reason_above_max() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            apply_pause(&env, &admin, MAX_PAUSE_REASON + 1);
         });
     }
 
