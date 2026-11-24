@@ -430,6 +430,11 @@ impl GovernanceContract {
             GovernanceError::InvalidRecoveryAddress,
         );
         for i in 0..admins.len() {
+            if admins.get(i).unwrap() == recovery_address {
+                panic_with_error!(&env, GovernanceError::InvalidRecoveryAddress);
+            }
+        }
+        for i in 0..admins.len() {
             admins.get(i).unwrap().require_auth();
         }
         env.storage().instance().set(&DataKey::Deployer, &deployer);
@@ -440,6 +445,7 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &recovery_address);
+        storage::set_paused(&env, false);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
@@ -483,6 +489,15 @@ impl GovernanceContract {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
         assert_not_zero(&env, &new_recovery, GovernanceError::InvalidRecoveryAddress);
+        if read_recovery_address(&env) == new_recovery {
+            panic_with_error!(&env, GovernanceError::InvalidRecoveryAddress);
+        }
+        let admins = read_admins(&env);
+        for i in 0..admins.len() {
+            if admins.get(i).unwrap() == new_recovery {
+                panic_with_error!(&env, GovernanceError::InvalidRecoveryAddress);
+            }
+        }
         env.storage()
             .instance()
             .set(&CommonDataKey::RecoveryAddress, &new_recovery);
@@ -503,7 +518,8 @@ impl GovernanceContract {
     /// after the upgrade if the new code expects a different schema.
     ///
     /// Before swapping the executable the function deploys a probe instance of
-    /// the new Wasm and calls `supports_interface(1)` on it.  If the function
+    /// the new Wasm and calls
+    /// `supports_interface(SUPPORTED_INTERFACE_VERSION)` on it. If the function
     /// is missing or returns `false`, the upgrade panics with
     /// [`GovernanceError::InvalidWasmInterface`] and the running code is
     /// unchanged.
@@ -519,7 +535,7 @@ impl GovernanceContract {
     ///
     /// ### Panics
     /// - Panics with [`Unauthorized`](GovernanceError::Unauthorized) if the caller is not the current admin.
-    /// - Panics with [`InvalidWasmInterface`](GovernanceError::InvalidWasmInterface) if the new Wasm does not support interface version 1.
+    /// - Panics with [`InvalidWasmInterface`](GovernanceError::InvalidWasmInterface) if the new Wasm does not support the required interface version.
     pub fn upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
 
@@ -530,7 +546,7 @@ impl GovernanceContract {
         // Verify the new Wasm supports the required BettaPay interface
         // (version 1) before overwriting the running code. See
         // `bettapay_common::upgrade::probe_supports_interface`.
-        if !probe_supports_interface(&env, &new_wasm_hash, 1) {
+        if !probe_supports_interface(&env, &new_wasm_hash, SUPPORTED_INTERFACE_VERSION) {
             panic_with_error!(&env, GovernanceError::InvalidWasmInterface);
         }
 

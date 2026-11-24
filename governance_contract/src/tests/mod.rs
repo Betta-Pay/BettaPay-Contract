@@ -114,6 +114,42 @@ fn governance_rejects_double_initialization() {
     client.init(&deployer, &admins, &2, &recovery);
 }
 
+#[test]
+fn init_rejects_recovery_address_that_is_an_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let deployer = Address::generate(&env);
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+
+    let result = client.try_init(&deployer, &vec![&env, admin.clone()], &1, &admin);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+    assert!(!client.is_initialized());
+}
+
+#[test]
+fn init_stores_paused_flag_as_false() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let deployer = Address::generate(&env);
+    let contract_id = env.register_contract(None, GovernanceContract);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+
+    client.init(&deployer, &vec![&env, admin], &1, &recovery);
+
+    assert!(!client.is_paused());
+    let paused_key_exists = env.as_contract(&contract_id, || {
+        env.storage().instance().has(&CommonDataKey::Paused)
+    });
+    assert!(paused_key_exists);
+}
+
 // Issue #471: init used to authenticate only the first `threshold` admins,
 // so with `admins.len() > threshold` the extras were stored without ever
 // proving key control — a later `change_threshold` could then elevate an
@@ -2078,7 +2114,7 @@ fn test_issue_1122_set_system_param_boundary_and_negative_values() {
 
 #[test]
 fn update_recovery_address_authorization_and_event() {
-    let (env, client, admins, _old_recovery) = setup();
+    let (env, client, admins, old_recovery) = setup();
     let new_recovery = Address::generate(&env);
 
     // 1. Unauthorized signers fail
@@ -2093,6 +2129,19 @@ fn update_recovery_address_authorization_and_event() {
     let res_zero = client.try_update_recovery_address(&admins, &zero);
     assert_eq!(
         res_zero.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    let res_same = client.try_update_recovery_address(&admins, &old_recovery);
+    assert_eq!(
+        res_same.unwrap_err().unwrap(),
+        GovernanceError::InvalidRecoveryAddress.into()
+    );
+
+    let admin_recovery = admins.get(0).unwrap();
+    let res_admin = client.try_update_recovery_address(&admins, &admin_recovery);
+    assert_eq!(
+        res_admin.unwrap_err().unwrap(),
         GovernanceError::InvalidRecoveryAddress.into()
     );
 
