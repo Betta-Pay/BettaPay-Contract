@@ -422,6 +422,7 @@ impl GovernanceContract {
         }
         // Gate initialization to the deployer to prevent front-running (issue #684).
         deployer.require_auth();
+        assert_not_zero(&env, &deployer, GovernanceError::InvalidAdmin);
         validate_admins_and_threshold(&env, &admins, threshold);
         assert_not_zero(
             &env,
