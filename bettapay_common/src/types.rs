@@ -121,6 +121,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bps_new_value_and_conversions_cover_zero_and_u32_max() {
+        for value in [0u32, u32::MAX] {
+            let bps = Bps::new(value);
+
+            assert_eq!(bps.value(), value);
+            assert_eq!(bps.as_i128(), i128::from(value));
+            assert_eq!(u32::from(bps), value);
+            assert_eq!(Bps::from(value), bps);
+        }
+    }
+
+    #[test]
+    fn settlement_rule_bps_helpers_match_fields() {
+        let rule = SettlementRule {
+            platform_fee_bps: 125,
+            network_fee_bps: 250,
+            settlement_delay_ledger: 10,
+            auto_settle: true,
+        };
+
+        assert_eq!(rule.platform_bps(), Bps::new(rule.platform_fee_bps));
+        assert_eq!(rule.network_bps(), Bps::new(rule.network_fee_bps));
     fn settlement_rule_partial_eq_and_debug() {
         let rule1 = SettlementRule {
             platform_fee_bps: 100,
