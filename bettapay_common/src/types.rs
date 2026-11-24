@@ -143,6 +143,9 @@ mod tests {
 
         assert_eq!(rule.platform_bps(), Bps::new(rule.platform_fee_bps));
         assert_eq!(rule.network_bps(), Bps::new(rule.network_fee_bps));
+    }
+
+    #[test]
     fn settlement_rule_partial_eq_and_debug() {
         let rule1 = SettlementRule {
             platform_fee_bps: 100,

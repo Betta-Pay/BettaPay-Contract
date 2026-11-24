@@ -333,6 +333,8 @@ pub enum GovernanceError {
     InvalidParamValue = 201,
     /// Asset or anchor address is zero-address, or asset equals anchor.
     InvalidAnchor = 202,
+    /// Recovery delay timestamp addition overflowed.
+    ExecutionDelayTooLong = 203,
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// `pause` was called while the contract was already paused.
