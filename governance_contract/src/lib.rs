@@ -569,6 +569,9 @@ impl GovernanceContract {
         let recovery_address = read_recovery_address(&env);
         recovery_address.require_auth();
         assert_not_zero(&env, &new_admin, GovernanceError::InvalidAdmin);
+        if new_admin == recovery_address {
+            panic_with_error!(&env, GovernanceError::InvalidAdmin);
+        }
 
         // Issue #468: reject a second initiation while a recovery is already
         // pending — silently overwriting the original target would hide the
@@ -613,6 +616,9 @@ impl GovernanceContract {
         } else {
             verify_admin_auth(&env, &signers, read_threshold(&env));
         }
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
         let canceller = signers.get(0).unwrap();
         env.storage()
             .instance()
@@ -664,6 +670,9 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&CommonDataKey::Threshold, &1u32);
+        env.storage()
+            .instance()
+            .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
         env.storage()
             .instance()
             .remove(&CommonDataKey::PendingRecovery);
